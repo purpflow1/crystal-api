@@ -5,9 +5,9 @@ edition = "2024"
 authors = ["purpflow"]
 
 [profile.release]
-opt-level = 3
-lto = true
-strip = true
+#opt-level = 3
+#lto = true
+#strip = true
 
 [dev-dependencies]
 winit = { version = "0.30.10", features = ["rwh_06"] }
