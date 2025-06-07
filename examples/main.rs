@@ -115,7 +115,8 @@ impl ApplicationHandler for Context {
         let window = event_loop
             .create_window(
                 Window::default_attributes()
-                    .with_base_size(LogicalSize::new(self.settings.width, self.settings.height)),
+                    .with_base_size(LogicalSize::new(self.settings.width, self.settings.height))
+                    .with_resizable(false),
             )
             .unwrap();
 
