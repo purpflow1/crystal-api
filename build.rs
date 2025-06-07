@@ -35,6 +35,8 @@ fn compile_shader(shader_path: &Path, out_dir: &Path) {
     let output_path = out_dir.join(format!("{}.spv", file_name));
 
     let status = Command::new("glslc")
+        .arg("-DDEBUG")
+        .arg("-O")
         .arg(shader_path)
         .arg("-o")
         .arg(&output_path)
