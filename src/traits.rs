@@ -14,7 +14,7 @@ pub trait GraphicsApi {
     fn create_layout(
         &self,
         frames_in_flight: u32,
-        image_view_sampled_num: u32,
+        image_sampled_num: u32,
         max_instance_num: u64,
         buffers: &[(bool, u64)],
     ) -> CrystalResult<Arc<RefCell<dyn Layout>>>;
