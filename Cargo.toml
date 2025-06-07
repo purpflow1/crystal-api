@@ -1,0 +1,18 @@
+[package]
+name = "crystal-api"
+version = "0.1.0"
+edition = "2024"
+authors = ["purpflow"]
+
+[profile.release]
+opt-level = 3
+lto = true
+strip = true
+
+[dependencies]
+ash = "0.38.0"
+ash-window = "0.13.0"
+raw-window-handle = "0.6.0"
+winit = { version = "0.30.10", features = ["rwh_06"] }
+image = "0.25.6"
+glam = "0.30.3"
