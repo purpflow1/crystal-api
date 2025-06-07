@@ -1,5 +1,3 @@
-#![feature(random)]
-
 use crystal_api::{errors::CrystalResult, object::Object, vulkan::VulkanEntry, *};
 
 use std::{
@@ -9,7 +7,6 @@ use std::{
     io::BufReader,
     iter::zip,
     path::Path,
-    random::random,
     sync::Arc,
     time::{Duration, SystemTime},
 };
@@ -227,15 +224,8 @@ impl ApplicationHandler for Context {
 
         let mut iter: Vec<Arc<RefCell<Object>>> = vec![];
 
-        // let left: usize = random::<usize>() % self.scene.objects_pbr.len();
-        // let right = random::<usize>() % (self.scene.objects_pbr.len() - left) + left + 1;
-
         for idx in 0..3 {
             iter.push(self.scene.objects_pbr[idx].clone());
-        }
-
-        if random::<usize>() % 2 == 0 {
-            iter = iter.iter().rev().map(|x| x.clone()).collect();
         }
 
         for (idx, object) in zip(0..self.scene.objects_pbr.len(), iter) {
