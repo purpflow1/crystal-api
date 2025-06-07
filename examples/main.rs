@@ -27,7 +27,7 @@ use winit::{
 };
 
 const MAX_INSTANCE_NUM: u64 = 128;
-const IMAGE_VIEW_SAMPLED_NUM: u64 = 8;
+const IMAGE_SAMPLED_NUM: u64 = 8;
 
 struct State {
     delta_time: Duration,
@@ -152,7 +152,7 @@ impl ApplicationHandler for Context {
         let layout_pbr = graphics
             .create_layout(
                 self.settings.viewport_frames_in_flight,
-                IMAGE_VIEW_SAMPLED_NUM as u32,
+                IMAGE_SAMPLED_NUM as u32,
                 MAX_INSTANCE_NUM,
                 &[
                     (
@@ -164,7 +164,7 @@ impl ApplicationHandler for Context {
                     (false, size_of::<u32>() as u64 * 3),                       // light data
                     (
                         false,
-                        MAX_INSTANCE_NUM * size_of::<u32>() as u64 * IMAGE_VIEW_SAMPLED_NUM,
+                        MAX_INSTANCE_NUM * size_of::<u32>() as u64 * IMAGE_SAMPLED_NUM,
                     ), // texture data
                 ],
             )
@@ -204,18 +204,6 @@ impl ApplicationHandler for Context {
             &[(0, test_texture_map)],
         );
 
-        obj1.borrow_mut().transform = Some(glam::Mat4::from_scale_rotation_translation(
-            glam::Vec3::new(0.3, 0.3, 0.3),
-            glam::Quat::IDENTITY,
-            glam::Vec3::new(0., 0., 0.),
-        ));
-
-        obj2.borrow_mut().transform =
-            Some(glam::Mat4::from_translation(glam::Vec3::new(0., 0., -3.)));
-
-        obj3.borrow_mut().transform =
-            Some(glam::Mat4::from_translation(glam::Vec3::new(-3., 0., 1.)));
-
         self.scene.objects_pbr.push(obj1);
         self.scene.objects_pbr.push(obj2);
         self.scene.objects_pbr.push(obj3);
@@ -232,11 +220,6 @@ impl ApplicationHandler for Context {
 
         let viewport = graphics.get_viewport();
         let current_frame = viewport.borrow().get_current_frame();
-
-        let transform = self.scene.objects_pbr[0].borrow().transform.unwrap();
-        self.scene.objects_pbr[0].borrow_mut().transform = Some(
-            glam::Mat4::from_rotation_y(PI * self.state.delta_time.as_secs_f32() * 1.) * transform,
-        );
 
         let mut layout_pbr = self.layout_pbr.as_ref().unwrap().borrow_mut();
 
@@ -260,9 +243,17 @@ impl ApplicationHandler for Context {
 
             layout_pbr.add_object_to_queue(object.clone());
 
-            let transform = match obj.transform {
-                Some(transform) => transform,
-                None => glam::Mat4::IDENTITY,
+            let transform = match idx {
+                0 => glam::Mat4::from_scale_rotation_translation(
+                    glam::Vec3::new(0.3, 0.3, 0.3),
+                    glam::Quat::from_mat4(&glam::Mat4::from_rotation_y(
+                        PI * 2. * self.state.delta_time_sum.as_secs_f32(),
+                    )),
+                    glam::Vec3::new(0., 0., 0.),
+                ),
+                1 => glam::Mat4::from_translation(glam::Vec3::new(0., 0., -3.)),
+                2 => glam::Mat4::from_translation(glam::Vec3::new(-3., 0., 1.)),
+                _ => glam::Mat4::IDENTITY,
             };
 
             transforms.push(transform);
@@ -270,13 +261,13 @@ impl ApplicationHandler for Context {
             match &obj.textures {
                 None => {}
                 Some(textures) => {
-                    for image_idx in 0..IMAGE_VIEW_SAMPLED_NUM as u32 {
+                    for image_idx in 0..IMAGE_SAMPLED_NUM as u32 {
                         layout_pbr
                             .write_to_buffer(
                                 false,
                                 current_frame,
                                 3,
-                                (idx as u32 * IMAGE_VIEW_SAMPLED_NUM as u32 + image_idx) as usize,
+                                (idx as u32 * IMAGE_SAMPLED_NUM as u32 + image_idx) as usize,
                                 GpuVec::new(&[
                                     if textures
                                         .iter()

@@ -6,7 +6,6 @@ pub struct Object {
     pub pipeline: Arc<dyn Pipeline>,
     pub mesh: Option<Arc<Mesh>>,
     pub(crate) memory_manager: Option<Box<dyn ObjectMemoryManager>>,
-    pub transform: Option<glam::Mat4>,
     pub textures: Option<Vec<(u32, Arc<dyn Texture>)>>,
 }
 
@@ -17,7 +16,6 @@ impl Object {
             pipeline,
             mesh: None,
             memory_manager: None,
-            transform: None,
             textures: None,
         }))
     }
@@ -27,7 +25,6 @@ impl Object {
             pipeline,
             mesh: Some(mesh),
             memory_manager: None,
-            transform: None,
             textures: None,
         }))
     }
@@ -41,7 +38,6 @@ impl Object {
             pipeline,
             mesh: Some(mesh),
             memory_manager: None,
-            transform: None,
             textures: Some(textures.to_vec()),
         }))
     }
