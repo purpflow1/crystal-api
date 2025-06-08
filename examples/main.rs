@@ -23,8 +23,9 @@ use winit::{
     window::Window,
 };
 
-const MAX_INSTANCE_NUM: u64 = 128;
+const MAX_INSTANCE_NUM: u64 = 3;
 const IMAGE_SAMPLED_NUM: u64 = 8;
+const MAX_FPS: u16 = 60;
 
 struct State {
     delta_time: Duration,
@@ -116,7 +117,10 @@ impl ApplicationHandler for Context {
             .create_window(
                 Window::default_attributes()
                     .with_base_size(LogicalSize::new(self.settings.width, self.settings.height))
-                    .with_resizable(false),
+                    .with_min_inner_size(LogicalSize::new(
+                        self.settings.width / 2,
+                        self.settings.height / 2,
+                    )),
             )
             .unwrap();
 
@@ -158,7 +162,7 @@ impl ApplicationHandler for Context {
                         size_of::<glam::Mat4>() as u64 + size_of::<f32>() as u64 + 12, // because of 16 bit alignment
                     ),
                     (false, size_of::<glam::Mat4>() as u64 * MAX_INSTANCE_NUM), // model data
-                    (false, size_of::<glam::Vec4>() as u64 * 60),               // light
+                    (false, size_of::<glam::Vec3>() as u64 * 60),               // light
                     (false, size_of::<u32>() as u64 * 3),                       // light data
                     (
                         false,
@@ -221,33 +225,22 @@ impl ApplicationHandler for Context {
 
         let mut layout_pbr = self.layout_pbr.as_ref().unwrap().borrow_mut();
 
-        let mut transforms = vec![];
+        let transforms = [
+            glam::Mat4::from_scale_rotation_translation(
+                glam::Vec3::new(0.3, 0.3, 0.3),
+                glam::Quat::from_mat4(&glam::Mat4::from_rotation_y(
+                    PI * 2. * self.state.delta_time_sum.as_secs_f32(),
+                )),
+                glam::Vec3::new(0., 0., 0.),
+            ),
+            glam::Mat4::from_translation(glam::Vec3::new(0., 0., -3.)),
+            glam::Mat4::from_translation(glam::Vec3::new(-3., 0., 1.)),
+        ];
 
-        let mut iter: Vec<Arc<RefCell<Object>>> = vec![];
-
-        for idx in 0..3 {
-            iter.push(self.scene.objects_pbr[idx].clone());
-        }
-
-        for (idx, object) in zip(0..self.scene.objects_pbr.len(), iter) {
+        for (idx, object) in zip(0..self.scene.objects_pbr.len(), &self.scene.objects_pbr) {
             let obj = object.borrow();
 
             layout_pbr.add_object_to_queue(object.clone());
-
-            let transform = match idx {
-                0 => glam::Mat4::from_scale_rotation_translation(
-                    glam::Vec3::new(0.3, 0.3, 0.3),
-                    glam::Quat::from_mat4(&glam::Mat4::from_rotation_y(
-                        PI * 2. * self.state.delta_time_sum.as_secs_f32(),
-                    )),
-                    glam::Vec3::new(0., 0., 0.),
-                ),
-                1 => glam::Mat4::from_translation(glam::Vec3::new(0., 0., -3.)),
-                2 => glam::Mat4::from_translation(glam::Vec3::new(-3., 0., 1.)),
-                _ => glam::Mat4::IDENTITY,
-            };
-
-            transforms.push(transform);
 
             match &obj.textures {
                 None => {}
@@ -336,8 +329,8 @@ impl ApplicationHandler for Context {
             .render(&[self.layout_pbr.as_ref().unwrap().clone()])
             .unwrap();
 
-        if self.settings.max_fps != 0 && !event_loop.exiting() {
-            let time_to_sleep = Duration::from_secs_f64(1. / self.settings.max_fps as f64)
+        if MAX_FPS != 0 && !event_loop.exiting() {
+            let time_to_sleep = Duration::from_secs_f64(1. / MAX_FPS as f64)
                 .checked_sub(now.elapsed())
                 .unwrap_or(Duration::ZERO);
 
@@ -376,7 +369,24 @@ impl ApplicationHandler for Context {
                 is_synthetic,
             } => {}
             WindowEvent::RedrawRequested => {
-                self.window.as_ref().unwrap().request_redraw();
+                let window = self.window.as_ref().unwrap();
+                let extent = window.inner_size();
+
+                self.graphics
+                    .as_ref()
+                    .unwrap()
+                    .get_viewport()
+                    .borrow_mut()
+                    .update_size(extent.width, extent.height)
+                    .unwrap();
+                self.scene.camera.proj = glam::Mat4::perspective_lh(
+                    PI / 4.,
+                    extent.width as f32 / extent.height as f32,
+                    0.1,
+                    100.,
+                );
+
+                window.request_redraw();
             }
             _ => {}
         }
@@ -387,7 +397,6 @@ fn main() -> CrystalResult<()> {
     let settings = GraphicsApiInitSettings::default()
         .viewport_frames_in_flight(2)
         .msaa_samples(8)
-        .max_fps(60)
         .width(1000)
         .height(700);
 

@@ -21,15 +21,15 @@ use super::{
 pub struct VulkanRenderTarget {
     device_manager: Arc<DeviceManager>,
     pub extent: vk::Extent2D,
-    pub updated_extent: Option<vk::Extent2D>,
+    pub swapchain_extent: vk::Extent2D,
     pub swapchain: ash::khr::swapchain::Device,
     pub swapchain_khr: vk::SwapchainKHR,
     pub render_pass: vk::RenderPass,
 
     pub framebuffers: Vec<vk::Framebuffer>,
-    _swapchain_images: Vec<vk::Image>,
-    _swapchain_image_views: Vec<vk::ImageView>,
-    _depth_resources: Vec<DepthResources>,
+    swapchain_images: Vec<vk::Image>,
+    swapchain_image_views: Vec<vk::ImageView>,
+    depth_resources: Vec<DepthResources>,
 
     pub image_available_semaphores: Vec<vk::Semaphore>,
     pub render_finished_semaphores: Vec<vk::Semaphore>,
@@ -52,6 +52,11 @@ impl traits::Pipeline for vk::Pipeline {
 impl traits::RenderTarget for VulkanRenderTarget {
     fn get_current_frame(&self) -> usize {
         self.current_frame
+    }
+
+    fn update_size(&mut self, width: u32, height: u32) -> CrystalResult<()> {
+        self.extent = vk::Extent2D { width, height };
+        Ok(())
     }
 
     fn create_graphics_pipeline(
@@ -371,13 +376,111 @@ impl VulkanRenderTarget {
             }
         };
 
+        let (
+            swapchain_image_views,
+            framebuffers,
+            depth_resources,
+            swapchain_images,
+            swapchain,
+            swapchain_khr,
+        ) = Self::create_swapchain(
+            device_manager.clone(),
+            instance,
+            samples,
+            &swapchain_create_info,
+            render_pass,
+        )?;
+
+        let mut image_available_semaphores = vec![];
+        let mut render_finished_semaphores = vec![];
+        let mut in_flight_fences = vec![];
+
+        for _ in 0..frames_in_flight {
+            let semaphore_create_info = vk::SemaphoreCreateInfo::default();
+
+            for i in 0..2 {
+                let semaphore = match unsafe {
+                    device_manager
+                        .device
+                        .create_semaphore(&semaphore_create_info, None)
+                } {
+                    Ok(semaphore) => semaphore,
+                    Err(e) => {
+                        log!("cannot create semaphore: {}", e);
+                        return Err(CrystalError::CannotCreateRenderTarget);
+                    }
+                };
+
+                if i == 0 {
+                    render_finished_semaphores.push(semaphore);
+                } else {
+                    image_available_semaphores.push(semaphore);
+                }
+            }
+
+            let fence_create_info =
+                vk::FenceCreateInfo::default().flags(vk::FenceCreateFlags::SIGNALED);
+
+            let in_flight_fence =
+                match unsafe { device_manager.device.create_fence(&fence_create_info, None) } {
+                    Ok(fence) => fence,
+                    Err(e) => {
+                        log!("cannot create fence: {}", e);
+                        return Err(CrystalError::CannotCreateRenderTarget);
+                    }
+                };
+
+            in_flight_fences.push(in_flight_fence);
+        }
+
+        Ok(Self {
+            device_manager,
+            extent: swapchain_create_info.image_extent,
+            swapchain_extent: swapchain_create_info.image_extent,
+            swapchain,
+            swapchain_khr,
+            render_pass,
+            framebuffers,
+            swapchain_images,
+            swapchain_image_views,
+
+            image_available_semaphores,
+            render_finished_semaphores,
+            in_flight_fences,
+
+            depth_resources,
+
+            current_frame: 0,
+
+            msaa_samples: samples,
+        })
+    }
+
+    fn create_swapchain(
+        device_manager: Arc<DeviceManager>,
+        instance: &ash::Instance,
+        samples: vk::SampleCountFlags,
+        swapchain_create_info: &vk::SwapchainCreateInfoKHR,
+        render_pass: vk::RenderPass,
+    ) -> CrystalResult<(
+        Vec<vk::ImageView>,
+        Vec<vk::Framebuffer>,
+        Vec<DepthResources>,
+        Vec<vk::Image>,
+        ash::khr::swapchain::Device,
+        vk::SwapchainKHR,
+    )> {
+        let mut swapchain_image_views = vec![];
+        let mut framebuffers = vec![];
+        let mut depth_resources = vec![];
+
         let swapchain = ash::khr::swapchain::Device::new(instance, &device_manager.device);
         let swapchain_khr =
             match unsafe { swapchain.create_swapchain(&swapchain_create_info, None) } {
                 Ok(swapchain_khr) => swapchain_khr,
                 Err(e) => {
                     log!("cannot create swapchain: {}", e);
-                    return Err(CrystalError::CannotCreateRenderTarget);
+                    return Err(CrystalError::SwapChainError);
                 }
             };
 
@@ -385,13 +488,9 @@ impl VulkanRenderTarget {
             Ok(images) => images,
             Err(e) => {
                 log!("cannot get swapchain images: {}", e);
-                return Err(CrystalError::CannotCreateRenderTarget);
+                return Err(CrystalError::SwapChainError);
             }
         };
-
-        let mut swapchain_image_views = vec![];
-        let mut framebuffers = vec![];
-        let mut depth_resources = vec![];
 
         for &swapchain_image in &swapchain_images {
             let create_info = vk::ImageViewCreateInfo::default()
@@ -418,7 +517,7 @@ impl VulkanRenderTarget {
                     Ok(image_view) => image_view,
                     Err(e) => {
                         log!("cannot create image view: {}", e);
-                        return Err(CrystalError::CannotCreateRenderTarget);
+                        return Err(CrystalError::SwapChainError);
                     }
                 };
 
@@ -470,75 +569,20 @@ impl VulkanRenderTarget {
                     Ok(framebuffer) => framebuffer,
                     Err(e) => {
                         log!("cannot create framebuffer: {}", e);
-                        return Err(CrystalError::CannotCreateRenderTarget);
+                        return Err(CrystalError::CannotCreateFramebuffer);
                     }
                 };
             framebuffers.push(framebuffer);
         }
 
-        let mut image_available_semaphores = vec![];
-        let mut render_finished_semaphores = vec![];
-        let mut in_flight_fences = vec![];
-
-        for _ in 0..frames_in_flight {
-            let semaphore_create_info = vk::SemaphoreCreateInfo::default();
-
-            for i in 0..2 {
-                let semaphore = match unsafe {
-                    device_manager
-                        .device
-                        .create_semaphore(&semaphore_create_info, None)
-                } {
-                    Ok(semaphore) => semaphore,
-                    Err(e) => {
-                        log!("cannot create semaphore: {}", e);
-                        return Err(CrystalError::CannotCreateRenderTarget);
-                    }
-                };
-
-                if i == 0 {
-                    render_finished_semaphores.push(semaphore);
-                } else {
-                    image_available_semaphores.push(semaphore);
-                }
-            }
-
-            let fence_create_info =
-                vk::FenceCreateInfo::default().flags(vk::FenceCreateFlags::SIGNALED);
-
-            let in_flight_fence =
-                match unsafe { device_manager.device.create_fence(&fence_create_info, None) } {
-                    Ok(fence) => fence,
-                    Err(e) => {
-                        log!("cannot create fence: {}", e);
-                        return Err(CrystalError::CannotCreateRenderTarget);
-                    }
-                };
-
-            in_flight_fences.push(in_flight_fence);
-        }
-
-        Ok(Self {
-            device_manager,
-            extent: swapchain_create_info.image_extent,
-            updated_extent: None,
+        Ok((
+            swapchain_image_views,
+            framebuffers,
+            depth_resources,
+            swapchain_images,
             swapchain,
             swapchain_khr,
-            render_pass,
-            framebuffers,
-            _swapchain_images: swapchain_images,
-            _swapchain_image_views: swapchain_image_views,
-
-            image_available_semaphores,
-            render_finished_semaphores,
-            in_flight_fences,
-
-            _depth_resources: depth_resources,
-
-            current_frame: 0,
-
-            msaa_samples: samples,
-        })
+        ))
     }
 
     pub fn set_current_frame(&mut self, current_frame: usize) {
@@ -546,8 +590,12 @@ impl VulkanRenderTarget {
     }
 
     #[allow(unused)]
-    pub fn update_swapchain(&mut self) -> CrystalResult<()> {
-        unimplemented!("update swapchain");
+    pub fn update_swapchain(
+        &mut self,
+        instance: &ash::Instance,
+        swapchain_create_info: &vk::SwapchainCreateInfoKHR,
+    ) -> CrystalResult<()> {
+        // unimplemented!("update swapchain");
 
         let queue = unsafe {
             self.device_manager.device.get_device_queue(
@@ -565,9 +613,25 @@ impl VulkanRenderTarget {
                 return Err(CrystalError::RenderingError);
             }
         };
-        while self.updated_extent.is_none() {
-            let extent = self.updated_extent.unwrap();
-        }
+
+        unsafe { self.swapchain.destroy_swapchain(self.swapchain_khr, None) };
+
+        (
+            self.swapchain_image_views,
+            self.framebuffers,
+            self.depth_resources,
+            self.swapchain_images,
+            self.swapchain,
+            self.swapchain_khr,
+        ) = Self::create_swapchain(
+            self.device_manager.clone(),
+            instance,
+            self.msaa_samples,
+            swapchain_create_info,
+            self.render_pass,
+        )?;
+
+        self.swapchain_extent = swapchain_create_info.image_extent;
 
         Ok(())
     }

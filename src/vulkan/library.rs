@@ -38,7 +38,7 @@ pub struct VulkanEntry {
 impl GraphicsApi for VulkanEntry {
     fn render(&self, layouts: &[Arc<RefCell<dyn Layout>>]) -> CrystalResult<()> {
         for (_, target) in &self.render_targets {
-            let render_target = target.borrow();
+            let mut render_target = target.borrow_mut();
             match unsafe {
                 self.device_manager.device.clone().wait_for_fences(
                     &[render_target.in_flight_fences[render_target.current_frame]],
@@ -73,8 +73,28 @@ impl GraphicsApi for VulkanEntry {
             } {
                 Ok((idx, _)) => image_index = idx,
                 Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
-                    drop(render_target);
-                    target.borrow_mut().update_swapchain()?;
+                    let mut swapchain_create_info = self
+                        .presentation
+                        .create_swapchain_info(self.device_manager.clone())?;
+
+                    let queue_family_indices = [
+                        self.device_manager
+                            .queue_families_indices
+                            .graphics_index
+                            .unwrap(),
+                        self.device_manager
+                            .queue_families_indices
+                            .present_index
+                            .unwrap(),
+                    ];
+
+                    if queue_family_indices[0] != queue_family_indices[1] {
+                        swapchain_create_info = swapchain_create_info
+                            .image_sharing_mode(vk::SharingMode::CONCURRENT)
+                            .queue_family_indices(&queue_family_indices)
+                    }
+
+                    render_target.update_swapchain(&self.instance, &swapchain_create_info)?;
                     continue;
                 }
                 Err(e) => {
@@ -120,7 +140,16 @@ impl GraphicsApi for VulkanEntry {
                         .framebuffer(render_target.framebuffers[image_index as usize])
                         .render_area(vk::Rect2D {
                             offset: vk::Offset2D::default().x(0).y(0),
-                            extent: render_target.extent,
+                            extent: vk::Extent2D {
+                                width: render_target
+                                    .extent
+                                    .width
+                                    .min(render_target.swapchain_extent.width),
+                                height: render_target
+                                    .extent
+                                    .height
+                                    .min(render_target.swapchain_extent.height),
+                            }, // render_target.extent,
                         })
                         .clear_values(clear_values);
 
@@ -171,9 +200,29 @@ impl GraphicsApi for VulkanEntry {
                 image_index,
             ) {
                 Err(CrystalError::OutOfDate) => {
-                    drop(render_target);
-                    target.borrow_mut().update_swapchain()?;
-                    continue;
+                    let mut swapchain_create_info = self
+                        .presentation
+                        .create_swapchain_info(self.device_manager.clone())?;
+
+                    let queue_family_indices = [
+                        self.device_manager
+                            .queue_families_indices
+                            .graphics_index
+                            .unwrap(),
+                        self.device_manager
+                            .queue_families_indices
+                            .present_index
+                            .unwrap(),
+                    ];
+
+                    if queue_family_indices[0] != queue_family_indices[1] {
+                        swapchain_create_info = swapchain_create_info
+                            .image_sharing_mode(vk::SharingMode::CONCURRENT)
+                            .queue_family_indices(&queue_family_indices)
+                    }
+
+                    render_target.update_swapchain(&self.instance, &swapchain_create_info)?;
+                    // continue;
                 }
                 res => res?,
             };
@@ -181,11 +230,7 @@ impl GraphicsApi for VulkanEntry {
             let max_frames_in_flight = render_target.in_flight_fences.len();
             let current_frame = render_target.current_frame;
 
-            drop(render_target);
-
-            target
-                .borrow_mut()
-                .set_current_frame((current_frame + 1) % max_frames_in_flight);
+            render_target.set_current_frame((current_frame + 1) % max_frames_in_flight);
         }
 
         Ok(())

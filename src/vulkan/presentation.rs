@@ -95,11 +95,10 @@ impl Presentation {
         })
     }
 
-    pub fn init_viewport_render_target(
+    pub fn create_swapchain_info(
         &self,
-        instance: &ash::Instance,
         device_manager: Arc<DeviceManager>,
-    ) -> CrystalResult<VulkanRenderTarget> {
+    ) -> CrystalResult<vk::SwapchainCreateInfoKHR> {
         let swap_chain_support_details =
             self.query_swap_chain_support(&device_manager.physical_device)?;
 
@@ -111,18 +110,6 @@ impl Presentation {
             None => {
                 log!("not found required swap surface format");
                 return Err(CrystalError::SwapChainIsNotSupported);
-            }
-        };
-
-        let swap_present_mode = match swap_chain_support_details
-            .present_modes
-            .iter()
-            .find(|&&mode| mode == vk::PresentModeKHR::MAILBOX)
-        {
-            Some(&mode) => mode,
-            None => {
-                log!("not found required swap present mode, choosing FIFO");
-                vk::PresentModeKHR::FIFO
             }
         };
 
@@ -144,7 +131,16 @@ impl Presentation {
             }
         };
 
-        let mut swapchain_create_info = vk::SwapchainCreateInfoKHR::default()
+        let swap_present_mode = match swap_chain_support_details
+            .present_modes
+            .iter()
+            .find(|&&mode| mode == vk::PresentModeKHR::MAILBOX)
+        {
+            Some(&mode) => mode,
+            None => vk::PresentModeKHR::FIFO,
+        };
+
+        let swapchain_create_info = vk::SwapchainCreateInfoKHR::default()
             .surface(self.surface_khr)
             .min_image_count(image_count)
             .image_format(swap_surface_format.format)
@@ -159,7 +155,17 @@ impl Presentation {
             .clipped(true)
             .old_swapchain(vk::SwapchainKHR::null());
 
-        let queue_family_indices = &[
+        Ok(swapchain_create_info)
+    }
+
+    pub fn init_viewport_render_target(
+        &self,
+        instance: &ash::Instance,
+        device_manager: Arc<DeviceManager>,
+    ) -> CrystalResult<VulkanRenderTarget> {
+        let mut swapchain_create_info = self.create_swapchain_info(device_manager.clone())?;
+
+        let queue_family_indices = [
             device_manager
                 .queue_families_indices
                 .graphics_index
@@ -170,7 +176,7 @@ impl Presentation {
         if queue_family_indices[0] != queue_family_indices[1] {
             swapchain_create_info = swapchain_create_info
                 .image_sharing_mode(vk::SharingMode::CONCURRENT)
-                .queue_family_indices(queue_family_indices)
+                .queue_family_indices(&queue_family_indices)
         }
 
         let viewport_render_target = VulkanRenderTarget::new(

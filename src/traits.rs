@@ -36,6 +36,7 @@ pub trait RenderTarget {
         attributes: &[Attribute],
     ) -> CrystalResult<Arc<dyn Pipeline>>;
 
+    fn update_size(&mut self, width: u32, height: u32) -> CrystalResult<()>;
     fn get_current_frame(&self) -> usize;
 }
 

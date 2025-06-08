@@ -82,7 +82,7 @@ impl Image {
         } {
             Ok(mem) => mem,
             Err(e) => {
-                log!("cannot allocate image memory: {}", e);
+                log!("cannot allocate image memory: {:?}", e);
                 return Err(CrystalError::ImageError);
             }
         };
