@@ -83,7 +83,7 @@ impl traits::RenderTarget for VulkanRenderTarget {
             };
 
             let shader_module_create_info =
-                vk::ShaderModuleCreateInfo::default().code(shader.code.as_slice());
+                vk::ShaderModuleCreateInfo::default().code(shader.code.as_words());
 
             let module = match unsafe {
                 self.device_manager

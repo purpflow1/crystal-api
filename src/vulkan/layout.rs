@@ -62,9 +62,9 @@ impl traits::Layout for VulkanLayout {
         data: GpuVec,
     ) -> CrystalResult<()> {
         if is_uniform {
-            self.uniform_buffer_managers_sets[frame][buffer].write(data.as_slice(), offset)
+            self.uniform_buffer_managers_sets[frame][buffer].write(data.as_words(), offset)
         } else {
-            self.storage_buffer_managers_sets[frame][buffer].write(data.as_slice(), offset)
+            self.storage_buffer_managers_sets[frame][buffer].write(data.as_words(), offset)
         }
     }
 }
