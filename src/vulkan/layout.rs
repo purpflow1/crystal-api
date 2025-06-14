@@ -16,7 +16,7 @@ use crate::{
 
 use super::{
     devices::DeviceManager, images::VulkanTexture, memory::BufferManager,
-    memory_obj::VulkanObjectMemoryManager, rendering::VulkanRenderTarget,
+    memory_obj::VulkanObjectMemoryManager,
 };
 
 pub struct VulkanLayout {
@@ -392,7 +392,8 @@ impl VulkanLayout {
         &mut self,
         device_manager: Arc<DeviceManager>,
         command_buffer: &vk::CommandBuffer,
-        render_target: &VulkanRenderTarget,
+        frames_in_flight: usize,
+        frame: usize,
     ) -> CrystalResult<()> {
         unsafe {
             device_manager.device.cmd_bind_descriptor_sets(
@@ -401,8 +402,8 @@ impl VulkanLayout {
                 self.pipeline_layout,
                 0,
                 &[
-                    self.uniform_descriptor_sets[render_target.current_frame],
-                    self.storage_descriptor_sets[render_target.current_frame],
+                    self.uniform_descriptor_sets[frame],
+                    self.storage_descriptor_sets[frame],
                 ],
                 &[],
             )
@@ -444,7 +445,7 @@ impl VulkanLayout {
 
                     let sets = self.init_sampler_descriptor_sets(
                         device_manager.clone(),
-                        render_target.in_flight_fences.len(),
+                        frames_in_flight,
                         textures.as_ptr() as usize as u64,
                         &texture_sets,
                     )?;
@@ -455,7 +456,7 @@ impl VulkanLayout {
                             vk::PipelineBindPoint::GRAPHICS,
                             self.pipeline_layout,
                             2,
-                            &[sets[render_target.current_frame]],
+                            &[sets[frame]],
                             &[],
                         )
                     }

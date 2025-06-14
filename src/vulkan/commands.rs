@@ -357,10 +357,10 @@ impl CommandEntry {
         self.end_single_time_buffer(command_buffer)
     }
 
-    pub fn reset_command_buffer(&self, command_buffer: usize) -> CrystalResult<()> {
+    pub fn reset_command_buffer(&self, command_buffer_idx: usize) -> CrystalResult<()> {
         match unsafe {
             self.device.reset_command_buffer(
-                self.command_buffers[command_buffer],
+                self.command_buffers[command_buffer_idx],
                 vk::CommandBufferResetFlags::empty(),
             )
         } {

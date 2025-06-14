@@ -5,9 +5,8 @@ use ash::{Instance, vk};
 use crate::{
     debug::log,
     errors::{CrystalError, CrystalResult},
+    vulkan::presentation::PresentSurface,
 };
-
-use super::presentation::Presentation;
 
 pub(crate) struct DeviceManager {
     pub device: Arc<ash::Device>,
@@ -15,6 +14,14 @@ pub(crate) struct DeviceManager {
     pub memory_properties: vk::PhysicalDeviceMemoryProperties,
     pub device_properties: vk::PhysicalDeviceProperties,
     pub queue_families_indices: QueueFamiliesIndices,
+}
+
+impl Drop for DeviceManager {
+    fn drop(&mut self) {
+        unsafe {
+            self.device.destroy_device(None);
+        }
+    }
 }
 
 impl DeviceManager {
@@ -82,7 +89,7 @@ impl QueueFamiliesIndices {
 
 pub fn pick_physical_device(
     instance: &Instance,
-    surface: Option<&Presentation>,
+    surface: Option<Arc<PresentSurface>>,
     extensions: &[*const i8],
 ) -> CrystalResult<(vk::PhysicalDevice, QueueFamiliesIndices)> {
     let devices = match unsafe { instance.enumerate_physical_devices() } {
@@ -161,7 +168,7 @@ pub fn pick_physical_device(
 
 fn find_queue_families(
     instance: &Instance,
-    surface: Option<&Presentation>,
+    surface: Option<Arc<PresentSurface>>,
     device: vk::PhysicalDevice,
 ) -> QueueFamiliesIndices {
     let mut queue_families = QueueFamiliesIndices::default();
@@ -189,7 +196,7 @@ fn find_queue_families(
         }
 
         let present_support = unsafe {
-            match surface {
+            match surface.clone() {
                 Some(surface) => surface
                     .surface
                     .get_physical_device_surface_support(device, index, surface.surface_khr)

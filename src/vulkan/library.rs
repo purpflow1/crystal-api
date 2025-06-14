@@ -1,7 +1,7 @@
 use std::{cell::RefCell, collections::BTreeMap, ffi::CStr, sync::Arc, u64};
 
 use ash::vk::{self, EXT_DEBUG_UTILS_NAME, KHR_SWAPCHAIN_NAME};
-use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
+use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
 use super::{
     commands::CommandManager,
@@ -15,7 +15,7 @@ use super::{
 };
 
 use crate::{
-    GraphicsApi, GraphicsApiInitSettings,
+    GraphicsApi, GraphicsApiInitSettings, RenderTarget,
     debug::log,
     errors::{CrystalError, CrystalResult},
     images::Image2D,
@@ -35,13 +35,25 @@ pub struct VulkanEntry {
     pub render_targets: BTreeMap<u16, Arc<RefCell<VulkanRenderTarget>>>,
 }
 
+impl Drop for VulkanEntry {
+    fn drop(&mut self) {
+        unsafe {
+            self.instance.destroy_instance(None);
+        }
+    }
+}
+
 impl GraphicsApi for VulkanEntry {
-    fn render(&self, layouts: &[Arc<RefCell<dyn Layout>>]) -> CrystalResult<()> {
+    fn get_current_frame(&self) -> usize {
+        self.presentation.current_frame
+    }
+
+    fn render(&mut self, layouts: &[Arc<RefCell<dyn Layout>>]) -> CrystalResult<()> {
         for (_, target) in &self.render_targets {
             let mut render_target = target.borrow_mut();
             match unsafe {
                 self.device_manager.device.clone().wait_for_fences(
-                    &[render_target.in_flight_fences[render_target.current_frame]],
+                    &[self.presentation.in_flight_fences[self.presentation.current_frame]],
                     true,
                     u64::MAX,
                 )
@@ -64,37 +76,20 @@ impl GraphicsApi for VulkanEntry {
             let image_index;
 
             match unsafe {
-                render_target.swapchain.acquire_next_image(
-                    render_target.swapchain_khr,
+                self.presentation.swapchain.acquire_next_image(
+                    self.presentation.swapchain_khr,
                     u64::MAX,
-                    render_target.image_available_semaphores[render_target.current_frame],
+                    self.presentation.image_available_semaphores[self.presentation.current_frame],
                     vk::Fence::null(),
                 )
             } {
                 Ok((idx, _)) => image_index = idx,
                 Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
-                    let mut swapchain_create_info = self
-                        .presentation
-                        .create_swapchain_info(self.device_manager.clone())?;
-
-                    let queue_family_indices = [
-                        self.device_manager
-                            .queue_families_indices
-                            .graphics_index
-                            .unwrap(),
-                        self.device_manager
-                            .queue_families_indices
-                            .present_index
-                            .unwrap(),
-                    ];
-
-                    if queue_family_indices[0] != queue_family_indices[1] {
-                        swapchain_create_info = swapchain_create_info
-                            .image_sharing_mode(vk::SharingMode::CONCURRENT)
-                            .queue_family_indices(&queue_family_indices)
-                    }
-
-                    render_target.update_swapchain(&self.instance, &swapchain_create_info)?;
+                    self.presentation.recreate_swapchain()?;
+                    render_target.update_size(
+                        self.presentation.extent.width,
+                        self.presentation.extent.height,
+                    )?;
                     continue;
                 }
                 Err(e) => {
@@ -104,10 +99,9 @@ impl GraphicsApi for VulkanEntry {
             };
 
             match unsafe {
-                self.device_manager
-                    .device
-                    .clone()
-                    .reset_fences(&[render_target.in_flight_fences[render_target.current_frame]])
+                self.device_manager.device.clone().reset_fences(&[self
+                    .presentation
+                    .in_flight_fences[self.presentation.current_frame]])
             } {
                 Ok(()) => {}
                 Err(e) => {
@@ -131,9 +125,9 @@ impl GraphicsApi for VulkanEntry {
             };
             let clear_values = &[clear_value_color, clear_value_stencil];
 
-            command_entry.reset_command_buffer(render_target.current_frame)?;
+            command_entry.reset_command_buffer(self.presentation.current_frame)?;
             command_entry.record_command_buffer(
-                render_target.current_frame,
+                self.presentation.current_frame,
                 |command_buffer, device| {
                     let render_pass_begin = vk::RenderPassBeginInfo::default()
                         .render_pass(render_target.render_pass)
@@ -144,11 +138,11 @@ impl GraphicsApi for VulkanEntry {
                                 width: render_target
                                     .extent
                                     .width
-                                    .min(render_target.swapchain_extent.width),
+                                    .min(self.presentation.extent.width),
                                 height: render_target
                                     .extent
                                     .height
-                                    .min(render_target.swapchain_extent.height),
+                                    .min(self.presentation.extent.height),
                             }, // render_target.extent,
                         })
                         .clear_values(clear_values);
@@ -183,7 +177,12 @@ impl GraphicsApi for VulkanEntry {
                             }
                         };
                         layout_downcasted
-                            .render(self.device_manager.clone(), command_buffer, &render_target)
+                            .render(
+                                self.device_manager.clone(),
+                                command_buffer,
+                                self.presentation.frames_in_flight as usize,
+                                self.presentation.current_frame,
+                            )
                             .unwrap();
                     }
 
@@ -191,46 +190,60 @@ impl GraphicsApi for VulkanEntry {
                 },
             )?;
 
-            match render_target.submit_and_present(
-                &self.command_manager,
+            let queue = unsafe {
                 self.device_manager
-                    .queue_families_indices
-                    .present_index
-                    .unwrap(),
-                image_index,
-            ) {
-                Err(CrystalError::OutOfDate) => {
-                    let mut swapchain_create_info = self
-                        .presentation
-                        .create_swapchain_info(self.device_manager.clone())?;
-
-                    let queue_family_indices = [
-                        self.device_manager
-                            .queue_families_indices
-                            .graphics_index
-                            .unwrap(),
-                        self.device_manager
-                            .queue_families_indices
-                            .present_index
-                            .unwrap(),
-                    ];
-
-                    if queue_family_indices[0] != queue_family_indices[1] {
-                        swapchain_create_info = swapchain_create_info
-                            .image_sharing_mode(vk::SharingMode::CONCURRENT)
-                            .queue_family_indices(&queue_family_indices)
-                    }
-
-                    render_target.update_swapchain(&self.instance, &swapchain_create_info)?;
-                    // continue;
-                }
-                res => res?,
+                    .device
+                    .get_device_queue(self.presentation.queue_family_indices[1], 0)
             };
 
-            let max_frames_in_flight = render_target.in_flight_fences.len();
-            let current_frame = render_target.current_frame;
+            let swapchains = &[self.presentation.swapchain_khr];
+            let image_indices = &[image_index];
 
-            render_target.set_current_frame((current_frame + 1) % max_frames_in_flight);
+            self.command_manager
+                .graphics
+                .as_ref()
+                .unwrap()
+                .submit_command_buffer(
+                    self.presentation.current_frame,
+                    &[self.presentation.image_available_semaphores
+                        [self.presentation.current_frame]],
+                    &[self.presentation.render_finished_semaphores
+                        [self.presentation.current_frame]],
+                    &[vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT],
+                    self.presentation.in_flight_fences[self.presentation.current_frame],
+                )?;
+
+            let wait_semaphores =
+                &[self.presentation.render_finished_semaphores[self.presentation.current_frame]];
+
+            let present_info = vk::PresentInfoKHR::default()
+                .wait_semaphores(wait_semaphores)
+                .swapchains(swapchains)
+                .image_indices(image_indices);
+            match unsafe {
+                self.presentation
+                    .swapchain
+                    .queue_present(queue, &present_info)
+            } {
+                Ok(_) => (),
+                Err(vk::Result::ERROR_OUT_OF_DATE_KHR | vk::Result::SUBOPTIMAL_KHR) => {
+                    self.presentation
+                        .recreate_swapchain()
+                        .expect("cannot recreate swapchain");
+                    render_target
+                        .update_size(
+                            self.presentation.extent.width,
+                            self.presentation.extent.height,
+                        )
+                        .expect("cannot update render target size");
+                }
+                Err(e) => {
+                    panic!("failed to present queue: {}", e);
+                }
+            }
+
+            self.presentation.current_frame =
+                (self.presentation.current_frame + 1) % self.presentation.frames_in_flight as usize;
         }
 
         Ok(())
@@ -274,9 +287,9 @@ impl GraphicsApi for VulkanEntry {
 }
 
 impl VulkanEntry {
-    pub fn with_presentation(
+    pub fn with_presentation<T: HasWindowHandle + HasDisplayHandle>(
         settings: &GraphicsApiInitSettings,
-        handles: (RawDisplayHandle, RawWindowHandle),
+        window: &T,
     ) -> CrystalResult<Box<dyn GraphicsApi>> {
         let mut instance_extensions = vec![
             #[cfg(debug_assertions)]
@@ -285,7 +298,9 @@ impl VulkanEntry {
 
         let device_extensions = [KHR_SWAPCHAIN_NAME.as_ptr()];
 
-        let mut required_extensions = match ash_window::enumerate_required_extensions(handles.0) {
+        let mut required_extensions = match ash_window::enumerate_required_extensions(
+            window.display_handle().unwrap().as_raw(),
+        ) {
             Ok(ext) => ext.to_vec(),
             Err(e) => {
                 log!("cannot enumerate required display extensions: {}", e);
@@ -364,16 +379,10 @@ impl VulkanEntry {
             );
         }
 
-        let presentation = Presentation::new(
-            &entry,
-            &instance,
-            handles,
-            settings.viewport_frames_in_flight,
-            settings.msaa_samples,
-        )?;
+        let surface = Presentation::create_surface(&entry, &instance, window);
 
         let (physical_device, queue_families_indices) =
-            pick_physical_device(&instance, Some(&presentation), &device_extensions)?;
+            pick_physical_device(&instance, Some(surface.clone()), &device_extensions)?;
 
         let logical_device = Arc::new(create_logical_device(
             &instance,
@@ -402,8 +411,25 @@ impl VulkanEntry {
             settings.viewport_frames_in_flight,
         )?;
 
-        let viewport_render_target =
-            presentation.init_viewport_render_target(&instance, device_manager.clone())?;
+        let presentation = Presentation::new(
+            &instance,
+            device_manager.clone(),
+            surface,
+            settings.viewport_frames_in_flight,
+            settings.msaa_samples,
+        )?;
+
+        let viewport_render_target = VulkanRenderTarget::new(
+            &instance,
+            device_manager.clone(),
+            presentation.image_format,
+            vk::Extent2D {
+                width: settings.width,
+                height: settings.height,
+            },
+            &presentation.swapchain_image_views,
+            presentation.msaa_samples,
+        )?;
 
         let mut render_targets = BTreeMap::new();
 

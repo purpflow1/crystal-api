@@ -13,7 +13,6 @@ use std::{
 
 use images::Image2D;
 use mesh::{Mesh, VertexTexture};
-use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use winit::{
     application::ApplicationHandler,
     dpi::LogicalSize,
@@ -123,14 +122,8 @@ impl ApplicationHandler for Context {
             )
             .unwrap();
 
-        let graphics = VulkanEntry::with_presentation(
-            &self.settings,
-            (
-                window.display_handle().unwrap().as_raw(),
-                window.window_handle().unwrap().as_raw(),
-            ),
-        )
-        .expect("cannot create vulkan entry");
+        let graphics = VulkanEntry::with_presentation(&self.settings, &window)
+            .expect("cannot create vulkan entry");
 
         let shaders_pbr = [
             Shader::open("shaders/desc.vert.spv", ShaderStage::Vertex).unwrap(),
@@ -217,10 +210,9 @@ impl ApplicationHandler for Context {
     fn about_to_wait(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
         let now = std::time::Instant::now();
 
-        let graphics = self.graphics.as_ref().unwrap();
+        let graphics = self.graphics.as_mut().unwrap();
 
-        let viewport = graphics.get_viewport();
-        let current_frame = viewport.borrow().get_current_frame();
+        let current_frame = graphics.get_current_frame();
 
         let mut layout_pbr = self.layout_pbr.as_ref().unwrap().borrow_mut();
 

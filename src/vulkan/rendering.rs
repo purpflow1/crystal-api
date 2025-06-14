@@ -12,7 +12,6 @@ use crate::{
 };
 
 use super::{
-    commands::CommandManager,
     depth::{DepthResources, find_depth_format},
     devices::DeviceManager,
     images::Image,
@@ -21,21 +20,11 @@ use super::{
 pub struct VulkanRenderTarget {
     device_manager: Arc<DeviceManager>,
     pub extent: vk::Extent2D,
-    pub swapchain_extent: vk::Extent2D,
-    pub swapchain: ash::khr::swapchain::Device,
-    pub swapchain_khr: vk::SwapchainKHR,
     pub render_pass: vk::RenderPass,
 
     pub framebuffers: Vec<vk::Framebuffer>,
-    swapchain_images: Vec<vk::Image>,
-    swapchain_image_views: Vec<vk::ImageView>,
     depth_resources: Vec<DepthResources>,
 
-    pub image_available_semaphores: Vec<vk::Semaphore>,
-    pub render_finished_semaphores: Vec<vk::Semaphore>,
-    pub in_flight_fences: Vec<vk::Fence>,
-
-    pub current_frame: usize,
     pub msaa_samples: vk::SampleCountFlags,
 }
 
@@ -50,10 +39,6 @@ impl traits::Pipeline for vk::Pipeline {
 }
 
 impl traits::RenderTarget for VulkanRenderTarget {
-    fn get_current_frame(&self) -> usize {
-        self.current_frame
-    }
-
     fn update_size(&mut self, width: u32, height: u32) -> CrystalResult<()> {
         self.extent = vk::Extent2D { width, height };
         Ok(())
@@ -230,8 +215,9 @@ impl VulkanRenderTarget {
     pub(crate) fn new(
         instance: &ash::Instance,
         device_manager: Arc<DeviceManager>,
-        swapchain_create_info: vk::SwapchainCreateInfoKHR,
-        frames_in_flight: u32,
+        image_format: vk::Format,
+        extent: vk::Extent2D,
+        image_views: &[vk::ImageView],
         msaa_samples: u8,
     ) -> CrystalResult<Self> {
         let counts = device_manager
@@ -261,7 +247,7 @@ impl VulkanRenderTarget {
         };
 
         let color_attachment = vk::AttachmentDescription::default()
-            .format(swapchain_create_info.image_format)
+            .format(image_format)
             .samples(samples)
             .load_op(vk::AttachmentLoadOp::CLEAR)
             .store_op(vk::AttachmentStoreOp::STORE)
@@ -290,7 +276,7 @@ impl VulkanRenderTarget {
             .final_layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
 
         let color_attachment_resolve = vk::AttachmentDescription::default()
-            .format(swapchain_create_info.image_format)
+            .format(image_format)
             .samples(vk::SampleCountFlags::TYPE_1)
             .load_op(vk::AttachmentLoadOp::DONT_CARE)
             .store_op(vk::AttachmentStoreOp::STORE)
@@ -376,167 +362,24 @@ impl VulkanRenderTarget {
             }
         };
 
-        let (
-            swapchain_image_views,
-            framebuffers,
-            depth_resources,
-            swapchain_images,
-            swapchain,
-            swapchain_khr,
-        ) = Self::create_swapchain(
-            device_manager.clone(),
-            instance,
-            samples,
-            &swapchain_create_info,
-            render_pass,
-        )?;
-
-        let mut image_available_semaphores = vec![];
-        let mut render_finished_semaphores = vec![];
-        let mut in_flight_fences = vec![];
-
-        for _ in 0..frames_in_flight {
-            let semaphore_create_info = vk::SemaphoreCreateInfo::default();
-
-            for i in 0..2 {
-                let semaphore = match unsafe {
-                    device_manager
-                        .device
-                        .create_semaphore(&semaphore_create_info, None)
-                } {
-                    Ok(semaphore) => semaphore,
-                    Err(e) => {
-                        log!("cannot create semaphore: {}", e);
-                        return Err(CrystalError::CannotCreateRenderTarget);
-                    }
-                };
-
-                if i == 0 {
-                    render_finished_semaphores.push(semaphore);
-                } else {
-                    image_available_semaphores.push(semaphore);
-                }
-            }
-
-            let fence_create_info =
-                vk::FenceCreateInfo::default().flags(vk::FenceCreateFlags::SIGNALED);
-
-            let in_flight_fence =
-                match unsafe { device_manager.device.create_fence(&fence_create_info, None) } {
-                    Ok(fence) => fence,
-                    Err(e) => {
-                        log!("cannot create fence: {}", e);
-                        return Err(CrystalError::CannotCreateRenderTarget);
-                    }
-                };
-
-            in_flight_fences.push(in_flight_fence);
-        }
-
-        Ok(Self {
-            device_manager,
-            extent: swapchain_create_info.image_extent,
-            swapchain_extent: swapchain_create_info.image_extent,
-            swapchain,
-            swapchain_khr,
-            render_pass,
-            framebuffers,
-            swapchain_images,
-            swapchain_image_views,
-
-            image_available_semaphores,
-            render_finished_semaphores,
-            in_flight_fences,
-
-            depth_resources,
-
-            current_frame: 0,
-
-            msaa_samples: samples,
-        })
-    }
-
-    fn create_swapchain(
-        device_manager: Arc<DeviceManager>,
-        instance: &ash::Instance,
-        samples: vk::SampleCountFlags,
-        swapchain_create_info: &vk::SwapchainCreateInfoKHR,
-        render_pass: vk::RenderPass,
-    ) -> CrystalResult<(
-        Vec<vk::ImageView>,
-        Vec<vk::Framebuffer>,
-        Vec<DepthResources>,
-        Vec<vk::Image>,
-        ash::khr::swapchain::Device,
-        vk::SwapchainKHR,
-    )> {
-        let mut swapchain_image_views = vec![];
         let mut framebuffers = vec![];
         let mut depth_resources = vec![];
 
-        let swapchain = ash::khr::swapchain::Device::new(instance, &device_manager.device);
-        let swapchain_khr =
-            match unsafe { swapchain.create_swapchain(&swapchain_create_info, None) } {
-                Ok(swapchain_khr) => swapchain_khr,
-                Err(e) => {
-                    log!("cannot create swapchain: {}", e);
-                    return Err(CrystalError::SwapChainError);
-                }
-            };
-
-        let swapchain_images = match unsafe { swapchain.get_swapchain_images(swapchain_khr) } {
-            Ok(images) => images,
-            Err(e) => {
-                log!("cannot get swapchain images: {}", e);
-                return Err(CrystalError::SwapChainError);
-            }
-        };
-
-        for &swapchain_image in &swapchain_images {
-            let create_info = vk::ImageViewCreateInfo::default()
-                .image(swapchain_image)
-                .view_type(vk::ImageViewType::TYPE_2D)
-                .format(swapchain_create_info.image_format)
-                .components(vk::ComponentMapping {
-                    r: vk::ComponentSwizzle::IDENTITY,
-                    g: vk::ComponentSwizzle::IDENTITY,
-                    b: vk::ComponentSwizzle::IDENTITY,
-                    a: vk::ComponentSwizzle::IDENTITY,
-                })
-                .subresource_range(
-                    vk::ImageSubresourceRange::default()
-                        .aspect_mask(vk::ImageAspectFlags::COLOR)
-                        .base_mip_level(0)
-                        .level_count(1)
-                        .base_array_layer(0)
-                        .layer_count(1),
-                );
-
-            let image_view =
-                match unsafe { device_manager.device.create_image_view(&create_info, None) } {
-                    Ok(image_view) => image_view,
-                    Err(e) => {
-                        log!("cannot create image view: {}", e);
-                        return Err(CrystalError::SwapChainError);
-                    }
-                };
-
-            swapchain_image_views.push(image_view);
-
+        for image_view in image_views {
             let depth_resource = DepthResources::new(
                 device_manager.clone(),
                 instance,
-                swapchain_create_info.image_extent.width,
-                swapchain_create_info.image_extent.height,
+                extent.width,
+                extent.height,
                 samples,
             )?;
 
             let color_image = Image::new(
                 device_manager.clone(),
-                swapchain_create_info.image_extent.width,
-                swapchain_create_info.image_extent.height,
+                extent.width,
+                extent.height,
                 samples,
-                swapchain_create_info.image_format,
+                image_format,
                 vk::ImageTiling::OPTIMAL,
                 vk::ImageAspectFlags::COLOR,
                 vk::ImageUsageFlags::TRANSIENT_ATTACHMENT | vk::ImageUsageFlags::COLOR_ATTACHMENT,
@@ -549,10 +392,10 @@ impl VulkanRenderTarget {
                 vec![
                     color_image.image_view,
                     depth_resource.image.image_view,
-                    image_view,
+                    *image_view,
                 ]
             } else {
-                vec![image_view, depth_resource.image.image_view]
+                vec![*image_view, depth_resource.image.image_view]
             };
 
             depth_resources.push(depth_resource);
@@ -560,8 +403,8 @@ impl VulkanRenderTarget {
             let create_info = vk::FramebufferCreateInfo::default()
                 .render_pass(render_pass)
                 .attachments(&attachments)
-                .width(swapchain_create_info.image_extent.width)
-                .height(swapchain_create_info.image_extent.height)
+                .width(extent.width)
+                .height(extent.height)
                 .layers(1);
 
             let framebuffer =
@@ -575,108 +418,15 @@ impl VulkanRenderTarget {
             framebuffers.push(framebuffer);
         }
 
-        Ok((
-            swapchain_image_views,
+        Ok(Self {
+            device_manager,
+            extent,
+            render_pass,
             framebuffers,
+
             depth_resources,
-            swapchain_images,
-            swapchain,
-            swapchain_khr,
-        ))
-    }
 
-    pub fn set_current_frame(&mut self, current_frame: usize) {
-        self.current_frame = current_frame
-    }
-
-    #[allow(unused)]
-    pub fn update_swapchain(
-        &mut self,
-        instance: &ash::Instance,
-        swapchain_create_info: &vk::SwapchainCreateInfoKHR,
-    ) -> CrystalResult<()> {
-        // unimplemented!("update swapchain");
-
-        let queue = unsafe {
-            self.device_manager.device.get_device_queue(
-                self.device_manager
-                    .queue_families_indices
-                    .graphics_index
-                    .unwrap(),
-                0,
-            )
-        };
-        match unsafe { self.device_manager.device.queue_wait_idle(queue) } {
-            Ok(_) => (),
-            Err(e) => {
-                log!("cannot device wait idle: {}", e);
-                return Err(CrystalError::RenderingError);
-            }
-        };
-
-        unsafe { self.swapchain.destroy_swapchain(self.swapchain_khr, None) };
-
-        (
-            self.swapchain_image_views,
-            self.framebuffers,
-            self.depth_resources,
-            self.swapchain_images,
-            self.swapchain,
-            self.swapchain_khr,
-        ) = Self::create_swapchain(
-            self.device_manager.clone(),
-            instance,
-            self.msaa_samples,
-            swapchain_create_info,
-            self.render_pass,
-        )?;
-
-        self.swapchain_extent = swapchain_create_info.image_extent;
-
-        Ok(())
-    }
-
-    pub fn submit_and_present(
-        &self,
-        command_manager: &CommandManager,
-        present_queue_family_index: u32,
-        image_index: u32,
-    ) -> CrystalResult<()> {
-        let queue = unsafe {
-            self.device_manager
-                .device
-                .get_device_queue(present_queue_family_index, 0)
-        };
-        let swapchains = &[self.swapchain_khr];
-        let image_indices = &[image_index];
-
-        command_manager
-            .graphics
-            .as_ref()
-            .unwrap()
-            .submit_command_buffer(
-                self.current_frame,
-                &[self.image_available_semaphores[self.current_frame]],
-                &[self.render_finished_semaphores[self.current_frame]],
-                &[vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT],
-                self.in_flight_fences[self.current_frame],
-            )?;
-
-        let wait_semaphores = &[self.render_finished_semaphores[self.current_frame]];
-
-        let present_info = vk::PresentInfoKHR::default()
-            .wait_semaphores(wait_semaphores)
-            .swapchains(swapchains)
-            .image_indices(image_indices);
-        match unsafe { self.swapchain.queue_present(queue, &present_info) } {
-            Ok(_) => Ok(()),
-            Err(vk::Result::ERROR_OUT_OF_DATE_KHR | vk::Result::SUBOPTIMAL_KHR) => {
-                Err(CrystalError::OutOfDate)
-            }
-            Err(e) => {
-                log!("failed to present queue: {}", e);
-                Err(CrystalError::RenderingError)
-            }
-        }
+            msaa_samples: samples,
+        })
     }
 }

@@ -9,7 +9,7 @@ use crate::{
 };
 
 pub trait GraphicsApi {
-    fn render(&self, layouts: &[Arc<RefCell<dyn Layout>>]) -> CrystalResult<()>;
+    fn render(&mut self, layouts: &[Arc<RefCell<dyn Layout>>]) -> CrystalResult<()>;
 
     fn create_layout(
         &self,
@@ -26,6 +26,7 @@ pub trait GraphicsApi {
     ) -> CrystalResult<Arc<dyn Texture>>;
 
     fn get_viewport(&self) -> Arc<RefCell<dyn RenderTarget>>;
+    fn get_current_frame(&self) -> usize;
 }
 
 pub trait RenderTarget {
@@ -37,7 +38,6 @@ pub trait RenderTarget {
     ) -> CrystalResult<Arc<dyn Pipeline>>;
 
     fn update_size(&mut self, width: u32, height: u32) -> CrystalResult<()>;
-    fn get_current_frame(&self) -> usize;
 }
 
 pub trait Layout {
