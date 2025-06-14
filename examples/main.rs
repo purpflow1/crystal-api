@@ -19,7 +19,6 @@ use winit::{
     dpi::LogicalSize,
     event::WindowEvent,
     event_loop::{ControlFlow, EventLoop},
-    platform::x11::WindowAttributesExtX11,
     window::Window,
 };
 
@@ -116,7 +115,7 @@ impl ApplicationHandler for Context {
         let window = event_loop
             .create_window(
                 Window::default_attributes()
-                    .with_base_size(LogicalSize::new(self.settings.width, self.settings.height))
+                    .with_inner_size(LogicalSize::new(self.settings.width, self.settings.height))
                     .with_min_inner_size(LogicalSize::new(
                         self.settings.width / 2,
                         self.settings.height / 2,
