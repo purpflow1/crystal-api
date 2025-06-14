@@ -16,14 +16,11 @@ impl GpuVec {
             panic!("Failed to allocate memory");
         }
 
-        let mut tmp_vec = unsafe { Vec::<u8>::from_raw_parts(ptr, 0, size) };
-
         unsafe {
-            tmp_vec.set_len(size);
+            let mut tmp_vec = Vec::<u8>::from_raw_parts(ptr, size, size);
             tmp_vec.copy_from_slice(std::slice::from_raw_parts(data.as_ptr() as *const u8, size));
+            Self(tmp_vec)
         }
-
-        Self(tmp_vec)
     }
 
     pub fn as_words(&self) -> &[u32] {
@@ -32,14 +29,5 @@ impl GpuVec {
 
     pub fn as_slice(&self) -> &[u8] {
         &self.0
-    }
-}
-
-#[repr(C, align(16))]
-pub struct AlignedValue<T>(T);
-
-impl<T> AlignedValue<T> {
-    pub const fn new(val: T) -> Self {
-        Self(val)
     }
 }
