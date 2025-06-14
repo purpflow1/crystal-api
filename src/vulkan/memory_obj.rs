@@ -1,17 +1,17 @@
 use std::sync::Arc;
 
-use ash::vk;
+use vulkano::buffer::BufferUsage;
+use vulkano::device::Device;
+use vulkano::memory::allocator::{MemoryTypeFilter, StandardMemoryAllocator};
 
+use super::memory::BufferManager;
 use crate::errors::CrystalResult;
 use crate::mesh::{Index, VertexTexture};
 use crate::traits;
 
-use super::devices::DeviceManager;
-use super::memory::BufferManager;
-
 pub struct VulkanObjectMemoryManager {
-    pub vertex_buffer_manager: BufferManager,
-    pub index_buffer_manager: BufferManager,
+    pub vertex_buffer_manager: BufferManager<VertexTexture>,
+    pub index_buffer_manager: BufferManager<Index>,
 }
 
 impl traits::ObjectMemoryManager for VulkanObjectMemoryManager {
@@ -26,27 +26,25 @@ impl traits::ObjectMemoryManager for VulkanObjectMemoryManager {
 
 impl VulkanObjectMemoryManager {
     pub fn new(
-        device_manager: Arc<DeviceManager>,
+        device: Arc<Device>,
         vertices: &[VertexTexture],
         indices: &[Index],
     ) -> CrystalResult<Box<dyn traits::ObjectMemoryManager>> {
-        let vertex_buffer_manager = BufferManager::new(
-            device_manager.clone(),
-            (vertices.len() * size_of::<VertexTexture>()) as u64,
-            vk::BufferUsageFlags::VERTEX_BUFFER,
-            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-        )?;
+        let memory_allocator = Arc::new(StandardMemoryAllocator::new_default(device));
 
-        vertex_buffer_manager.single_time_write(vertices, 0)?;
+        let vertex_buffer_manager = BufferManager::new(
+            memory_allocator.clone(),
+            vertices.to_vec(),
+            BufferUsage::VERTEX_BUFFER,
+            MemoryTypeFilter::HOST_SEQUENTIAL_WRITE | MemoryTypeFilter::PREFER_DEVICE,
+        )?;
 
         let index_buffer_manager = BufferManager::new(
-            device_manager.clone(),
-            (indices.len() * size_of::<Index>()) as u64,
-            vk::BufferUsageFlags::INDEX_BUFFER,
-            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+            memory_allocator.clone(),
+            indices.to_vec(),
+            BufferUsage::INDEX_BUFFER,
+            MemoryTypeFilter::HOST_SEQUENTIAL_WRITE | MemoryTypeFilter::PREFER_DEVICE,
         )?;
-
-        index_buffer_manager.single_time_write(indices, 0)?;
 
         Ok(Box::new(Self {
             vertex_buffer_manager,

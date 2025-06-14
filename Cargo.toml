@@ -18,7 +18,11 @@ name = "main"
 path = "examples/main.rs"
 
 [dependencies]
-ash = "0.38.0"
-ash-window = "0.13.0"
+# ash = "0.38.0"
+vulkano = { version = "0.35.1", default-features = true }
 raw-window-handle = "0.6.0"
 image = "0.25.6"
+
+smallvec = "*"
+foldhash = "0.1.5"
+bytemuck = "1.22.0"

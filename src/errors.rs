@@ -15,6 +15,8 @@ pub enum CrystalError {
     CannotCreateCommandManager,
     CommandManagerError,
     RenderingError,
+    PresentationError,
+    SyncError,
 
     ShaderError,
     MemoryError,

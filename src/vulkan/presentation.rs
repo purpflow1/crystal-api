@@ -1,86 +1,142 @@
+use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use std::sync::Arc;
-
-use ash::{
-    Entry,
-    vk::{self, PresentModeKHR, SurfaceCapabilitiesKHR, SurfaceFormatKHR},
+use vulkano::{
+    device::DeviceOwned,
+    image::{
+        ImageAspects, ImageSubresourceRange,
+        sampler::{ComponentMapping, ComponentSwizzle},
+        view::{ImageView, ImageViewCreateInfo, ImageViewType},
+    },
+    memory::allocator::StandardMemoryAllocator,
+    render_pass::RenderPass,
+    swapchain::{Swapchain, SwapchainCreateInfo},
 };
-use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
 
 use crate::{
     debug::log,
     errors::{CrystalError, CrystalResult},
 };
 
-use super::{devices::DeviceManager, rendering::VulkanRenderTarget};
+use super::rendering::VulkanRenderTarget;
 
 pub struct SwapChainSupportDetails {
-    pub formats: Vec<SurfaceFormatKHR>,
-    pub present_modes: Vec<PresentModeKHR>,
-    pub capabilities: SurfaceCapabilitiesKHR,
+    pub formats: Vec<(vulkano::format::Format, vulkano::swapchain::ColorSpace)>,
+    pub present_modes: Vec<vulkano::swapchain::PresentMode>,
+    pub capabilities: vulkano::swapchain::SurfaceCapabilities,
 }
 
 pub struct Presentation {
-    pub surface: ash::khr::surface::Instance,
-    pub surface_khr: vk::SurfaceKHR,
-    frames_in_flight: u32,
-    pub msaa_samples: u8,
+    pub surface: Arc<vulkano::swapchain::Surface>,
+    swapchain_create_info: Option<SwapchainCreateInfo>,
+    pub swapchain: Option<Arc<Swapchain>>,
+    pub image_views: Option<Vec<Arc<ImageView>>>,
 }
 
 impl Presentation {
-    pub fn new(
-        entry: &Entry,
-        instance: &ash::Instance,
-        handles: (RawDisplayHandle, RawWindowHandle),
-        frames_in_flight: u32,
-        msaa_samples: u8,
+    pub fn new<T: HasWindowHandle + HasDisplayHandle>(
+        instance: Arc<vulkano::instance::Instance>,
+        window: &T,
     ) -> CrystalResult<Self> {
-        let surface = ash::khr::surface::Instance::new(entry, instance);
-        let surface_khr = unsafe {
-            ash_window::create_surface(&entry, &instance, handles.0, handles.1, None).unwrap()
-        };
+        let surface =
+            match unsafe { vulkano::swapchain::Surface::from_window_ref(instance, window) } {
+                Ok(surace) => surace,
+                Err(e) => {
+                    log!("cannot create surface for window: {:?}", e);
+                    return Err(CrystalError::PresentationError);
+                }
+            };
 
         Ok(Presentation {
             surface,
-            surface_khr,
-            frames_in_flight,
-            msaa_samples,
+            swapchain_create_info: None,
+            swapchain: None,
+            image_views: None,
         })
+    }
+
+    pub fn create_swapchain_info(
+        &self,
+        swap_chain_support_details: &SwapChainSupportDetails,
+    ) -> CrystalResult<vulkano::swapchain::SwapchainCreateInfo> {
+        let swap_surface_format =
+            match swap_chain_support_details
+                .formats
+                .iter()
+                .find(|(format, color_space)| {
+                    *format == vulkano::format::Format::B8G8R8A8_SRGB
+                        && *color_space == vulkano::swapchain::ColorSpace::SrgbNonLinear
+                }) {
+                Some(&format) => format,
+                None => {
+                    log!("not found required swap surface format");
+                    return Err(CrystalError::SwapChainIsNotSupported);
+                }
+            };
+
+        let swap_extent = match swap_chain_support_details.capabilities.current_extent {
+            Some(extent) => extent,
+            None => {
+                log!("no surface extent");
+                return Err(CrystalError::SwapChainIsNotSupported);
+            }
+        };
+        if swap_extent[0] == u32::MAX {
+            log!("unknown surface extent");
+            return Err(CrystalError::SwapChainIsNotSupported);
+        };
+
+        let image_count = match swap_chain_support_details.capabilities.max_image_count {
+            Some(max_image_count) => max_image_count,
+            None => swap_chain_support_details.capabilities.min_image_count,
+        };
+
+        let swapchain_create_info = vulkano::swapchain::SwapchainCreateInfo {
+            min_image_count: image_count,
+            image_format: swap_surface_format.0,
+            image_color_space: swap_surface_format.1,
+            image_extent: swap_extent,
+            image_array_layers: 1,
+            image_usage: vulkano::image::ImageUsage::COLOR_ATTACHMENT,
+            pre_transform: swap_chain_support_details.capabilities.current_transform,
+            composite_alpha: vulkano::swapchain::CompositeAlpha::Opaque,
+            image_sharing: vulkano::sync::Sharing::Exclusive,
+            present_mode: vulkano::swapchain::PresentMode::Fifo, // TODO add mailbox check
+            clipped: true,
+            ..Default::default()
+        };
+
+        Ok(swapchain_create_info)
     }
 
     fn query_swap_chain_support(
         &self,
-        physical_device: &vk::PhysicalDevice,
+        physical_device: Arc<vulkano::device::physical::PhysicalDevice>,
     ) -> CrystalResult<SwapChainSupportDetails> {
-        let formats = match unsafe {
-            self.surface
-                .get_physical_device_surface_formats(*physical_device, self.surface_khr)
-        } {
+        let surface_info = vulkano::swapchain::SurfaceInfo::default();
+
+        let formats = match physical_device.surface_formats(&self.surface, surface_info.clone()) {
             Ok(data) => data,
             Err(e) => {
-                log!("cannot get physical device surface formats: {}", e);
+                log!("cannot get physical device surface formats: {:?}", e);
                 return Err(CrystalError::CannotInitDevice);
             }
         };
 
-        let capabilities = match unsafe {
-            self.surface
-                .get_physical_device_surface_capabilities(*physical_device, self.surface_khr)
-        } {
-            Ok(data) => data,
-            Err(e) => {
-                log!("cannot get physical device surface capabilities: {}", e);
-                return Err(CrystalError::CannotInitDevice);
-            }
-        };
+        let capabilities =
+            match physical_device.surface_capabilities(&self.surface, surface_info.clone()) {
+                Ok(data) => data,
+                Err(e) => {
+                    log!("cannot get physical device surface capabilities: {:?}", e);
+                    return Err(CrystalError::SwapChainIsNotSupported);
+                }
+            };
 
-        let present_modes = match unsafe {
-            self.surface
-                .get_physical_device_surface_present_modes(*physical_device, self.surface_khr)
-        } {
+        let present_modes = match physical_device.surface_present_modes(&self.surface, surface_info)
+        {
             Ok(data) => data,
             Err(e) => {
-                log!("cannot get physical device surface present modes: {}", e);
-                return Err(CrystalError::CannotInitDevice);
+                log!("cannot get physical device surface present modes: {:?}", e);
+                return Err(CrystalError::SwapChainIsNotSupported);
             }
         };
 
@@ -95,97 +151,95 @@ impl Presentation {
         })
     }
 
-    pub fn create_swapchain_info(
-        &self,
-        device_manager: Arc<DeviceManager>,
-    ) -> CrystalResult<vk::SwapchainCreateInfoKHR> {
-        let swap_chain_support_details =
-            self.query_swap_chain_support(&device_manager.physical_device)?;
+    pub fn create_swapchain(&mut self, render_pass: Arc<RenderPass>) -> CrystalResult<()> {
+        let device = render_pass.device();
 
-        let swap_surface_format = match swap_chain_support_details.formats.iter().find(|format| {
-            format.format == vk::Format::B8G8R8A8_SRGB
-                && format.color_space == vk::ColorSpaceKHR::SRGB_NONLINEAR
-        }) {
-            Some(&format) => format,
-            None => {
-                log!("not found required swap surface format");
-                return Err(CrystalError::SwapChainIsNotSupported);
+        if self.swapchain_create_info.is_none() {
+            let swapchain_support_details =
+                self.query_swap_chain_support(device.physical_device().clone())?;
+            self.swapchain_create_info =
+                Some(self.create_swapchain_info(&swapchain_support_details)?);
+        };
+
+        let swapchain_create_info = self.swapchain_create_info.as_ref().unwrap();
+
+        let mut swapchain_image_views = vec![];
+
+        let (swapchain, images) = match Swapchain::new(
+            device.clone(),
+            self.surface.clone(),
+            swapchain_create_info.clone(),
+        ) {
+            Ok(swapchain) => swapchain,
+            Err(e) => {
+                log!("cannot create swapchain: {:?}", e);
+                return Err(CrystalError::SwapChainError);
             }
         };
 
-        let swap_extent =
-            if swap_chain_support_details.capabilities.current_extent.width != u32::MAX {
-                swap_chain_support_details.capabilities.current_extent
-            } else {
-                log!("unknown surface extent");
-                return Err(CrystalError::SwapChainIsNotSupported);
+        for image in images {
+            let create_info = ImageViewCreateInfo {
+                view_type: ImageViewType::Dim2d,
+                format: swapchain_create_info.image_format,
+                component_mapping: ComponentMapping {
+                    r: ComponentSwizzle::Identity,
+                    g: ComponentSwizzle::Identity,
+                    b: ComponentSwizzle::Identity,
+                    a: ComponentSwizzle::Identity,
+                },
+                subresource_range: ImageSubresourceRange {
+                    aspects: ImageAspects::COLOR,
+                    mip_levels: 0..1,
+                    array_layers: 0..1,
+                },
+                ..Default::default()
             };
 
-        let image_count = {
-            let max_image_count = swap_chain_support_details.capabilities.max_image_count;
-            let min_image_count = swap_chain_support_details.capabilities.min_image_count;
-            if max_image_count > 0 {
-                max_image_count
-            } else {
-                min_image_count
-            }
-        };
+            let image_view = match ImageView::new(image.clone(), create_info) {
+                Ok(image_view) => image_view,
+                Err(e) => {
+                    log!("cannot create image view: {:?}", e);
+                    return Err(CrystalError::SwapChainError);
+                }
+            };
 
-        let swap_present_mode = match swap_chain_support_details
-            .present_modes
-            .iter()
-            .find(|&&mode| mode == vk::PresentModeKHR::MAILBOX)
-        {
-            Some(&mode) => mode,
-            None => vk::PresentModeKHR::FIFO,
-        };
-
-        let swapchain_create_info = vk::SwapchainCreateInfoKHR::default()
-            .surface(self.surface_khr)
-            .min_image_count(image_count)
-            .image_format(swap_surface_format.format)
-            .image_color_space(swap_surface_format.color_space)
-            .image_extent(swap_extent)
-            .image_array_layers(1)
-            .image_usage(vk::ImageUsageFlags::COLOR_ATTACHMENT)
-            .pre_transform(swap_chain_support_details.capabilities.current_transform)
-            .composite_alpha(vk::CompositeAlphaFlagsKHR::OPAQUE)
-            .image_sharing_mode(vk::SharingMode::EXCLUSIVE)
-            .present_mode(swap_present_mode)
-            .clipped(true)
-            .old_swapchain(vk::SwapchainKHR::null());
-
-        Ok(swapchain_create_info)
-    }
-
-    pub fn init_viewport_render_target(
-        &self,
-        instance: &ash::Instance,
-        device_manager: Arc<DeviceManager>,
-    ) -> CrystalResult<VulkanRenderTarget> {
-        let mut swapchain_create_info = self.create_swapchain_info(device_manager.clone())?;
-
-        let queue_family_indices = [
-            device_manager
-                .queue_families_indices
-                .graphics_index
-                .unwrap(),
-            device_manager.queue_families_indices.present_index.unwrap(),
-        ];
-
-        if queue_family_indices[0] != queue_family_indices[1] {
-            swapchain_create_info = swapchain_create_info
-                .image_sharing_mode(vk::SharingMode::CONCURRENT)
-                .queue_family_indices(&queue_family_indices)
+            swapchain_image_views.push(image_view);
         }
 
-        let viewport_render_target = VulkanRenderTarget::new(
-            instance,
-            device_manager,
-            swapchain_create_info,
-            self.frames_in_flight,
-            self.msaa_samples,
+        self.swapchain = Some(swapchain);
+        self.image_views = Some(swapchain_image_views);
+
+        Ok(())
+    }
+
+    pub fn create_render_target(
+        &mut self,
+        memory_allocator: Arc<StandardMemoryAllocator>,
+        msaa_samples: u8,
+    ) -> CrystalResult<VulkanRenderTarget> {
+        let device = memory_allocator.device();
+
+        let swap_chain_support_details =
+            self.query_swap_chain_support(device.physical_device().clone())?;
+
+        let swapchain_create_info = self.create_swapchain_info(&swap_chain_support_details)?;
+
+        let render_pass = VulkanRenderTarget::create_render_pass(
+            device.clone(),
+            swapchain_create_info.image_format,
+            msaa_samples,
         )?;
+
+        self.create_swapchain(render_pass.clone())?;
+
+        let viewport_render_target = VulkanRenderTarget::new(
+            render_pass,
+            memory_allocator,
+            self.image_views.as_ref().unwrap(),
+            swapchain_create_info.image_extent,
+        )?;
+
+        self.swapchain_create_info = Some(swapchain_create_info);
 
         Ok(viewport_render_target)
     }

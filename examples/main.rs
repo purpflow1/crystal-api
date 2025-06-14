@@ -13,7 +13,6 @@ use std::{
 
 use images::Image2D;
 use mesh::{Mesh, VertexTexture};
-use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use winit::{
     application::ApplicationHandler,
     dpi::LogicalSize,
@@ -56,7 +55,7 @@ struct Scene {
 
 struct Context {
     window: Option<Window>,
-    graphics: Option<Box<dyn GraphicsApi>>,
+    graphics: Option<Arc<RefCell<dyn GraphicsApi>>>,
 
     layout_pbr: Option<Arc<RefCell<dyn Layout>>>,
 
@@ -124,35 +123,33 @@ impl ApplicationHandler for Context {
             )
             .unwrap();
 
-        let graphics = VulkanEntry::with_presentation(
-            &self.settings,
-            (
-                window.display_handle().unwrap().as_raw(),
-                window.window_handle().unwrap().as_raw(),
-            ),
-        )
-        .expect("cannot create vulkan entry");
+        let graphics = VulkanEntry::with_presentation(&self.settings, &window)
+            .expect("cannot create vulkan entry");
+
+        let graphics_borrowed = graphics.borrow();
 
         let shaders_pbr = [
             Shader::open("shaders/desc.vert.spv", ShaderStage::Vertex).unwrap(),
             Shader::open("shaders/desc.frag.spv", ShaderStage::Fragment).unwrap(),
         ];
 
-        let render_target = graphics.get_viewport();
+        let render_target = graphics_borrowed.get_viewport();
 
         let default_texture_image =
             Image2D::new(Path::new("resources/textures/default.png")).unwrap();
 
-        let default_texture_map = graphics
+        let default_texture_map = graphics_borrowed
             .create_texture(&default_texture_image, 1.0)
             .unwrap();
 
         let test_texture_image = Image2D::new(Path::new("resources/textures/test.png")).unwrap();
 
-        let test_texture_map = graphics.create_texture(&test_texture_image, 1.0).unwrap();
+        let test_texture_map = graphics_borrowed
+            .create_texture(&test_texture_image, 1.0)
+            .unwrap();
 
-        let layout_pbr = graphics
-            .create_layout(
+        let layout_pbr = graphics_borrowed
+            .create_layout_from_data(
                 self.settings.viewport_frames_in_flight,
                 IMAGE_SAMPLED_NUM as u32,
                 MAX_INSTANCE_NUM,
@@ -210,7 +207,7 @@ impl ApplicationHandler for Context {
         self.scene.objects_pbr.push(obj2);
         self.scene.objects_pbr.push(obj3);
 
-        self.graphics = Some(graphics);
+        self.graphics = Some(graphics.clone());
         self.window = Some(window);
         self.layout_pbr = Some(layout_pbr);
     }
@@ -218,10 +215,9 @@ impl ApplicationHandler for Context {
     fn about_to_wait(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
         let now = std::time::Instant::now();
 
-        let graphics = self.graphics.as_ref().unwrap();
+        let mut graphics = self.graphics.as_ref().unwrap().borrow_mut();
 
         let viewport = graphics.get_viewport();
-        let current_frame = viewport.borrow().get_current_frame();
 
         let mut layout_pbr = self.layout_pbr.as_ref().unwrap().borrow_mut();
 
@@ -249,7 +245,6 @@ impl ApplicationHandler for Context {
                         layout_pbr
                             .write_to_buffer(
                                 false,
-                                current_frame,
                                 3,
                                 (idx as u32 * IMAGE_SAMPLED_NUM as u32 + image_idx) as usize,
                                 GpuVec::new(&[
@@ -276,27 +271,20 @@ impl ApplicationHandler for Context {
         );
 
         layout_pbr
-            .write_to_buffer(true, current_frame, 0, 0, GpuVec::new(&[ubo]))
+            .write_to_buffer(true, 0, 0, GpuVec::new(&[ubo]))
             .expect("cannot update UBO");
 
         layout_pbr
-            .write_to_buffer(false, current_frame, 0, 0, GpuVec::new(&transforms))
+            .write_to_buffer(false, 0, 0, GpuVec::new(&transforms))
             .expect("cannot update SSBO");
 
         layout_pbr
-            .write_to_buffer(
-                false,
-                current_frame,
-                1,
-                0,
-                GpuVec::new(&self.scene.ambient_lights),
-            )
+            .write_to_buffer(false, 1, 0, GpuVec::new(&self.scene.ambient_lights))
             .expect("cannot update LBO");
 
         layout_pbr
             .write_to_buffer(
                 false,
-                current_frame,
                 1,
                 self.scene.ambient_lights.len(),
                 GpuVec::new(&self.scene.direct_lights),
@@ -306,7 +294,6 @@ impl ApplicationHandler for Context {
         layout_pbr
             .write_to_buffer(
                 false,
-                current_frame,
                 1,
                 self.scene.ambient_lights.len() + self.scene.direct_lights.len(),
                 GpuVec::new(&self.scene.point_lights),
@@ -320,13 +307,16 @@ impl ApplicationHandler for Context {
         ];
 
         layout_pbr
-            .write_to_buffer(false, current_frame, 2, 0, GpuVec::new(&info_light))
+            .write_to_buffer(false, 2, 0, GpuVec::new(&info_light))
             .expect("cannot update ILBO");
 
         drop(layout_pbr);
 
         graphics
-            .render(&[self.layout_pbr.as_ref().unwrap().clone()])
+            .render(
+                &[self.layout_pbr.as_ref().unwrap().clone()],
+                viewport.clone(),
+            )
             .unwrap();
 
         if MAX_FPS != 0 && !event_loop.exiting() {
@@ -375,9 +365,10 @@ impl ApplicationHandler for Context {
                 self.graphics
                     .as_ref()
                     .unwrap()
+                    .borrow()
                     .get_viewport()
                     .borrow_mut()
-                    .update_size(extent.width, extent.height)
+                    .update_size([extent.width, extent.height])
                     .unwrap();
                 self.scene.camera.proj = glam::Mat4::perspective_lh(
                     PI / 4.,

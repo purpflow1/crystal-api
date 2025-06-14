@@ -3,6 +3,8 @@ use std::{
     mem::offset_of,
 };
 
+use bytemuck::{Pod, Zeroable};
+
 use crate::errors::CrystalResult;
 
 pub struct Attribute {
@@ -14,8 +16,9 @@ type Vec3 = [f32; 3];
 type Vec2 = [f32; 2];
 pub type Index = u32;
 
-#[repr(C, align(16))]
-#[derive(Clone, Copy)]
+// #[repr(C, align(16))]
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
 pub struct VertexTexture {
     pub pos: Vec3,
     pub nor: Vec3,

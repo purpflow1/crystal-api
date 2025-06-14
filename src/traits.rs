@@ -4,14 +4,22 @@ use std::{
 };
 
 use crate::{
-    GpuVec, errors::CrystalResult, images::Image2D, mesh::Attribute, object::Object,
-    shader::Shader, vulkan,
+    errors::CrystalResult,
+    images::Image2D,
+    mesh::Attribute,
+    object::Object,
+    shader::Shader,
+    vulkan::{self, VulkanRenderTarget},
 };
 
 pub trait GraphicsApi {
-    fn render(&self, layouts: &[Arc<RefCell<dyn Layout>>]) -> CrystalResult<()>;
+    fn render(
+        &mut self,
+        layouts: &[Arc<RefCell<dyn Layout>>],
+        render_target: Arc<RefCell<dyn RenderTarget>>,
+    ) -> CrystalResult<()>;
 
-    fn create_layout(
+    fn create_layout_from_data(
         &self,
         frames_in_flight: u32,
         image_sampled_num: u32,
@@ -36,8 +44,11 @@ pub trait RenderTarget {
         attributes: &[Attribute],
     ) -> CrystalResult<Arc<dyn Pipeline>>;
 
-    fn update_size(&mut self, width: u32, height: u32) -> CrystalResult<()>;
-    fn get_current_frame(&self) -> usize;
+    fn update_size(&mut self, extent: [u32; 2]) -> CrystalResult<()>;
+
+    fn as_vulkan_mut(&mut self) -> Option<&mut VulkanRenderTarget> {
+        None
+    }
 }
 
 pub trait Layout {
@@ -50,15 +61,6 @@ pub trait Layout {
     }
 
     fn add_object_to_queue(&mut self, object: Arc<RefCell<Object>>);
-
-    fn write_to_buffer(
-        &self,
-        is_uniform: bool,
-        frame: usize,
-        buffer: usize,
-        offset: usize,
-        data: GpuVec,
-    ) -> CrystalResult<()>;
 }
 
 pub trait Texture {
@@ -78,11 +80,7 @@ pub(crate) trait ObjectMemoryManager {
 }
 
 pub trait Pipeline {
-    fn as_vulkan_mut(&mut self) -> Option<&mut ash::vk::Pipeline> {
-        None
-    }
-
-    fn as_vulkan_ref(&self) -> Option<&ash::vk::Pipeline> {
+    fn as_vulkan(self: Arc<Self>) -> Option<Arc<vulkano::pipeline::GraphicsPipeline>> {
         None
     }
 }

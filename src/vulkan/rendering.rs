@@ -1,9 +1,44 @@
-use std::{cell::Ref, ffi::CString, iter::zip, sync::Arc};
+use std::{cell::Ref, iter::zip, sync::Arc};
 
-use ash::vk;
+use foldhash::{HashSet, HashSetExt};
+use smallvec::{SmallVec, smallvec};
+use vulkano::{
+    device::DeviceOwned,
+    format::{Format, FormatFeatures},
+    image::{
+        ImageAspects, ImageLayout, ImageTiling, ImageUsage, SampleCount, SampleCounts,
+        view::ImageView,
+    },
+    memory::allocator::StandardMemoryAllocator,
+    pipeline::{
+        DynamicState, GraphicsPipeline, PipelineShaderStageCreateInfo,
+        graphics::{
+            GraphicsPipelineCreateInfo,
+            color_blend::{
+                AttachmentBlend, ColorBlendAttachmentState, ColorBlendState, ColorComponents,
+            },
+            depth_stencil::{DepthState, DepthStencilState},
+            input_assembly::{InputAssemblyState, PrimitiveTopology},
+            multisample::MultisampleState,
+            rasterization::{CullMode, FrontFace, PolygonMode, RasterizationState},
+            subpass::PipelineSubpassType,
+            vertex_input::{
+                VertexInputAttributeDescription, VertexInputBindingDescription, VertexInputRate,
+                VertexInputState,
+            },
+            viewport::{Scissor, Viewport, ViewportState},
+        },
+    },
+    render_pass::{
+        AttachmentDescription, AttachmentLoadOp, AttachmentReference, AttachmentStoreOp,
+        Framebuffer, FramebufferCreateInfo, RenderPass, RenderPassCreateInfo, SubpassDependency,
+        SubpassDescription,
+    },
+    shader::{ShaderModule, ShaderModuleCreateInfo, spirv},
+    sync::{AccessFlags, PipelineStages},
+};
 
 use crate::{
-    ShaderStage,
     debug::log,
     errors::{CrystalError, CrystalResult},
     mesh::{Attribute, VertexTexture},
@@ -11,52 +46,27 @@ use crate::{
     traits,
 };
 
-use super::{
-    commands::CommandManager,
-    depth::{DepthResources, find_depth_format},
-    devices::DeviceManager,
-    images::Image,
-};
+use super::{depth::find_depth_format, images::Image};
 
 pub struct VulkanRenderTarget {
-    device_manager: Arc<DeviceManager>,
-    pub extent: vk::Extent2D,
-    pub swapchain_extent: vk::Extent2D,
-    pub swapchain: ash::khr::swapchain::Device,
-    pub swapchain_khr: vk::SwapchainKHR,
-    pub render_pass: vk::RenderPass,
-
-    pub framebuffers: Vec<vk::Framebuffer>,
-    swapchain_images: Vec<vk::Image>,
-    swapchain_image_views: Vec<vk::ImageView>,
-    depth_resources: Vec<DepthResources>,
-
-    pub image_available_semaphores: Vec<vk::Semaphore>,
-    pub render_finished_semaphores: Vec<vk::Semaphore>,
-    pub in_flight_fences: Vec<vk::Fence>,
-
+    device: Arc<vulkano::device::Device>,
+    pub render_pass: Arc<RenderPass>,
+    pub framebuffers: Vec<Arc<Framebuffer>>,
+    pub frames_in_flight: usize,
     pub current_frame: usize,
-    pub msaa_samples: vk::SampleCountFlags,
+    pub extent: [u32; 2],
+    samples: SampleCount,
 }
 
-impl traits::Pipeline for vk::Pipeline {
-    fn as_vulkan_mut(&mut self) -> Option<&mut ash::vk::Pipeline> {
-        Some(self)
-    }
-
-    fn as_vulkan_ref(&self) -> Option<&ash::vk::Pipeline> {
-        Some(self)
+impl traits::Pipeline for GraphicsPipeline {
+    fn as_vulkan(self: Arc<GraphicsPipeline>) -> Option<Arc<GraphicsPipeline>> {
+        Some(self.clone())
     }
 }
 
 impl traits::RenderTarget for VulkanRenderTarget {
-    fn get_current_frame(&self) -> usize {
-        self.current_frame
-    }
-
-    fn update_size(&mut self, width: u32, height: u32) -> CrystalResult<()> {
-        self.extent = vk::Extent2D { width, height };
-        Ok(())
+    fn as_vulkan_mut(&mut self) -> Option<&mut VulkanRenderTarget> {
+        Some(self)
     }
 
     fn create_graphics_pipeline(
@@ -70,613 +80,393 @@ impl traits::RenderTarget for VulkanRenderTarget {
             return Err(CrystalError::ShaderError);
         }
 
-        let mut shader_modules = Vec::new();
-
-        let en = CString::new("main").unwrap();
-        let entry_point_name = en.as_c_str();
-
-        for shader in shaders {
-            let shader_stage_flag = match shader.stage {
-                ShaderStage::Vertex => vk::ShaderStageFlags::VERTEX,
-                ShaderStage::Fragment => vk::ShaderStageFlags::FRAGMENT,
-                ShaderStage::Geometry => vk::ShaderStageFlags::GEOMETRY,
-            };
-
-            let shader_module_create_info =
-                vk::ShaderModuleCreateInfo::default().code(shader.code.as_slice());
-
-            let module = match unsafe {
-                self.device_manager
-                    .device
-                    .create_shader_module(&shader_module_create_info, None)
-            } {
-                Ok(module) => module,
-                Err(e) => {
-                    log!("cannot create shader module: {}", e);
-                    return Err(CrystalError::ShaderError);
-                }
-            };
-
-            let shader_stage_create_info = vk::PipelineShaderStageCreateInfo::default()
-                .stage(shader_stage_flag)
-                .module(module)
-                .name(entry_point_name);
-
-            shader_modules.push(shader_stage_create_info);
-        }
-
-        let binding_descriptions = &[vk::VertexInputBindingDescription::default()
-            .binding(0)
-            .stride(size_of::<VertexTexture>() as u32)
-            .input_rate(vk::VertexInputRate::VERTEX)];
-
-        let mut attribute_descriptions = vec![];
-
-        for (location, attribute) in zip(0..attributes.len() as u32, attributes) {
-            let attribute_description = vk::VertexInputAttributeDescription::default()
-                .binding(0)
-                .location(location)
-                .format(match attribute.size {
-                    4 => vk::Format::R32_SFLOAT,
-                    8 => vk::Format::R32G32_SFLOAT,
-                    12 => vk::Format::R32G32B32_SFLOAT,
-                    16 => vk::Format::R32G32B32A32_SFLOAT,
-                    _ => vk::Format::R32G32B32_SFLOAT,
-                })
-                .offset(attribute.offset as u32);
-            attribute_descriptions.push(attribute_description);
-        }
-
-        let vertex_input_info = vk::PipelineVertexInputStateCreateInfo::default()
-            .vertex_binding_descriptions(binding_descriptions)
-            .vertex_attribute_descriptions(&attribute_descriptions);
-
-        let input_assembly = vk::PipelineInputAssemblyStateCreateInfo::default()
-            .topology(vk::PrimitiveTopology::TRIANGLE_LIST)
-            .primitive_restart_enable(false);
-
-        let viewport = vk::Viewport::default()
-            .x(0.)
-            .y(0.)
-            .width(self.extent.width as f32)
-            .height(self.extent.height as f32)
-            .min_depth(0.)
-            .max_depth(1.);
-
-        let scissor = vk::Rect2D::default().extent(self.extent);
-
-        let dynamic_states = &[vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
-
-        let dynamic_state =
-            vk::PipelineDynamicStateCreateInfo::default().dynamic_states(dynamic_states);
-
-        let viewports = &[viewport];
-        let scissors = &[scissor];
-
-        let viewport_state = vk::PipelineViewportStateCreateInfo::default()
-            .viewports(viewports)
-            .scissors(scissors);
-
-        let rasterizer = vk::PipelineRasterizationStateCreateInfo::default()
-            .depth_clamp_enable(false)
-            .rasterizer_discard_enable(false)
-            .polygon_mode(vk::PolygonMode::FILL)
-            .line_width(1.)
-            .cull_mode(vk::CullModeFlags::BACK)
-            .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
-            .depth_bias_enable(false);
-
-        let multisampling = vk::PipelineMultisampleStateCreateInfo::default()
-            .sample_shading_enable(false)
-            .rasterization_samples(self.msaa_samples);
-
-        let color_blend_attachment = vk::PipelineColorBlendAttachmentState::default()
-            .color_write_mask(vk::ColorComponentFlags::RGBA)
-            .blend_enable(true)
-            .src_color_blend_factor(vk::BlendFactor::SRC_ALPHA)
-            .dst_color_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
-            .color_blend_op(vk::BlendOp::ADD)
-            .src_alpha_blend_factor(vk::BlendFactor::ONE)
-            .dst_alpha_blend_factor(vk::BlendFactor::ZERO)
-            .alpha_blend_op(vk::BlendOp::ADD);
-
-        let attachments = &[color_blend_attachment];
-
-        let color_blending = vk::PipelineColorBlendStateCreateInfo::default()
-            .logic_op_enable(false)
-            .attachments(attachments);
-
-        let depth_stencil_state = vk::PipelineDepthStencilStateCreateInfo::default()
-            .depth_test_enable(true)
-            .depth_write_enable(true)
-            .depth_compare_op(vk::CompareOp::LESS)
-            .depth_bounds_test_enable(false);
-
         let layout = match layout.as_vulkan_ref() {
             Some(layout) => layout,
             None => panic!("fatal: wrong layout type, expected vulkan"),
         };
 
-        let pipeline_create_info = vk::GraphicsPipelineCreateInfo::default()
-            .stages(&shader_modules)
-            .vertex_input_state(&vertex_input_info)
-            .input_assembly_state(&input_assembly)
-            .viewport_state(&viewport_state)
-            .rasterization_state(&rasterizer)
-            .multisample_state(&multisampling)
-            .color_blend_state(&color_blending)
-            .dynamic_state(&dynamic_state)
-            .depth_stencil_state(&depth_stencil_state)
-            .layout(layout.pipeline_layout)
-            .render_pass(self.render_pass);
+        let mut shader_modules = SmallVec::new();
 
-        match unsafe {
-            self.device_manager.device.create_graphics_pipelines(
-                vk::PipelineCache::null(),
-                &[pipeline_create_info],
-                None,
-            )
-        } {
-            Ok(pipeline) => Ok(Arc::new(pipeline[0])),
-            Err(es) => {
-                log!("cannot create graphics pipeline: {}", es.1);
-                Err(CrystalError::CannotCreateRenderPass)
-            }
+        for shader in shaders {
+            let slice = shader.code.as_slice();
+            let code = spirv::bytes_to_words(slice).unwrap().into_owned();
+            let create_info = ShaderModuleCreateInfo::new(&code);
+
+            let module = match unsafe { ShaderModule::new(self.device.clone(), create_info) } {
+                Ok(module) => module,
+                Err(e) => {
+                    log!("cannot create shader module: {:?}", e);
+                    return Err(CrystalError::ShaderError);
+                }
+            };
+
+            let shader_stage_create_info = PipelineShaderStageCreateInfo::new(
+                module
+                    .entry_point("main")
+                    .expect("fatal: no main entry point in SPIR-V shader"),
+            );
+
+            shader_modules.push(shader_stage_create_info);
         }
+
+        let mut vertex_attributes: Vec<(u32, VertexInputAttributeDescription)> = vec![];
+
+        for (location, attribute) in zip(0..attributes.len() as u32, attributes) {
+            let attribute_description = VertexInputAttributeDescription {
+                binding: location,
+                format: match attribute.size {
+                    4 => Format::R32_SFLOAT,
+                    8 => Format::R32G32_SFLOAT,
+                    12 => Format::R32G32B32_SFLOAT,
+                    16 => Format::R32G32B32A32_SFLOAT,
+                    _ => Format::R32G32B32_SFLOAT,
+                },
+                offset: attribute.offset as u32,
+                ..Default::default()
+            };
+
+            vertex_attributes.push((location, attribute_description));
+        }
+
+        let binding = VertexInputBindingDescription {
+            stride: size_of::<VertexTexture>() as u32,
+            input_rate: VertexInputRate::Vertex,
+            ..Default::default()
+        };
+
+        let vertex_input = VertexInputState::new()
+            .binding(0, binding)
+            .attributes(vertex_attributes);
+
+        let input_assembly = InputAssemblyState {
+            topology: PrimitiveTopology::TriangleList,
+            primitive_restart_enable: false,
+            ..Default::default()
+        };
+
+        let mut dynamic_states = HashSet::new();
+        dynamic_states.insert(DynamicState::Viewport);
+        dynamic_states.insert(DynamicState::Scissor);
+
+        let viewport_state = ViewportState {
+            viewports: smallvec![Viewport {
+                extent: [self.extent[0] as f32, self.extent[1] as f32],
+                ..Default::default()
+            }],
+            scissors: smallvec![Scissor {
+                extent: self.extent,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let rasterizer = RasterizationState {
+            depth_clamp_enable: false,
+            rasterizer_discard_enable: false,
+            depth_bias: None,
+            polygon_mode: PolygonMode::Fill,
+            line_width: 1.,
+            cull_mode: CullMode::Back,
+            front_face: FrontFace::CounterClockwise,
+            ..Default::default()
+        };
+
+        let multisampling = MultisampleState {
+            sample_shading: None,
+            rasterization_samples: self.samples,
+            ..Default::default()
+        };
+
+        let color_blend_attachment = ColorBlendAttachmentState {
+            color_write_mask: ColorComponents::all(),
+            blend: Some(AttachmentBlend::alpha()),
+            ..Default::default()
+        };
+
+        let color_blending = ColorBlendState {
+            logic_op: None,
+            attachments: vec![color_blend_attachment],
+            ..Default::default()
+        };
+
+        let depth_stencil_state = DepthStencilState {
+            depth: Some(DepthState::simple()),
+            ..Default::default()
+        };
+
+        let mut create_info = GraphicsPipelineCreateInfo::layout(layout.pipeline_layout.clone());
+        create_info.stages = shader_modules;
+        create_info.vertex_input_state = Some(vertex_input);
+        create_info.input_assembly_state = Some(input_assembly);
+        create_info.viewport_state = Some(viewport_state);
+        create_info.rasterization_state = Some(rasterizer);
+        create_info.multisample_state = Some(multisampling);
+        create_info.color_blend_state = Some(color_blending);
+        create_info.dynamic_state = dynamic_states;
+        create_info.depth_stencil_state = Some(depth_stencil_state);
+        create_info.subpass = Some(PipelineSubpassType::BeginRenderPass(
+            self.render_pass.clone().first_subpass(),
+        ));
+
+        let pipeline = match GraphicsPipeline::new(self.device.clone(), None, create_info) {
+            Ok(pipeline) => pipeline,
+            Err(e) => {
+                log!("cannot create graphics pipeline: {:?}", e);
+                return Err(CrystalError::CannotCreateRenderPass);
+            }
+        };
+
+        Ok(pipeline)
+    }
+
+    fn update_size(&mut self, extent: [u32; 2]) -> CrystalResult<()> {
+        self.extent = extent;
+        unimplemented!()
     }
 }
 
 impl VulkanRenderTarget {
-    pub(crate) fn new(
-        instance: &ash::Instance,
-        device_manager: Arc<DeviceManager>,
-        swapchain_create_info: vk::SwapchainCreateInfoKHR,
-        frames_in_flight: u32,
+    pub(crate) fn create_render_pass(
+        device: Arc<vulkano::device::Device>,
+        image_format: Format,
         msaa_samples: u8,
-    ) -> CrystalResult<Self> {
-        let counts = device_manager
-            .device_properties
-            .limits
+    ) -> CrystalResult<Arc<RenderPass>> {
+        let counts = device
+            .physical_device()
+            .properties()
             .framebuffer_color_sample_counts
-            & device_manager
-                .device_properties
-                .limits
+            & device
+                .physical_device()
+                .properties()
                 .framebuffer_depth_sample_counts;
 
         let samples = match msaa_samples {
-            2 => vk::SampleCountFlags::TYPE_2,
-            4 => vk::SampleCountFlags::TYPE_4,
-            8 => vk::SampleCountFlags::TYPE_8,
-            16 => vk::SampleCountFlags::TYPE_16,
-            32 => vk::SampleCountFlags::TYPE_32,
-            64 => vk::SampleCountFlags::TYPE_64,
-            _ => vk::SampleCountFlags::TYPE_1,
+            2 => SampleCounts::SAMPLE_2,
+            4 => SampleCounts::SAMPLE_4,
+            8 => SampleCounts::SAMPLE_8,
+            16 => SampleCounts::SAMPLE_16,
+            32 => SampleCounts::SAMPLE_32,
+            64 => SampleCounts::SAMPLE_64,
+            _ => SampleCounts::SAMPLE_1,
         };
 
-        if counts & samples != samples {
+        if !counts.contains(samples) {
             panic!(
                 "fatal: device is not supported for sample count: {}",
                 msaa_samples
             );
         };
 
-        let color_attachment = vk::AttachmentDescription::default()
-            .format(swapchain_create_info.image_format)
-            .samples(samples)
-            .load_op(vk::AttachmentLoadOp::CLEAR)
-            .store_op(vk::AttachmentStoreOp::STORE)
-            .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
-            .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
-            .initial_layout(vk::ImageLayout::UNDEFINED)
-            .final_layout(if samples != vk::SampleCountFlags::TYPE_1 {
-                vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL
-            } else {
-                vk::ImageLayout::PRESENT_SRC_KHR
-            });
+        let samples = match msaa_samples {
+            2 => SampleCount::Sample2,
+            4 => SampleCount::Sample4,
+            8 => SampleCount::Sample8,
+            16 => SampleCount::Sample16,
+            32 => SampleCount::Sample32,
+            64 => SampleCount::Sample64,
+            _ => SampleCount::Sample1,
+        };
 
-        let depth_attachment = vk::AttachmentDescription::default()
-            .format(find_depth_format(
-                instance,
-                device_manager.clone(),
-                vk::ImageTiling::OPTIMAL,
-                vk::FormatFeatureFlags::DEPTH_STENCIL_ATTACHMENT,
-            ))
-            .samples(samples)
-            .load_op(vk::AttachmentLoadOp::CLEAR)
-            .store_op(vk::AttachmentStoreOp::DONT_CARE)
-            .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
-            .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
-            .initial_layout(vk::ImageLayout::UNDEFINED)
-            .final_layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
-
-        let color_attachment_resolve = vk::AttachmentDescription::default()
-            .format(swapchain_create_info.image_format)
-            .samples(vk::SampleCountFlags::TYPE_1)
-            .load_op(vk::AttachmentLoadOp::DONT_CARE)
-            .store_op(vk::AttachmentStoreOp::STORE)
-            .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
-            .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
-            .initial_layout(vk::ImageLayout::UNDEFINED)
-            .final_layout(if samples != vk::SampleCountFlags::TYPE_1 {
-                vk::ImageLayout::PRESENT_SRC_KHR
+        let color_attachment = AttachmentDescription {
+            format: image_format,
+            samples: samples,
+            load_op: AttachmentLoadOp::Clear,
+            store_op: AttachmentStoreOp::Store,
+            stencil_load_op: Some(AttachmentLoadOp::DontCare),
+            stencil_store_op: Some(AttachmentStoreOp::DontCare),
+            initial_layout: ImageLayout::Undefined,
+            final_layout: if samples != SampleCount::Sample1 {
+                ImageLayout::ColorAttachmentOptimal
             } else {
-                vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL
-            });
+                ImageLayout::PresentSrc
+            },
+            ..Default::default()
+        };
+
+        let depth_attachment = AttachmentDescription {
+            format: find_depth_format(
+                device.clone(),
+                ImageTiling::Optimal,
+                FormatFeatures::DEPTH_STENCIL_ATTACHMENT,
+            ),
+            samples: samples,
+            load_op: AttachmentLoadOp::Clear,
+            store_op: AttachmentStoreOp::DontCare,
+            stencil_load_op: Some(AttachmentLoadOp::DontCare),
+            stencil_store_op: Some(AttachmentStoreOp::DontCare),
+            initial_layout: ImageLayout::Undefined,
+            final_layout: ImageLayout::DepthStencilAttachmentOptimal,
+            ..Default::default()
+        };
+
+        let color_attachment_resolve = AttachmentDescription {
+            format: image_format,
+            samples: SampleCount::Sample1,
+            load_op: AttachmentLoadOp::DontCare,
+            store_op: AttachmentStoreOp::Store,
+            stencil_load_op: Some(AttachmentLoadOp::DontCare),
+            stencil_store_op: Some(AttachmentStoreOp::DontCare),
+            initial_layout: ImageLayout::Undefined,
+            final_layout: if samples != SampleCount::Sample1 {
+                ImageLayout::PresentSrc
+            } else {
+                ImageLayout::ColorAttachmentOptimal
+            },
+            ..Default::default()
+        };
 
         let mut attachments = vec![color_attachment, depth_attachment];
 
-        if samples != vk::SampleCountFlags::TYPE_1 {
-            attachments.push(color_attachment_resolve);
-        }
+        let color_attachment_reference = AttachmentReference {
+            attachment: 0,
+            layout: ImageLayout::ColorAttachmentOptimal,
+            ..Default::default()
+        };
 
-        let color_attachment_reference = vk::AttachmentReference::default()
-            .attachment(0)
-            .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL);
+        let depth_attachment_reference = AttachmentReference {
+            attachment: 1,
+            layout: ImageLayout::DepthStencilAttachmentOptimal,
+            ..Default::default()
+        };
 
-        let depth_attachment_reference = vk::AttachmentReference::default()
-            .attachment(1)
-            .layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+        let color_attachments = vec![Some(color_attachment_reference)];
 
-        let color_attachments = &[color_attachment_reference];
-
-        let color_attachment_resolve_reference = vk::AttachmentReference::default()
-            .attachment(2)
-            .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL);
+        let color_attachment_resolve_reference = AttachmentReference {
+            attachment: 2,
+            layout: ImageLayout::ColorAttachmentOptimal,
+            ..Default::default()
+        };
 
         let mut resolve_attachments = vec![];
 
-        if samples != vk::SampleCountFlags::TYPE_1 {
-            resolve_attachments.push(color_attachment_resolve_reference)
+        if samples != SampleCount::Sample1 {
+            attachments.push(color_attachment_resolve);
+            resolve_attachments.push(Some(color_attachment_resolve_reference))
         }
 
-        let mut subpass = vk::SubpassDescription::default()
-            .color_attachments(color_attachments)
-            .depth_stencil_attachment(&depth_attachment_reference)
-            .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS);
+        let mut subpass = SubpassDescription {
+            color_attachments: color_attachments,
+            depth_stencil_attachment: Some(depth_attachment_reference),
+            ..Default::default()
+        };
 
-        if samples != vk::SampleCountFlags::TYPE_1 {
-            subpass = subpass.resolve_attachments(&resolve_attachments)
+        if samples != SampleCount::Sample1 {
+            subpass.color_resolve_attachments = resolve_attachments;
         }
 
-        let subpasses = &[subpass];
+        let subpasses = vec![subpass];
 
-        let dependency = vk::SubpassDependency::default()
-            .src_subpass(vk::SUBPASS_EXTERNAL)
-            .dst_subpass(0)
-            .src_stage_mask(
-                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
-                    | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS,
-            )
-            .src_access_mask(vk::AccessFlags::empty())
-            .dst_stage_mask(
-                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
-                    | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS,
-            )
-            .dst_access_mask(
-                vk::AccessFlags::COLOR_ATTACHMENT_WRITE
-                    | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
-            );
+        let dependency = SubpassDependency {
+            src_subpass: None,
+            dst_subpass: Some(0),
+            src_stages: PipelineStages::COLOR_ATTACHMENT_OUTPUT
+                | PipelineStages::EARLY_FRAGMENT_TESTS,
+            src_access: AccessFlags::empty(),
+            dst_stages: PipelineStages::COLOR_ATTACHMENT_OUTPUT
+                | PipelineStages::EARLY_FRAGMENT_TESTS,
+            dst_access: AccessFlags::COLOR_ATTACHMENT_WRITE
+                | AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
+            ..Default::default()
+        };
 
-        let dependencies = &[dependency];
+        let dependencies = vec![dependency];
 
-        let render_pass_create_info = vk::RenderPassCreateInfo::default()
-            .attachments(&attachments)
-            .subpasses(subpasses)
-            .dependencies(dependencies);
+        let render_pass_create_info = RenderPassCreateInfo {
+            attachments: attachments,
+            subpasses: subpasses,
+            dependencies: dependencies,
+            ..Default::default()
+        };
 
-        let render_pass = match unsafe {
-            device_manager
-                .device
-                .create_render_pass(&render_pass_create_info, None)
-        } {
+        let render_pass = match RenderPass::new(device.clone(), render_pass_create_info) {
             Ok(render_pass) => render_pass,
             Err(e) => {
-                log!("failed to crate render pass: {}", e);
+                log!("failed to crate render pass: {:?}", e);
                 return Err(CrystalError::CannotCreateRenderPass);
             }
         };
 
-        let (
-            swapchain_image_views,
-            framebuffers,
-            depth_resources,
-            swapchain_images,
-            swapchain,
-            swapchain_khr,
-        ) = Self::create_swapchain(
-            device_manager.clone(),
-            instance,
-            samples,
-            &swapchain_create_info,
-            render_pass,
-        )?;
-
-        let mut image_available_semaphores = vec![];
-        let mut render_finished_semaphores = vec![];
-        let mut in_flight_fences = vec![];
-
-        for _ in 0..frames_in_flight {
-            let semaphore_create_info = vk::SemaphoreCreateInfo::default();
-
-            for i in 0..2 {
-                let semaphore = match unsafe {
-                    device_manager
-                        .device
-                        .create_semaphore(&semaphore_create_info, None)
-                } {
-                    Ok(semaphore) => semaphore,
-                    Err(e) => {
-                        log!("cannot create semaphore: {}", e);
-                        return Err(CrystalError::CannotCreateRenderTarget);
-                    }
-                };
-
-                if i == 0 {
-                    render_finished_semaphores.push(semaphore);
-                } else {
-                    image_available_semaphores.push(semaphore);
-                }
-            }
-
-            let fence_create_info =
-                vk::FenceCreateInfo::default().flags(vk::FenceCreateFlags::SIGNALED);
-
-            let in_flight_fence =
-                match unsafe { device_manager.device.create_fence(&fence_create_info, None) } {
-                    Ok(fence) => fence,
-                    Err(e) => {
-                        log!("cannot create fence: {}", e);
-                        return Err(CrystalError::CannotCreateRenderTarget);
-                    }
-                };
-
-            in_flight_fences.push(in_flight_fence);
-        }
-
-        Ok(Self {
-            device_manager,
-            extent: swapchain_create_info.image_extent,
-            swapchain_extent: swapchain_create_info.image_extent,
-            swapchain,
-            swapchain_khr,
-            render_pass,
-            framebuffers,
-            swapchain_images,
-            swapchain_image_views,
-
-            image_available_semaphores,
-            render_finished_semaphores,
-            in_flight_fences,
-
-            depth_resources,
-
-            current_frame: 0,
-
-            msaa_samples: samples,
-        })
+        Ok(render_pass)
     }
 
-    fn create_swapchain(
-        device_manager: Arc<DeviceManager>,
-        instance: &ash::Instance,
-        samples: vk::SampleCountFlags,
-        swapchain_create_info: &vk::SwapchainCreateInfoKHR,
-        render_pass: vk::RenderPass,
-    ) -> CrystalResult<(
-        Vec<vk::ImageView>,
-        Vec<vk::Framebuffer>,
-        Vec<DepthResources>,
-        Vec<vk::Image>,
-        ash::khr::swapchain::Device,
-        vk::SwapchainKHR,
-    )> {
-        let mut swapchain_image_views = vec![];
+    pub(crate) fn new(
+        render_pass: Arc<RenderPass>,
+        memory_allocator: Arc<StandardMemoryAllocator>,
+        image_views: &[Arc<ImageView>],
+        extent: [u32; 2],
+    ) -> CrystalResult<Self> {
+        let device = render_pass.device();
         let mut framebuffers = vec![];
-        let mut depth_resources = vec![];
 
-        let swapchain = ash::khr::swapchain::Device::new(instance, &device_manager.device);
-        let swapchain_khr =
-            match unsafe { swapchain.create_swapchain(&swapchain_create_info, None) } {
-                Ok(swapchain_khr) => swapchain_khr,
-                Err(e) => {
-                    log!("cannot create swapchain: {}", e);
-                    return Err(CrystalError::SwapChainError);
-                }
-            };
+        let samples = render_pass.attachments()[0].samples;
+        let image_format = render_pass.attachments()[0].format;
 
-        let swapchain_images = match unsafe { swapchain.get_swapchain_images(swapchain_khr) } {
-            Ok(images) => images,
-            Err(e) => {
-                log!("cannot get swapchain images: {}", e);
-                return Err(CrystalError::SwapChainError);
-            }
-        };
+        for image_view in image_views {
+            let image_view = image_view.clone();
 
-        for &swapchain_image in &swapchain_images {
-            let create_info = vk::ImageViewCreateInfo::default()
-                .image(swapchain_image)
-                .view_type(vk::ImageViewType::TYPE_2D)
-                .format(swapchain_create_info.image_format)
-                .components(vk::ComponentMapping {
-                    r: vk::ComponentSwizzle::IDENTITY,
-                    g: vk::ComponentSwizzle::IDENTITY,
-                    b: vk::ComponentSwizzle::IDENTITY,
-                    a: vk::ComponentSwizzle::IDENTITY,
-                })
-                .subresource_range(
-                    vk::ImageSubresourceRange::default()
-                        .aspect_mask(vk::ImageAspectFlags::COLOR)
-                        .base_mip_level(0)
-                        .level_count(1)
-                        .base_array_layer(0)
-                        .layer_count(1),
-                );
+            let tiling = ImageTiling::Optimal;
+            let depth_format = find_depth_format(
+                device.clone(),
+                tiling,
+                FormatFeatures::DEPTH_STENCIL_ATTACHMENT,
+            );
 
-            let image_view =
-                match unsafe { device_manager.device.create_image_view(&create_info, None) } {
-                    Ok(image_view) => image_view,
-                    Err(e) => {
-                        log!("cannot create image view: {}", e);
-                        return Err(CrystalError::SwapChainError);
-                    }
-                };
-
-            swapchain_image_views.push(image_view);
-
-            let depth_resource = DepthResources::new(
-                device_manager.clone(),
-                instance,
-                swapchain_create_info.image_extent.width,
-                swapchain_create_info.image_extent.height,
+            let depth_image = Image::new(
+                memory_allocator.clone(),
+                extent,
                 samples,
-            )?;
-
-            let color_image = Image::new(
-                device_manager.clone(),
-                swapchain_create_info.image_extent.width,
-                swapchain_create_info.image_extent.height,
-                samples,
-                swapchain_create_info.image_format,
-                vk::ImageTiling::OPTIMAL,
-                vk::ImageAspectFlags::COLOR,
-                vk::ImageUsageFlags::TRANSIENT_ATTACHMENT | vk::ImageUsageFlags::COLOR_ATTACHMENT,
-                vk::MemoryPropertyFlags::DEVICE_LOCAL,
+                depth_format,
+                tiling,
+                ImageAspects::DEPTH,
+                ImageUsage::DEPTH_STENCIL_ATTACHMENT,
                 false,
                 1.,
             )?;
 
-            let attachments = if samples != vk::SampleCountFlags::TYPE_1 {
-                vec![
-                    color_image.image_view,
-                    depth_resource.image.image_view,
-                    image_view,
-                ]
+            let color_image = Image::new(
+                memory_allocator.clone(),
+                extent,
+                samples,
+                image_format,
+                ImageTiling::Optimal,
+                ImageAspects::COLOR,
+                ImageUsage::TRANSIENT_ATTACHMENT | ImageUsage::COLOR_ATTACHMENT,
+                false,
+                1.,
+            )?;
+
+            let attachments = if samples != SampleCount::Sample1 {
+                vec![color_image.image_view, depth_image.image_view, image_view]
             } else {
-                vec![image_view, depth_resource.image.image_view]
+                vec![image_view, depth_image.image_view]
             };
 
-            depth_resources.push(depth_resource);
+            let create_info = FramebufferCreateInfo {
+                attachments,
+                extent,
+                layers: 1,
+                ..Default::default()
+            };
 
-            let create_info = vk::FramebufferCreateInfo::default()
-                .render_pass(render_pass)
-                .attachments(&attachments)
-                .width(swapchain_create_info.image_extent.width)
-                .height(swapchain_create_info.image_extent.height)
-                .layers(1);
+            let framebuffer = match Framebuffer::new(render_pass.clone(), create_info) {
+                Ok(framebuffer) => framebuffer,
+                Err(e) => {
+                    log!("cannot create framebuffer: {:?}", e);
+                    return Err(CrystalError::CannotCreateRenderTarget);
+                }
+            };
 
-            let framebuffer =
-                match unsafe { device_manager.device.create_framebuffer(&create_info, None) } {
-                    Ok(framebuffer) => framebuffer,
-                    Err(e) => {
-                        log!("cannot create framebuffer: {}", e);
-                        return Err(CrystalError::CannotCreateFramebuffer);
-                    }
-                };
             framebuffers.push(framebuffer);
         }
 
-        Ok((
-            swapchain_image_views,
+        Ok(Self {
+            device: device.clone(),
+            render_pass,
             framebuffers,
-            depth_resources,
-            swapchain_images,
-            swapchain,
-            swapchain_khr,
-        ))
-    }
-
-    pub fn set_current_frame(&mut self, current_frame: usize) {
-        self.current_frame = current_frame
-    }
-
-    #[allow(unused)]
-    pub fn update_swapchain(
-        &mut self,
-        instance: &ash::Instance,
-        swapchain_create_info: &vk::SwapchainCreateInfoKHR,
-    ) -> CrystalResult<()> {
-        // unimplemented!("update swapchain");
-
-        let queue = unsafe {
-            self.device_manager.device.get_device_queue(
-                self.device_manager
-                    .queue_families_indices
-                    .graphics_index
-                    .unwrap(),
-                0,
-            )
-        };
-        match unsafe { self.device_manager.device.queue_wait_idle(queue) } {
-            Ok(_) => (),
-            Err(e) => {
-                log!("cannot device wait idle: {}", e);
-                return Err(CrystalError::RenderingError);
-            }
-        };
-
-        unsafe { self.swapchain.destroy_swapchain(self.swapchain_khr, None) };
-
-        (
-            self.swapchain_image_views,
-            self.framebuffers,
-            self.depth_resources,
-            self.swapchain_images,
-            self.swapchain,
-            self.swapchain_khr,
-        ) = Self::create_swapchain(
-            self.device_manager.clone(),
-            instance,
-            self.msaa_samples,
-            swapchain_create_info,
-            self.render_pass,
-        )?;
-
-        self.swapchain_extent = swapchain_create_info.image_extent;
-
-        Ok(())
-    }
-
-    pub fn submit_and_present(
-        &self,
-        command_manager: &CommandManager,
-        present_queue_family_index: u32,
-        image_index: u32,
-    ) -> CrystalResult<()> {
-        let queue = unsafe {
-            self.device_manager
-                .device
-                .get_device_queue(present_queue_family_index, 0)
-        };
-        let swapchains = &[self.swapchain_khr];
-        let image_indices = &[image_index];
-
-        command_manager
-            .graphics
-            .as_ref()
-            .unwrap()
-            .submit_command_buffer(
-                self.current_frame,
-                &[self.image_available_semaphores[self.current_frame]],
-                &[self.render_finished_semaphores[self.current_frame]],
-                &[vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT],
-                self.in_flight_fences[self.current_frame],
-            )?;
-
-        let wait_semaphores = &[self.render_finished_semaphores[self.current_frame]];
-
-        let present_info = vk::PresentInfoKHR::default()
-            .wait_semaphores(wait_semaphores)
-            .swapchains(swapchains)
-            .image_indices(image_indices);
-        match unsafe { self.swapchain.queue_present(queue, &present_info) } {
-            Ok(_) => Ok(()),
-            Err(vk::Result::ERROR_OUT_OF_DATE_KHR | vk::Result::SUBOPTIMAL_KHR) => {
-                Err(CrystalError::OutOfDate)
-            }
-            Err(e) => {
-                log!("failed to present queue: {}", e);
-                Err(CrystalError::RenderingError)
-            }
-        }
+            frames_in_flight: image_views.len(),
+            current_frame: 0,
+            extent,
+            samples,
+        })
     }
 }

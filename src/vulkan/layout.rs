@@ -4,38 +4,42 @@ use std::{
     sync::Arc,
 };
 
-use ash::vk;
+use vulkano::{
+    buffer::Subbuffer,
+    command_buffer::{AutoCommandBufferBuilder, PrimaryAutoCommandBuffer},
+    descriptor_set::{
+        DescriptorSet, WriteDescriptorSet,
+        allocator::{StandardDescriptorSetAllocator, StandardDescriptorSetAllocatorCreateInfo},
+        layout::{
+            DescriptorSetLayout, DescriptorSetLayoutBinding, DescriptorSetLayoutCreateInfo,
+            DescriptorType,
+        },
+    },
+    device::{Device, DeviceOwned},
+    image::sampler::{
+        BorderColor, Filter, Sampler, SamplerAddressMode, SamplerCreateInfo, SamplerMipmapMode,
+    },
+    memory::allocator::StandardMemoryAllocator,
+    pipeline::{PipelineBindPoint, PipelineLayout, layout::PipelineLayoutCreateInfo},
+    shader::ShaderStages,
+};
 
 use crate::{
-    GpuVec,
     debug::log,
     errors::{CrystalError, CrystalResult},
     object::Object,
     traits,
+    vulkan::{VulkanTexture, images::Image},
 };
 
-use super::{
-    devices::DeviceManager, images::VulkanTexture, memory::BufferManager,
-    memory_obj::VulkanObjectMemoryManager, rendering::VulkanRenderTarget,
-};
+use super::{memory_obj::VulkanObjectMemoryManager, rendering::VulkanRenderTarget};
 
 pub struct VulkanLayout {
-    _descriptor_pool: vk::DescriptorPool,
-    uniform_buffer_managers_sets: Vec<Vec<BufferManager>>,
-    storage_buffer_managers_sets: Vec<Vec<BufferManager>>,
+    allocator: Arc<StandardDescriptorSetAllocator>,
 
-    uniform_descriptor_sets: Vec<vk::DescriptorSet>,
-    storage_descriptor_sets: Vec<vk::DescriptorSet>,
-    sampler_descriptor_sets: Vec<vk::DescriptorSet>,
-
-    sampler_binding_data: BTreeMap<u64, usize>,
-    sampler_binding_data_pool: Vec<u64>,
-
-    pub pipeline_layout: vk::PipelineLayout,
-
-    image_views_sampled_num: u32,
-    max_instance_num: u64,
-    samplers: BTreeMap<u32, vk::Sampler>,
+    pub pipeline_layout: Arc<PipelineLayout>,
+    descriptors: BTreeMap<(i32, usize), Arc<DescriptorSet>>,
+    samplers: BTreeMap<u32, Arc<Sampler>>,
 
     object_render_queue: VecDeque<Arc<RefCell<Object>>>,
 }
@@ -52,361 +56,263 @@ impl traits::Layout for VulkanLayout {
     fn add_object_to_queue(&mut self, object: Arc<RefCell<Object>>) {
         self.object_render_queue.push_back(object);
     }
-
-    fn write_to_buffer(
-        &self,
-        is_uniform: bool,
-        frame: usize,
-        buffer: usize,
-        offset: usize,
-        data: GpuVec,
-    ) -> CrystalResult<()> {
-        if is_uniform {
-            self.uniform_buffer_managers_sets[frame][buffer].write(data.as_slice(), offset)
-        } else {
-            self.storage_buffer_managers_sets[frame][buffer].write(data.as_slice(), offset)
-        }
-    }
 }
 
 impl VulkanLayout {
     pub(crate) fn new(
-        device_manager: Arc<DeviceManager>,
+        device: Arc<Device>,
+        sampler_binding_num: usize,
+        uniform_binding_num: usize,
+        storage_binding_num: usize,
+    ) -> CrystalResult<Self> {
+        let uniform_bindings_enum = vec![
+            DescriptorSetLayoutBinding {
+                descriptor_count: uniform_binding_num as u32,
+                ..DescriptorSetLayoutBinding::descriptor_type(DescriptorType::UniformBuffer)
+            };
+            uniform_binding_num
+        ];
+        let storage_bindings_enum = vec![
+            DescriptorSetLayoutBinding {
+                descriptor_count: storage_binding_num as u32,
+                ..DescriptorSetLayoutBinding::descriptor_type(DescriptorType::StorageBuffer)
+            };
+            storage_binding_num
+        ];
+        let sampler_bindings_enum = vec![
+            DescriptorSetLayoutBinding {
+                descriptor_count: sampler_binding_num as u32,
+                stages: ShaderStages::FRAGMENT,
+                ..DescriptorSetLayoutBinding::descriptor_type(DescriptorType::CombinedImageSampler)
+            };
+            sampler_binding_num
+        ];
+
+        let mut sampler_bindings = BTreeMap::new();
+        let mut uniform_bindings = BTreeMap::new();
+        let mut storage_bindings = BTreeMap::new();
+
+        for (idx, sampler_binding) in sampler_bindings_enum.iter().enumerate() {
+            sampler_bindings.insert(idx as u32, sampler_binding.clone());
+        }
+
+        for (idx, uniform_binding) in uniform_bindings_enum.iter().enumerate() {
+            uniform_bindings.insert(idx as u32, uniform_binding.clone());
+        }
+
+        for (idx, storage_binding) in storage_bindings_enum.iter().enumerate() {
+            storage_bindings.insert(idx as u32, storage_binding.clone());
+        }
+
+        let uniform_descriptor_set_layout_create_info = DescriptorSetLayoutCreateInfo {
+            bindings: uniform_bindings,
+            ..Default::default()
+        };
+
+        let storage_descriptor_set_layout_create_info = DescriptorSetLayoutCreateInfo {
+            bindings: storage_bindings,
+            ..Default::default()
+        };
+
+        let sampler_descriptor_set_layout_create_info = DescriptorSetLayoutCreateInfo {
+            bindings: sampler_bindings,
+            ..Default::default()
+        };
+
+        let uniform_descriptor_set_layout = match DescriptorSetLayout::new(
+            device.clone(),
+            uniform_descriptor_set_layout_create_info,
+        ) {
+            Ok(descriptor_set_layout) => descriptor_set_layout,
+            Err(e) => {
+                log!("cannot create descriptor set layout: {:?}", e);
+                return Err(CrystalError::DescriptorError);
+            }
+        };
+
+        let storage_descriptor_set_layout = match DescriptorSetLayout::new(
+            device.clone(),
+            storage_descriptor_set_layout_create_info,
+        ) {
+            Ok(descriptor_set_layout) => descriptor_set_layout,
+            Err(e) => {
+                log!("cannot create descriptor set layout: {:?}", e);
+                return Err(CrystalError::DescriptorError);
+            }
+        };
+
+        let sampler_descriptor_set_layout = match DescriptorSetLayout::new(
+            device.clone(),
+            sampler_descriptor_set_layout_create_info,
+        ) {
+            Ok(descriptor_set_layout) => descriptor_set_layout,
+            Err(e) => {
+                log!("cannot create descriptor set layout: {:?}", e);
+                return Err(CrystalError::DescriptorError);
+            }
+        };
+
+        let create_info = PipelineLayoutCreateInfo {
+            set_layouts: vec![
+                uniform_descriptor_set_layout,
+                storage_descriptor_set_layout,
+                sampler_descriptor_set_layout,
+            ],
+            ..Default::default()
+        };
+
+        let pipeline_layout = match PipelineLayout::new(device.clone(), create_info) {
+            Ok(layout) => layout,
+            Err(e) => {
+                log!("cannot create pipeline layout: {:?}", e);
+                return Err(CrystalError::DescriptorError);
+            }
+        };
+
+        let create_info = StandardDescriptorSetAllocatorCreateInfo::default();
+        let allocator = Arc::new(StandardDescriptorSetAllocator::new(device, create_info));
+
+        Ok(Self {
+            allocator,
+
+            pipeline_layout,
+            samplers: BTreeMap::new(),
+            descriptors: BTreeMap::new(),
+
+            object_render_queue: VecDeque::new(),
+        })
+    }
+
+    #[deprecated]
+    #[allow(unreachable_code, unused_variables)]
+    pub(crate) fn new_static(
+        memory_allocator: Arc<StandardMemoryAllocator>,
         image_views_sampled_num: u32,
         frames_in_flight: u32,
         max_instance_num: u64,
 
         buffers: &[(bool, u64)],
     ) -> CrystalResult<Self> {
-        let pool_sizes = [
-            vk::DescriptorPoolSize::default()
-                .descriptor_count(frames_in_flight)
-                .ty(vk::DescriptorType::UNIFORM_BUFFER),
-            vk::DescriptorPoolSize::default()
-                .descriptor_count(frames_in_flight)
-                .ty(vk::DescriptorType::STORAGE_BUFFER),
-            vk::DescriptorPoolSize::default()
-                .descriptor_count(frames_in_flight)
-                .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER),
-        ];
+        unimplemented!();
+    }
 
-        let pool_info = vk::DescriptorPoolCreateInfo::default()
-            .pool_sizes(&pool_sizes)
-            .max_sets(frames_in_flight * (2 + max_instance_num as u32));
+    fn update_descriptor(
+        &mut self,
+        cur_frame: usize,
+        descriptor_type: DescriptorType,
+        descriptor_write: WriteDescriptorSet,
+    ) -> CrystalResult<()> {
+        match self
+            .descriptors
+            .iter()
+            .find(|((typ, frame), _)| *typ == descriptor_type as i32 && *frame == cur_frame)
+        {
+            Some((_, descriptor)) => unsafe {
+                descriptor.update_by_ref([descriptor_write], []).unwrap()
+            },
+            None => {
+                let layout = self
+                    .pipeline_layout
+                    .set_layouts()
+                    .iter()
+                    .find(|layout| {
+                        layout
+                            .bindings()
+                            .first_key_value()
+                            .unwrap()
+                            .1
+                            .descriptor_type
+                            == descriptor_type
+                    })
+                    .unwrap();
 
-        let descriptor_pool = match unsafe {
-            device_manager
-                .device
-                .create_descriptor_pool(&pool_info, None)
-        } {
-            Ok(descriptor_pool) => descriptor_pool,
-            Err(e) => {
-                log!("cannot create descriptor pool: {}", e);
-                return Err(CrystalError::DescriptorError);
-            }
-        };
-
-        let mut ubo_bindings = vec![];
-        let mut ssbo_bindings = vec![];
-
-        for buffer in buffers {
-            if buffer.0 {
-                ubo_bindings.push(
-                    vk::DescriptorSetLayoutBinding::default()
-                        .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-                        .stage_flags(vk::ShaderStageFlags::ALL_GRAPHICS)
-                        .descriptor_count(1),
+                let descriptor = DescriptorSet::new(
+                    self.allocator.clone(),
+                    layout.clone(),
+                    [descriptor_write],
+                    [],
                 )
-            } else {
-                ssbo_bindings.push(
-                    vk::DescriptorSetLayoutBinding::default()
-                        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                        .stage_flags(vk::ShaderStageFlags::ALL_GRAPHICS)
-                        .descriptor_count(1),
-                )
-            }
-        }
+                .unwrap();
 
-        let ubo_bindings_count = ubo_bindings.len() as u32;
-        for idx in 0..ubo_bindings_count {
-            ubo_bindings[idx as usize].descriptor_count = ubo_bindings_count;
-            ubo_bindings[idx as usize].binding = idx as u32;
-        }
-
-        let ssbo_bindings_count = ssbo_bindings.len() as u32;
-        for idx in 0..ssbo_bindings_count {
-            ssbo_bindings[idx as usize].descriptor_count = ssbo_bindings_count;
-            ssbo_bindings[idx as usize].binding = idx as u32;
-        }
-
-        let mut sampler_bindings = vec![];
-
-        for i in 0..image_views_sampled_num {
-            sampler_bindings.push(
-                vk::DescriptorSetLayoutBinding::default()
-                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                    .stage_flags(vk::ShaderStageFlags::FRAGMENT)
-                    .descriptor_count(image_views_sampled_num)
-                    .binding(i),
-            )
-        }
-
-        let ubo_descriptor_set_layout_create_info =
-            vk::DescriptorSetLayoutCreateInfo::default().bindings(&ubo_bindings);
-
-        let ssbo_descriptor_set_layout_create_info =
-            vk::DescriptorSetLayoutCreateInfo::default().bindings(&ssbo_bindings);
-
-        let sampler_descriptor_set_layout_create_info =
-            vk::DescriptorSetLayoutCreateInfo::default().bindings(&sampler_bindings);
-
-        let ubo_descriptor_set_layout = match unsafe {
-            device_manager
-                .device
-                .clone()
-                .create_descriptor_set_layout(&ubo_descriptor_set_layout_create_info, None)
-        } {
-            Ok(descriptor_set_layout) => descriptor_set_layout,
-            Err(e) => {
-                log!("cannot create descriptor set layout: {}", e);
-                return Err(CrystalError::DescriptorError);
+                self.descriptors
+                    .insert((descriptor_type as i32, cur_frame), descriptor);
             }
         };
 
-        let ssbo_descriptor_set_layout = match unsafe {
-            device_manager
-                .device
-                .clone()
-                .create_descriptor_set_layout(&ssbo_descriptor_set_layout_create_info, None)
-        } {
-            Ok(descriptor_set_layout) => descriptor_set_layout,
-            Err(e) => {
-                log!("cannot create descriptor set layout: {}", e);
-                return Err(CrystalError::DescriptorError);
-            }
-        };
+        Ok(())
+    }
 
-        let sampler_descriptor_set_layout = match unsafe {
-            device_manager
-                .device
-                .clone()
-                .create_descriptor_set_layout(&sampler_descriptor_set_layout_create_info, None)
-        } {
-            Ok(descriptor_set_layout) => descriptor_set_layout,
-            Err(e) => {
-                log!("cannot create descriptor set layout: {}", e);
-                return Err(CrystalError::DescriptorError);
-            }
-        };
+    pub(crate) fn update_descriptor_buffer(
+        &mut self,
+        frame: usize,
+        descriptor_type: DescriptorType,
+        binding: u32,
+        buffer: Subbuffer<impl ?Sized>,
+    ) -> CrystalResult<()> {
+        let descriptor_write = WriteDescriptorSet::buffer(binding, buffer);
 
-        let ubo_layouts = vec![ubo_descriptor_set_layout; frames_in_flight as usize];
-        let ssbo_layouts = vec![ssbo_descriptor_set_layout; frames_in_flight as usize];
-        let sampler_layouts = vec![
-            sampler_descriptor_set_layout;
-            frames_in_flight as usize * max_instance_num as usize
-        ];
+        self.update_descriptor(frame, descriptor_type, descriptor_write)
+    }
 
-        let ubo_alloc_info = vk::DescriptorSetAllocateInfo::default()
-            .descriptor_pool(descriptor_pool)
-            .set_layouts(&ubo_layouts);
+    pub(crate) fn update_descriptor_texture(
+        &mut self,
+        frame: usize,
+        binding: u32,
+        texture: Arc<VulkanTexture>,
+    ) -> CrystalResult<()> {
+        let sampler = self.get_sampler(&texture.image)?;
 
-        let ssbo_alloc_info = vk::DescriptorSetAllocateInfo::default()
-            .descriptor_pool(descriptor_pool)
-            .set_layouts(&ssbo_layouts);
+        let descriptor_write = WriteDescriptorSet::image_view_sampler(
+            binding,
+            texture.image.image_view.clone(),
+            sampler,
+        );
 
-        let sampler_alloc_info = vk::DescriptorSetAllocateInfo::default()
-            .descriptor_pool(descriptor_pool)
-            .set_layouts(&sampler_layouts);
-
-        let uniform_descriptor_sets = match unsafe {
-            device_manager
-                .device
-                .allocate_descriptor_sets(&ubo_alloc_info)
-        } {
-            Ok(descriptor_sets) => descriptor_sets,
-            Err(e) => {
-                log!("cannot allocate uniform descriptor sets: {}", e);
-                return Err(CrystalError::DescriptorError);
-            }
-        };
-
-        let storage_descriptor_sets = match unsafe {
-            device_manager
-                .device
-                .allocate_descriptor_sets(&ssbo_alloc_info)
-        } {
-            Ok(descriptor_sets) => descriptor_sets,
-            Err(e) => {
-                log!("cannot allocate storage descriptor sets: {}", e);
-                return Err(CrystalError::DescriptorError);
-            }
-        };
-
-        let sampler_descriptor_sets = match unsafe {
-            device_manager
-                .device
-                .allocate_descriptor_sets(&sampler_alloc_info)
-        } {
-            Ok(descriptor_sets) => descriptor_sets,
-            Err(e) => {
-                log!("cannot allocate sampler descriptor sets: {}", e);
-                return Err(CrystalError::DescriptorError);
-            }
-        };
-
-        let mut uniform_buffer_managers_sets = vec![];
-        let mut storage_buffer_managers_sets = vec![];
-
-        for i in 0..frames_in_flight as usize {
-            let mut uniform_buffer_managers = vec![];
-            let mut storage_buffer_managers = vec![];
-
-            let mut current_uniform = 0;
-            let mut current_storage = 0;
-
-            for buffer in buffers {
-                let size = buffer.1;
-
-                if buffer.0 {
-                    let mut uniform_buffer_manager = BufferManager::new(
-                        device_manager.clone(),
-                        size,
-                        vk::BufferUsageFlags::UNIFORM_BUFFER,
-                        vk::MemoryPropertyFlags::HOST_VISIBLE
-                            | vk::MemoryPropertyFlags::HOST_COHERENT,
-                    )?;
-
-                    uniform_buffer_manager.map_memory(size, 0)?;
-
-                    let uniform_buffer_info = vk::DescriptorBufferInfo::default()
-                        .buffer(uniform_buffer_manager.buffer)
-                        .offset(0)
-                        .range(size);
-
-                    uniform_buffer_managers.push(uniform_buffer_manager);
-
-                    let buffer_infos = &[uniform_buffer_info];
-
-                    let descriptor_write = vk::WriteDescriptorSet::default()
-                        .dst_set(uniform_descriptor_sets[i])
-                        .dst_binding(current_uniform)
-                        .dst_array_element(0)
-                        .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-                        .descriptor_count(1)
-                        .buffer_info(buffer_infos);
-
-                    unsafe {
-                        device_manager
-                            .device
-                            .update_descriptor_sets(&[descriptor_write], &[])
-                    };
-
-                    current_uniform += 1;
-                } else {
-                    let mut storage_buffer_manager = BufferManager::new(
-                        device_manager.clone(),
-                        size,
-                        vk::BufferUsageFlags::STORAGE_BUFFER,
-                        vk::MemoryPropertyFlags::HOST_VISIBLE
-                            | vk::MemoryPropertyFlags::HOST_COHERENT,
-                    )?;
-
-                    storage_buffer_manager.map_memory(size, 0)?;
-
-                    let storage_buffer_info = vk::DescriptorBufferInfo::default()
-                        .buffer(storage_buffer_manager.buffer)
-                        .offset(0)
-                        .range(size);
-
-                    storage_buffer_managers.push(storage_buffer_manager);
-
-                    let buffer_infos = &[storage_buffer_info];
-
-                    let descriptor_write = vk::WriteDescriptorSet::default()
-                        .dst_set(storage_descriptor_sets[i])
-                        .dst_binding(current_storage)
-                        .dst_array_element(0)
-                        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                        .descriptor_count(1)
-                        .buffer_info(buffer_infos);
-
-                    unsafe {
-                        device_manager
-                            .device
-                            .update_descriptor_sets(&[descriptor_write], &[])
-                    };
-
-                    current_storage += 1;
-                }
-            }
-
-            uniform_buffer_managers_sets.push(uniform_buffer_managers);
-            storage_buffer_managers_sets.push(storage_buffer_managers);
-        }
-
-        let descriptor_set_layouts = [
-            ubo_descriptor_set_layout,
-            ssbo_descriptor_set_layout,
-            sampler_descriptor_set_layout,
-        ];
-
-        let create_info =
-            vk::PipelineLayoutCreateInfo::default().set_layouts(&descriptor_set_layouts);
-
-        let pipeline_layout = match unsafe {
-            device_manager
-                .device
-                .clone()
-                .create_pipeline_layout(&create_info, None)
-        } {
-            Ok(layout) => layout,
-            Err(e) => {
-                log!("cannot create pipeline layout: {}", e);
-                return Err(CrystalError::DescriptorError);
-            }
-        };
-
-        Ok(Self {
-            _descriptor_pool: descriptor_pool,
-            uniform_buffer_managers_sets,
-            storage_buffer_managers_sets,
-
-            uniform_descriptor_sets,
-            storage_descriptor_sets,
-            sampler_descriptor_sets,
-
-            sampler_binding_data: BTreeMap::new(),
-            sampler_binding_data_pool: vec![],
-
-            image_views_sampled_num,
-            max_instance_num,
-
-            pipeline_layout,
-            samplers: BTreeMap::new(),
-
-            object_render_queue: VecDeque::new(),
-        })
+        self.update_descriptor(
+            frame,
+            DescriptorType::CombinedImageSampler,
+            descriptor_write,
+        )
     }
 
     pub(crate) fn render(
         &mut self,
-        device_manager: Arc<DeviceManager>,
-        command_buffer: &vk::CommandBuffer,
+        command_buffer: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
         render_target: &VulkanRenderTarget,
     ) -> CrystalResult<()> {
-        unsafe {
-            device_manager.device.cmd_bind_descriptor_sets(
-                *command_buffer,
-                vk::PipelineBindPoint::GRAPHICS,
-                self.pipeline_layout,
-                0,
-                &[
-                    self.uniform_descriptor_sets[render_target.current_frame],
-                    self.storage_descriptor_sets[render_target.current_frame],
-                ],
-                &[],
-            )
-        }
+        let frame_descriptor_sets: Vec<(i32, Arc<DescriptorSet>)> = self
+            .descriptors
+            .iter()
+            .filter(|((_, frame), _)| *frame == render_target.current_frame)
+            .map(|((typ, _), val)| (*typ, val.clone()))
+            .collect();
+
+        let uniform_descriptor_set: Arc<DescriptorSet> = frame_descriptor_sets
+            .iter()
+            .find(|(desc_type, _)| *desc_type == DescriptorType::UniformBuffer as i32)
+            .unwrap()
+            .1
+            .clone();
+
+        let storage_descriptor_set: Arc<DescriptorSet> = frame_descriptor_sets
+            .iter()
+            .find(|(desc_type, _)| *desc_type == DescriptorType::StorageBuffer as i32)
+            .unwrap()
+            .1
+            .clone();
+
+        match command_buffer.bind_descriptor_sets(
+            PipelineBindPoint::Graphics,
+            self.pipeline_layout.clone(),
+            0,
+            vec![uniform_descriptor_set, storage_descriptor_set],
+        ) {
+            Ok(_) => (),
+            Err(e) => {
+                log!("cannot bind descriptor sets: {:?}", e);
+                return Err(CrystalError::RenderingError);
+            }
+        };
 
         let mut current_object_idx = 0usize;
 
@@ -420,7 +326,7 @@ impl VulkanLayout {
                     None => {
                         obj.memory_manager = Some(
                             VulkanObjectMemoryManager::new(
-                                device_manager.clone(),
+                                self.allocator.device().clone(),
                                 &mesh.vertices,
                                 &mesh.indices,
                             )
@@ -434,31 +340,35 @@ impl VulkanLayout {
             match &obj.textures {
                 None => {}
                 Some(textures) => {
-                    let texture_sets: Vec<Arc<VulkanTexture>> = textures
-                        .iter()
-                        .map(|texture| match texture.1.clone().as_vulkan_arc() {
-                            Some(tex) => tex,
-                            None => panic!("fatal: wrong type of textures, expected vulkan"),
-                        })
-                        .collect();
-
-                    let sets = self.init_sampler_descriptor_sets(
-                        device_manager.clone(),
-                        render_target.in_flight_fences.len(),
-                        textures.as_ptr() as usize as u64,
-                        &texture_sets,
-                    )?;
-
-                    unsafe {
-                        device_manager.device.cmd_bind_descriptor_sets(
-                            *command_buffer,
-                            vk::PipelineBindPoint::GRAPHICS,
-                            self.pipeline_layout,
-                            2,
-                            &[sets[render_target.current_frame]],
-                            &[],
-                        )
+                    for (binding, texture) in textures {
+                        self.update_descriptor_texture(
+                            render_target.current_frame,
+                            *binding,
+                            texture.clone().as_vulkan_arc().unwrap(),
+                        )?;
                     }
+
+                    let sampler_descriptor_set: Arc<DescriptorSet> = frame_descriptor_sets
+                        .iter()
+                        .find(|(desc_type, _)| {
+                            *desc_type == DescriptorType::CombinedImageSampler as i32
+                        })
+                        .unwrap()
+                        .1
+                        .clone();
+
+                    match command_buffer.bind_descriptor_sets(
+                        PipelineBindPoint::Graphics,
+                        self.pipeline_layout.clone(),
+                        2,
+                        vec![sampler_descriptor_set],
+                    ) {
+                        Ok(_) => (),
+                        Err(e) => {
+                            log!("cannot bind descriptor sets: {:?}", e);
+                            return Err(CrystalError::RenderingError);
+                        }
+                    };
                 }
             }
 
@@ -467,203 +377,89 @@ impl VulkanLayout {
                 None => panic!("fatal: wrong object memory manager type, expected vulkan"),
             };
 
-            let pipeline = match obj.pipeline.as_vulkan_ref() {
-                Some(pipeline) => *pipeline,
+            let pipeline = match obj.pipeline.clone().as_vulkan() {
+                Some(pipeline) => pipeline,
                 None => panic!("fatal: wrong pipeline type, expected vulkan"),
             };
 
-            let index_buffer = object_memory_manager.index_buffer_manager.buffer;
-            let vertex_buffer = object_memory_manager.vertex_buffer_manager.buffer;
+            let index_buffer = object_memory_manager.index_buffer_manager.buffer.clone();
+            let vertex_buffer = object_memory_manager.vertex_buffer_manager.buffer.clone();
 
-            unsafe {
-                device_manager.device.cmd_bind_pipeline(
-                    *command_buffer,
-                    vk::PipelineBindPoint::GRAPHICS,
-                    pipeline,
-                );
+            match command_buffer.bind_pipeline_graphics(pipeline) {
+                Ok(_) => (),
+                Err(e) => {
+                    log!("cannot bind graphics pipeline: {:?}", e);
+                    return Err(CrystalError::RenderingError);
+                }
+            };
 
-                device_manager.device.cmd_bind_index_buffer(
-                    *command_buffer,
-                    index_buffer,
-                    0,
-                    vk::IndexType::UINT32,
-                );
-            }
+            match command_buffer.bind_index_buffer((*index_buffer).clone()) {
+                Ok(_) => (),
+                Err(e) => {
+                    log!("cannot bind index buffer: {:?}", e);
+                    return Err(CrystalError::RenderingError);
+                }
+            };
 
-            let index_count = obj.mesh.as_ref().unwrap().indices.len();
+            match command_buffer.bind_vertex_buffers(0, vec![(*vertex_buffer).clone()]) {
+                Ok(_) => (),
+                Err(e) => {
+                    log!("cannot bind vertex buffer: {:?}", e);
+                    return Err(CrystalError::RenderingError);
+                }
+            };
 
-            unsafe {
-                device_manager.device.cmd_bind_vertex_buffers(
-                    *command_buffer,
-                    0,
-                    &[vertex_buffer],
-                    &[0],
-                )
-            }
+            let index_count = obj.mesh.as_ref().unwrap().indices.len() as u32;
 
-            unsafe {
-                device_manager.device.cmd_draw_indexed(
-                    *command_buffer,
-                    index_count as u32,
-                    1,
-                    0 as u32,
-                    0 as i32,
-                    current_object_idx as u32,
-                )
-            }
+            match unsafe {
+                command_buffer.draw_indexed(index_count, 1, 0, 0, current_object_idx as u32)
+            } {
+                Ok(_) => (),
+                Err(e) => {
+                    log!("cannot draw indexed: {:?}", e);
+                    return Err(CrystalError::RenderingError);
+                }
+            };
 
             current_object_idx += 1;
         }
 
-        self.release_sampler_descriptor_sets();
         Ok(())
     }
 
-    fn get_sampler(
-        &mut self,
-        device_manager: Arc<DeviceManager>,
-        mip_levels: u32,
-        anisotropy_texels: f32,
-    ) -> CrystalResult<vk::Sampler> {
+    fn get_sampler(&mut self, image: &Image) -> CrystalResult<Arc<Sampler>> {
+        let mip_levels = image.mip_levels;
+        let anisotropy_texels = image.anisotropy_texels;
+
         match self.samplers.get(&mip_levels) {
-            Some(sampler) => return Ok(*sampler),
+            Some(sampler) => return Ok(sampler.clone()),
             None => (),
         };
 
-        let sampler_info = vk::SamplerCreateInfo::default()
-            .mag_filter(vk::Filter::LINEAR)
-            .min_filter(vk::Filter::LINEAR)
-            .address_mode_u(vk::SamplerAddressMode::REPEAT)
-            .address_mode_v(vk::SamplerAddressMode::REPEAT)
-            .address_mode_w(vk::SamplerAddressMode::REPEAT)
-            .anisotropy_enable(true)
-            .anisotropy_enable(anisotropy_texels > 1.)
-            .max_anisotropy(anisotropy_texels)
-            .border_color(vk::BorderColor::INT_OPAQUE_BLACK)
-            .unnormalized_coordinates(false)
-            .compare_enable(false)
-            .compare_op(vk::CompareOp::ALWAYS)
-            .mipmap_mode(vk::SamplerMipmapMode::LINEAR)
-            .mip_lod_bias(0.)
-            .min_lod(0.)
-            .max_lod(mip_levels as f32);
+        let create_info = SamplerCreateInfo {
+            mag_filter: Filter::Linear,
+            min_filter: Filter::Linear,
+            address_mode: [SamplerAddressMode::Repeat; 3],
+            anisotropy: Some(anisotropy_texels),
+            border_color: BorderColor::IntOpaqueBlack,
+            unnormalized_coordinates: false,
+            compare: None,
+            mipmap_mode: SamplerMipmapMode::Linear,
+            mip_lod_bias: 0.,
+            lod: 0.0..=mip_levels as f32,
+            ..Default::default()
+        };
 
-        let sampler = match unsafe { device_manager.device.create_sampler(&sampler_info, None) } {
+        let sampler = match Sampler::new(self.allocator.device().clone(), create_info) {
             Ok(sampler) => sampler,
             Err(e) => {
-                log!("cannot create sampler: {}", e);
+                log!("cannot create sampler: {:?}", e);
                 return Err(CrystalError::ImageError);
             }
         };
 
-        self.samplers.insert(mip_levels, sampler);
+        self.samplers.insert(mip_levels, sampler.clone());
 
         Ok(sampler)
-    }
-
-    fn release_sampler_descriptor_sets(&mut self) {
-        let mut to_delete_sets = vec![];
-
-        for &slot in self.sampler_binding_data.keys() {
-            if self
-                .sampler_binding_data_pool
-                .iter()
-                .find(|&&x| x == slot)
-                .is_none()
-            {
-                to_delete_sets.push(slot);
-            }
-        }
-
-        self.sampler_binding_data_pool.clear();
-
-        for to_delete in to_delete_sets {
-            self.sampler_binding_data.remove(&to_delete).unwrap();
-        }
-    }
-
-    pub(crate) fn init_sampler_descriptor_sets(
-        &mut self,
-        device_manager: Arc<DeviceManager>,
-        frames_in_flight: usize,
-        object_id: u64,
-        textures_set: &[Arc<VulkanTexture>],
-    ) -> CrystalResult<Vec<vk::DescriptorSet>> {
-        let texture_set_idx = match self.sampler_binding_data.get(&object_id) {
-            Some(&idx) => {
-                let sets = self.sampler_descriptor_sets
-                    [frames_in_flight as usize * idx..frames_in_flight as usize * (idx + 1)]
-                    .to_vec();
-                self.sampler_binding_data_pool.push(object_id);
-                return Ok(sets);
-            }
-            None => {
-                let mut idx = 0usize;
-                while self
-                    .sampler_binding_data
-                    .iter()
-                    .find(|binding| *binding.1 == idx)
-                    .is_some()
-                {
-                    idx += 1;
-                }
-                if idx >= self.max_instance_num as usize {
-                    log!("Exceeded number of maximum image number");
-                    return Err(CrystalError::DescriptorError);
-                }
-                self.sampler_binding_data.insert(object_id, idx);
-                self.sampler_binding_data_pool.push(object_id);
-                idx
-            }
-        };
-
-        let sets = self.sampler_descriptor_sets[frames_in_flight as usize * texture_set_idx
-            ..frames_in_flight as usize * (texture_set_idx + 1)]
-            .to_vec();
-
-        for current_frame in 0..frames_in_flight {
-            let mut image_info = vec![];
-
-            assert!(
-                (textures_set.len() as u32) <= self.image_views_sampled_num,
-                "fatal: the texture number limit for layout is exaggerated"
-            );
-
-            for texture in textures_set {
-                let sampler = self.get_sampler(
-                    device_manager.clone(),
-                    texture.image.mip_levels,
-                    texture.image.anisotropy_texels,
-                )?;
-
-                let descriptor_image_info = vk::DescriptorImageInfo::default()
-                    .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                    .image_view(texture.image.image_view)
-                    .sampler(sampler);
-
-                image_info.push(descriptor_image_info);
-            }
-
-            let mut descriptor_writes = vec![];
-
-            for image_view_idx in 0..textures_set.len() {
-                let sampler_descriptor_write = vk::WriteDescriptorSet::default()
-                    .dst_set(sets[current_frame])
-                    .dst_binding(image_view_idx as u32)
-                    .dst_array_element(0)
-                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                    .image_info(&image_info);
-
-                descriptor_writes.push(sampler_descriptor_write);
-            }
-
-            unsafe {
-                device_manager
-                    .device
-                    .update_descriptor_sets(&descriptor_writes, &[])
-            };
-        }
-
-        Ok(sets)
     }
 }

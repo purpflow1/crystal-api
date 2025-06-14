@@ -1,22 +1,20 @@
 #[derive(Clone)]
 #[repr(transparent)]
-pub struct GpuVec(Vec<u32>);
+pub struct GpuVec(Vec<u8>);
 
 impl GpuVec {
     pub fn new<T>(data: &[T]) -> Self {
         let size = data.len() * size_of::<T>();
-        assert!(size % 4 == 0);
-        let len = size / 4;
-        let mut tmp_v = Vec::<u32>::with_capacity(len);
+        let mut tmp_v = Vec::<u8>::with_capacity(size);
         unsafe {
-            tmp_v.set_len(len);
+            tmp_v.set_len(size);
             (data.as_ptr() as *const u8).copy_to(tmp_v.as_ptr() as *mut u8, size);
         };
 
         Self(tmp_v)
     }
 
-    pub fn as_slice(&self) -> &[u32] {
+    pub fn as_slice(&self) -> &[u8] {
         &self.0
     }
 }
