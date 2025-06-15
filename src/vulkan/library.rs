@@ -5,10 +5,7 @@ use std::{
     u64,
 };
 
-use ash::{
-    prelude::VkResult,
-    vk::{self, EXT_DEBUG_UTILS_NAME, KHR_SWAPCHAIN_NAME},
-};
+use ash::vk::{self, EXT_DEBUG_UTILS_NAME, KHR_SWAPCHAIN_NAME};
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
 use super::{
@@ -229,13 +226,19 @@ impl VulkanEntry {
             .as_vulkan()
             .expect("fatal: wrong type of RenderTarget, expected: VulkanRenderTarget");
 
-        let mut recreate_swapchain = false;
+        let mut swapchain_out_of_date = false;
+        let mut suboptimal = false;
 
         let now = match self.future.lock().unwrap().as_mut() {
             Some(future) => match future.await {
                 Ok(n) => n.wait().unwrap(),
-                Err((vk::Result::ERROR_OUT_OF_DATE_KHR | vk::Result::SUBOPTIMAL_KHR, sync)) => {
-                    recreate_swapchain = true;
+                Err((vk::Result::ERROR_OUT_OF_DATE_KHR, sync)) => {
+                    swapchain_out_of_date = true;
+                    suboptimal = true;
+                    GpuFuture::now_with_sync(self.device_manager.clone(), sync)
+                }
+                Err((vk::Result::SUBOPTIMAL_KHR, sync)) => {
+                    suboptimal = true;
                     GpuFuture::now_with_sync(self.device_manager.clone(), sync)
                 }
                 Err((e, _)) => {
@@ -245,16 +248,19 @@ impl VulkanEntry {
             None => GpuFuture::now(self.device_manager.clone()),
         };
 
-        if recreate_swapchain {
+        if swapchain_out_of_date {
             let images = self
                 .presentation
                 .swapchain
                 .recreate()
                 .expect("cannot recreate swapchain");
 
-            render_target
-                .update_resources(self.presentation.swapchain.extent(), images)
-                .expect("cannot update render target size");
+            if suboptimal {
+                render_target
+                    .update_resources(self.presentation.swapchain.extent(), images)
+                    .expect("cannot update render target size");
+            }
+
             *self.future.lock().unwrap() = None;
         }
 
