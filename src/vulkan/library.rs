@@ -142,15 +142,11 @@ impl GraphicsApi for VulkanEntry {
                 },
             )?);
 
-        match future
-            .clone()
-            .then_swapchain_present(
-                self.command_manager.present.clone().unwrap(),
-                &self.presentation,
-            )
-            .result()
-        {
-            Ok(()) => self.future = Some(future),
+        match future.clone().then_swapchain_present(
+            self.command_manager.present.clone().unwrap(),
+            &mut self.presentation,
+        ) {
+            Ok(future) => self.future = Some(future),
             Err(vk::Result::ERROR_OUT_OF_DATE_KHR | vk::Result::SUBOPTIMAL_KHR) => {
                 let images = self
                     .presentation
@@ -167,9 +163,6 @@ impl GraphicsApi for VulkanEntry {
                 panic!("failed to present queue: {}", e);
             }
         }
-
-        self.presentation.current_frame =
-            (self.presentation.current_frame + 1) % self.presentation.frames_in_flight as usize;
 
         Ok(())
     }

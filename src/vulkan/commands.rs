@@ -17,7 +17,6 @@ pub struct GpuFuture {
     device_manager: Arc<DeviceManager>,
     command_buffer: Arc<RwLock<CommandBufferManager>>,
     fence: RwLock<vk::Fence>,
-    result: RwLock<VkResult<()>>,
 }
 
 unsafe impl Send for GpuFuture {}
@@ -25,14 +24,12 @@ unsafe impl Sync for GpuFuture {}
 
 impl GpuFuture {
     pub fn now(device_manager: Arc<DeviceManager>) -> Arc<Self> {
-        Arc::new(Self {
+        Self::from_command_entry(
             device_manager,
-            command_buffer: Arc::new(RwLock::new(CommandBufferManager {
+            Arc::new(CommandBufferManager {
                 handler: vk::CommandBuffer::null(),
-            })),
-            fence: RwLock::new(vk::Fence::null()),
-            result: RwLock::new(Ok(())),
-        })
+            }),
+        )
     }
 
     fn from_command_entry(
@@ -45,20 +42,7 @@ impl GpuFuture {
             device_manager,
             command_buffer: Arc::new(RwLock::new(buffer)),
             fence: RwLock::new(vk::Fence::null()),
-            result: RwLock::new(Ok(())),
         })
-    }
-
-    pub fn result(self: Arc<Self>) -> VkResult<()> {
-        *self.result.read().unwrap()
-    }
-
-    pub fn unwrap(self: Arc<Self>) -> Arc<Self> {
-        match *self.result.read().unwrap() {
-            Ok(()) => (),
-            Err(e) => Err(e).unwrap(),
-        };
-        self
     }
 
     pub fn join(self: Arc<Self>, other: Arc<Self>) -> Arc<Self> {
@@ -66,16 +50,17 @@ impl GpuFuture {
         self
     }
 
-    pub fn wait(self: Arc<Self>) -> Arc<Self> {
-        *self.result.write().unwrap() = unsafe {
-            self.device_manager.device.clone().wait_for_fences(
-                &[*self.fence.read().unwrap()],
-                true,
-                u64::MAX,
-            )
+    pub fn wait(self: Arc<Self>) -> VkResult<Arc<Self>> {
+        let fence = *self.fence.read().unwrap();
+
+        unsafe {
+            self.device_manager
+                .device
+                .clone()
+                .wait_for_fences(&[fence], true, u64::MAX)?
         };
 
-        self
+        Ok(self)
     }
 
     pub fn acquire_next_image(
@@ -112,57 +97,49 @@ impl GpuFuture {
     pub fn then_swapchain_present(
         self: Arc<Self>,
         command_entry: Arc<CommandEntry>,
-        presentation: &Presentation,
-    ) -> Arc<GpuFuture> {
-        let command_buffers = &[self.command_buffer.read().unwrap().handler];
-        let wait_semaphores =
-            &[presentation.image_available_semaphores[presentation.current_frame]];
+        presentation: &mut Presentation,
+    ) -> VkResult<Arc<GpuFuture>> {
+        let swapchain = presentation.swapchain.clone();
+        let wait_semaphores = [presentation.image_available_semaphores[presentation.current_frame]];
         let signal_semaphores =
-            &[presentation.render_finished_semaphores[presentation.current_frame]];
-        let submit_info = vk::SubmitInfo::default()
-            .wait_semaphores(wait_semaphores)
-            .signal_semaphores(signal_semaphores)
-            .wait_dst_stage_mask(&[vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT])
-            .command_buffers(command_buffers);
+            [presentation.render_finished_semaphores[presentation.current_frame]];
 
         let fence = presentation.in_flight_fences[presentation.current_frame];
         *self.fence.write().unwrap() = fence;
 
-        match unsafe {
-            self.device_manager
-                .device
-                .queue_submit(command_entry.queue, &[submit_info], fence)
-        } {
-            Ok(()) => {}
-            Err(e) => {
-                *self.result.write().unwrap() = Err(e);
-                return self;
-            }
-        };
+        let swaphchains = [*swapchain.swapchain_khr.read().unwrap()];
+        let indices = [presentation.image_index];
+        let command_buffer = self.command_buffer.clone();
+        let device_manager = self.device_manager.clone();
 
-        let swaphchains = &[*presentation.swapchain.swapchain_khr.read().unwrap()];
-        let indices = &[presentation.image_index];
+        let command_buffers = [command_buffer.read().unwrap().handler];
+
+        let submit_info = vk::SubmitInfo::default()
+            .wait_semaphores(&wait_semaphores)
+            .signal_semaphores(&signal_semaphores)
+            .wait_dst_stage_mask(&[vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT])
+            .command_buffers(&command_buffers);
 
         let present_info = vk::PresentInfoKHR::default()
-            .wait_semaphores(signal_semaphores)
-            .swapchains(swaphchains)
-            .image_indices(indices);
+            .wait_semaphores(&signal_semaphores)
+            .swapchains(&swaphchains)
+            .image_indices(&indices);
 
-        match unsafe {
-            presentation
-                .swapchain
+        unsafe {
+            device_manager
+                .device
+                .queue_submit(command_entry.queue, &[submit_info], fence)?;
+            swapchain
                 .swapchain
                 .write()
                 .unwrap()
-                .queue_present(command_entry.queue, &present_info)
-        } {
-            Ok(_) => (),
-            Err(e) => {
-                *self.result.write().unwrap() = Err(e);
-            }
+                .queue_present(command_entry.queue, &present_info)?
         };
 
-        self
+        presentation.current_frame =
+            (presentation.current_frame + 1) % presentation.frames_in_flight as usize;
+
+        Ok(self)
     }
 }
 

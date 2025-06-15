@@ -23,7 +23,7 @@ use winit::{
 
 const MAX_INSTANCE_NUM: u64 = 3;
 const IMAGE_SAMPLED_NUM: u64 = 8;
-const MAX_FPS: u16 = 60;
+const MAX_FPS: u16 = 0;
 
 struct State {
     delta_time: Duration,
