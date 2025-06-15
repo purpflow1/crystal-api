@@ -1,13 +1,13 @@
 use crystal_api::{errors::CrystalResult, object::Object, vulkan::VulkanEntry, *};
+use pollster::FutureExt;
 
 use std::{
-    cell::RefCell,
     f32::consts::PI,
     fs::File,
     io::BufReader,
     iter::zip,
     path::Path,
-    sync::Arc,
+    sync::{Arc, RwLock},
     time::{Duration, SystemTime},
 };
 
@@ -49,12 +49,12 @@ struct Scene {
     ambient_lights: Vec<glam::Vec4>,
     point_lights: Vec<(glam::Vec4, glam::Vec4)>,
     direct_lights: Vec<(glam::Vec4, glam::Vec4)>,
-    objects_pbr: Vec<Arc<RefCell<Object>>>,
+    objects_pbr: Vec<Arc<RwLock<Object>>>,
 }
 
 struct Context {
     window: Option<Window>,
-    graphics: Option<Box<dyn GraphicsApi>>,
+    graphics: Option<Arc<VulkanEntry>>,
 
     layout_pbr: Option<Arc<dyn Layout>>,
 
@@ -209,9 +209,9 @@ impl ApplicationHandler for Context {
     fn about_to_wait(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
         let now = std::time::Instant::now();
 
-        let graphics = self.graphics.as_mut().unwrap();
+        let graphics = self.graphics.clone().unwrap();
 
-        let current_frame = graphics.get_current_frame();
+        let current_frame = graphics.current_frame();
 
         let layout_pbr = self.layout_pbr.clone().unwrap();
 
@@ -228,7 +228,7 @@ impl ApplicationHandler for Context {
         ];
 
         for (idx, object) in zip(0..self.scene.objects_pbr.len(), &self.scene.objects_pbr) {
-            let obj = object.borrow();
+            let obj = object.read().unwrap();
 
             layout_pbr.add_object_to_queue(object.clone());
 
@@ -315,9 +315,10 @@ impl ApplicationHandler for Context {
 
         drop(layout_pbr);
 
-        graphics
-            .render_and_present(vec![self.layout_pbr.as_ref().unwrap().clone()])
-            .unwrap();
+        let layouts = vec![self.layout_pbr.clone().unwrap()];
+
+        let future = graphics.render_and_present(layouts);
+        future.block_on().unwrap();
 
         if MAX_FPS != 0 && !event_loop.exiting() {
             let time_to_sleep = Duration::from_secs_f64(1. / MAX_FPS as f64)

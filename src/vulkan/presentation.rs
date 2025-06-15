@@ -355,8 +355,8 @@ pub struct Presentation {
     pub render_finished_semaphores: Vec<vk::Semaphore>,
     pub in_flight_fences: Vec<vk::Fence>,
 
-    pub current_frame: usize,
-    pub image_index: u32,
+    pub current_frame: RwLock<usize>,
+    pub image_index: RwLock<u32>,
 
     pub frames_in_flight: u32,
     pub msaa_samples: u8,
@@ -410,7 +410,7 @@ impl Presentation {
         surface: Arc<PresentSurface>,
         frames_in_flight: u32,
         msaa_samples: u8,
-    ) -> CrystalResult<Self> {
+    ) -> CrystalResult<Arc<Self>> {
         let mut image_available_semaphores = vec![];
         let mut render_finished_semaphores = vec![];
         let mut in_flight_fences = vec![];
@@ -455,7 +455,7 @@ impl Presentation {
             in_flight_fences.push(in_flight_fence);
         }
 
-        Ok(Presentation {
+        Ok(Arc::new(Presentation {
             device_manager,
             surface,
             swapchain,
@@ -467,8 +467,8 @@ impl Presentation {
             render_finished_semaphores,
             in_flight_fences,
 
-            current_frame: 0,
-            image_index: 0,
-        })
+            current_frame: RwLock::new(0),
+            image_index: RwLock::new(0),
+        }))
     }
 }

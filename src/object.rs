@@ -1,4 +1,7 @@
-use std::{cell::RefCell, sync::Arc};
+use std::{
+    cell::RefCell,
+    sync::{Arc, RwLock},
+};
 
 use crate::{ObjectMemoryManager, Pipeline, Texture, mesh::Mesh};
 
@@ -8,6 +11,9 @@ pub struct Object {
     pub(crate) memory_manager: Option<Box<dyn ObjectMemoryManager>>,
     pub textures: Option<Vec<(u32, Arc<dyn Texture>)>>,
 }
+
+unsafe impl Sync for Object {}
+unsafe impl Send for Object {}
 
 #[allow(dead_code)]
 impl Object {
@@ -33,8 +39,8 @@ impl Object {
         pipeline: Arc<dyn Pipeline>,
         mesh: Arc<Mesh>,
         textures: &[(u32, Arc<dyn Texture>)],
-    ) -> Arc<RefCell<Self>> {
-        Arc::new(RefCell::new(Self {
+    ) -> Arc<RwLock<Self>> {
+        Arc::new(RwLock::new(Self {
             pipeline,
             mesh: Some(mesh),
             memory_manager: None,

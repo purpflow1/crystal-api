@@ -19,11 +19,21 @@ pub struct GpuFuture {
     fence: RwLock<vk::Fence>,
 }
 
+impl Clone for GpuFuture {
+    fn clone(&self) -> Self {
+        Self {
+            device_manager: self.device_manager.clone(),
+            command_buffer: self.command_buffer.clone(),
+            fence: RwLock::new(*self.fence.read().unwrap()),
+        }
+    }
+}
+
 unsafe impl Send for GpuFuture {}
 unsafe impl Sync for GpuFuture {}
 
 impl GpuFuture {
-    pub fn now(device_manager: Arc<DeviceManager>) -> Arc<Self> {
+    pub fn now(device_manager: Arc<DeviceManager>) -> Box<Self> {
         Self::from_command_entry(
             device_manager,
             Arc::new(CommandBufferManager {
@@ -35,38 +45,41 @@ impl GpuFuture {
     fn from_command_entry(
         device_manager: Arc<DeviceManager>,
         buffer: Arc<CommandBufferManager>,
-    ) -> Arc<Self> {
+    ) -> Box<Self> {
         let buffer = (*buffer).clone();
 
-        Arc::new(Self {
+        Box::new(Self {
             device_manager,
             command_buffer: Arc::new(RwLock::new(buffer)),
             fence: RwLock::new(vk::Fence::null()),
         })
     }
 
-    pub fn join(self: Arc<Self>, other: Arc<Self>) -> Arc<Self> {
+    pub fn join(self: Box<Self>, other: Box<Self>) -> Box<Self> {
         *self.command_buffer.write().unwrap() = other.command_buffer.read().unwrap().clone();
         self
     }
 
-    pub fn wait(self: Arc<Self>) -> VkResult<Arc<Self>> {
+    pub fn wait(self: Box<Self>) -> VkResult<Box<Self>> {
         let fence = *self.fence.read().unwrap();
 
         unsafe {
             self.device_manager
                 .device
                 .clone()
-                .wait_for_fences(&[fence], true, u64::MAX)?
-        };
+                .wait_for_fences(&[fence], true, u64::MAX)?;
+        }
 
         Ok(self)
     }
 
-    pub fn acquire_next_image(
-        self: Arc<Self>,
-        presentation: &Presentation,
-    ) -> VkResult<(u32, bool)> {
+    pub fn boxed(&self) -> Box<Self> {
+        Box::new(self.clone())
+    }
+
+    pub fn acquire_next_image(&self, presentation: &Presentation) -> VkResult<(u32, bool)> {
+        let current_frame = presentation.current_frame.read().unwrap();
+
         unsafe {
             let result = presentation
                 .swapchain
@@ -76,11 +89,11 @@ impl GpuFuture {
                 .acquire_next_image(
                     *presentation.swapchain.swapchain_khr.read().unwrap(),
                     u64::MAX,
-                    presentation.image_available_semaphores[presentation.current_frame],
+                    presentation.image_available_semaphores[*current_frame],
                     vk::Fence::null(),
                 );
 
-            let next_fence = presentation.in_flight_fences[presentation.current_frame];
+            let next_fence = presentation.in_flight_fences[*current_frame];
             *self.fence.write().unwrap() = next_fence;
 
             if !next_fence.is_null() {
@@ -94,21 +107,23 @@ impl GpuFuture {
         }
     }
 
-    pub fn then_swapchain_present(
-        self: Arc<Self>,
+    pub async fn then_swapchain_present(
+        self: Box<Self>,
         command_entry: Arc<CommandEntry>,
-        presentation: &mut Presentation,
-    ) -> VkResult<Arc<GpuFuture>> {
+        presentation: Arc<Presentation>,
+    ) -> VkResult<Box<Self>> {
         let swapchain = presentation.swapchain.clone();
-        let wait_semaphores = [presentation.image_available_semaphores[presentation.current_frame]];
-        let signal_semaphores =
-            [presentation.render_finished_semaphores[presentation.current_frame]];
 
-        let fence = presentation.in_flight_fences[presentation.current_frame];
+        let mut current_frame = presentation.current_frame.write().unwrap();
+
+        let wait_semaphores = [presentation.image_available_semaphores[*current_frame]];
+        let signal_semaphores = [presentation.render_finished_semaphores[*current_frame]];
+
+        let fence = presentation.in_flight_fences[*current_frame];
         *self.fence.write().unwrap() = fence;
 
         let swaphchains = [*swapchain.swapchain_khr.read().unwrap()];
-        let indices = [presentation.image_index];
+        let indices = [*presentation.image_index.read().unwrap()];
         let command_buffer = self.command_buffer.clone();
         let device_manager = self.device_manager.clone();
 
@@ -125,10 +140,14 @@ impl GpuFuture {
             .swapchains(&swaphchains)
             .image_indices(&indices);
 
+        let command_entry = command_entry.clone();
+
         unsafe {
             device_manager
                 .device
-                .queue_submit(command_entry.queue, &[submit_info], fence)?;
+                .queue_submit(command_entry.queue, &[submit_info], fence)
+                .unwrap();
+
             swapchain
                 .swapchain
                 .write()
@@ -136,8 +155,7 @@ impl GpuFuture {
                 .queue_present(command_entry.queue, &present_info)?
         };
 
-        presentation.current_frame =
-            (presentation.current_frame + 1) % presentation.frames_in_flight as usize;
+        *current_frame = (*current_frame + 1) % presentation.frames_in_flight as usize;
 
         Ok(self)
     }
@@ -569,7 +587,7 @@ impl CommandEntry {
         &self,
         buffer_idx: usize,
         predicate: P,
-    ) -> CrystalResult<Arc<GpuFuture>>
+    ) -> CrystalResult<Box<GpuFuture>>
     where
         P: Fn(&vk::CommandBuffer, Arc<ash::Device>),
     {

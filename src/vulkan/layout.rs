@@ -1,5 +1,4 @@
 use std::{
-    cell::RefCell,
     collections::{BTreeMap, VecDeque},
     sync::{Arc, RwLock},
 };
@@ -40,7 +39,7 @@ pub struct VulkanLayout {
     sampler_binding_data: RwLock<BTreeMap<u64, usize>>,
     sampler_binding_data_pool: RwLock<Vec<u64>>,
     samplers: RwLock<BTreeMap<u32, vk::Sampler>>,
-    object_render_queue: RwLock<VecDeque<Arc<RefCell<Object>>>>,
+    object_render_queue: RwLock<VecDeque<Arc<RwLock<Object>>>>,
 }
 
 impl Drop for VulkanLayout {
@@ -91,7 +90,7 @@ impl traits::Layout for VulkanLayout {
         Some(self)
     }
 
-    fn add_object_to_queue(&self, object: Arc<RefCell<Object>>) {
+    fn add_object_to_queue(&self, object: Arc<RwLock<Object>>) {
         self.object_render_queue
             .try_write()
             .unwrap()
@@ -466,7 +465,8 @@ impl VulkanLayout {
                 .unwrap()
                 .pop_front()
                 .unwrap();
-            let mut obj = obj.borrow_mut();
+
+            let mut obj = obj.write().unwrap();
 
             match obj.mesh.clone() {
                 Some(mesh) => match obj.memory_manager {

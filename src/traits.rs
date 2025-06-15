@@ -1,32 +1,10 @@
-use std::{cell::RefCell, sync::Arc};
+use std::sync::{Arc, RwLock};
 
 use crate::{
-    GpuVec, errors::CrystalResult, images::Image2D, mesh::Attribute, object::Object,
-    shader::Shader, vulkan,
+    GpuVec, errors::CrystalResult, mesh::Attribute, object::Object, shader::Shader, vulkan,
 };
 
-pub trait GraphicsApi {
-    fn render_and_present(&mut self, layouts: Vec<Arc<dyn Layout>>) -> CrystalResult<()>;
-
-    fn create_layout(
-        &self,
-        frames_in_flight: u32,
-        image_sampled_num: u32,
-        max_instance_num: u64,
-        buffers: &[(bool, u64)],
-    ) -> CrystalResult<Arc<dyn Layout>>;
-
-    fn create_texture(
-        &self,
-        image: &Image2D,
-        anisotropy_texels: f32,
-    ) -> CrystalResult<Arc<dyn Texture>>;
-
-    fn get_viewport(&self) -> Arc<dyn RenderTarget>;
-    fn get_current_frame(&self) -> usize;
-}
-
-pub trait RenderTarget {
+pub trait RenderTarget: Sync + Send {
     fn create_graphics_pipeline(
         &self,
         layout: Arc<dyn Layout>,
@@ -39,12 +17,12 @@ pub trait RenderTarget {
     }
 }
 
-pub trait Layout {
+pub trait Layout: Sync + Send {
     fn as_vulkan(self: Arc<Self>) -> Option<Arc<vulkan::VulkanLayout>> {
         None
     }
 
-    fn add_object_to_queue(&self, object: Arc<RefCell<Object>>);
+    fn add_object_to_queue(&self, object: Arc<RwLock<Object>>);
 
     fn write_to_buffer(
         &self,
@@ -56,13 +34,13 @@ pub trait Layout {
     ) -> CrystalResult<()>;
 }
 
-pub trait Texture {
+pub trait Texture: Sync + Send {
     fn as_vulkan(self: Arc<Self>) -> Option<Arc<vulkan::VulkanTexture>> {
         None
     }
 }
 
-pub(crate) trait ObjectMemoryManager {
+pub(crate) trait ObjectMemoryManager: Sync + Send {
     fn as_vulkan_mut(&mut self) -> Option<&mut vulkan::VulkanObjectMemoryManager> {
         None
     }
@@ -72,7 +50,7 @@ pub(crate) trait ObjectMemoryManager {
     }
 }
 
-pub trait Pipeline {
+pub trait Pipeline: Sync + Send {
     fn as_vulkan(self: Arc<Self>) -> Option<Arc<vulkan::VulkanPipeline>> {
         None
     }

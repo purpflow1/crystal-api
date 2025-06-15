@@ -20,6 +20,9 @@ pub struct BufferManager {
     size: u64,
 }
 
+unsafe impl Sync for BufferManager {}
+unsafe impl Send for BufferManager {}
+
 impl Drop for BufferManager {
     fn drop(&mut self) {
         unsafe {
