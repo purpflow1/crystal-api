@@ -10,6 +10,8 @@ pub enum ShaderStage {
     Vertex,
     Fragment,
     Geometry,
+    Tesselate,
+    Compute,
 }
 
 pub struct Shader {

@@ -1,4 +1,4 @@
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 
 use ash::{
     Entry,
@@ -351,34 +351,11 @@ pub struct Presentation {
     pub surface: Arc<PresentSurface>,
     pub swapchain: Arc<Swapchain>,
 
-    pub image_available_semaphores: Vec<vk::Semaphore>,
-    pub render_finished_semaphores: Vec<vk::Semaphore>,
-    pub in_flight_fences: Vec<vk::Fence>,
-
-    pub current_frame: RwLock<usize>,
-    pub image_index: RwLock<u32>,
+    pub current_frame: Mutex<usize>,
+    pub image_index: Mutex<u32>,
 
     pub frames_in_flight: u32,
     pub msaa_samples: u8,
-}
-
-impl Drop for Presentation {
-    fn drop(&mut self) {
-        unsafe {
-            self.image_available_semaphores
-                .iter()
-                .chain(self.render_finished_semaphores.iter())
-                .for_each(|&semaphore| {
-                    self.device_manager
-                        .device
-                        .destroy_semaphore(semaphore, None)
-                });
-
-            self.in_flight_fences
-                .iter()
-                .for_each(|&fence| self.device_manager.device.destroy_fence(fence, None));
-        }
-    }
 }
 
 impl Presentation {
@@ -411,49 +388,7 @@ impl Presentation {
         frames_in_flight: u32,
         msaa_samples: u8,
     ) -> CrystalResult<Arc<Self>> {
-        let mut image_available_semaphores = vec![];
-        let mut render_finished_semaphores = vec![];
-        let mut in_flight_fences = vec![];
-
         let swapchain = Swapchain::new(device_manager.clone(), surface.clone())?;
-
-        for _ in 0..swapchain.swapchain_info.as_ref().image_count {
-            let semaphore_create_info = vk::SemaphoreCreateInfo::default();
-
-            for i in 0..2 {
-                let semaphore = match unsafe {
-                    device_manager
-                        .device
-                        .create_semaphore(&semaphore_create_info, None)
-                } {
-                    Ok(semaphore) => semaphore,
-                    Err(e) => {
-                        log!("cannot create semaphore: {}", e);
-                        return Err(CrystalError::SwapChainIsNotSupported);
-                    }
-                };
-
-                if i == 0 {
-                    render_finished_semaphores.push(semaphore);
-                } else {
-                    image_available_semaphores.push(semaphore);
-                }
-            }
-
-            let fence_create_info =
-                vk::FenceCreateInfo::default().flags(vk::FenceCreateFlags::SIGNALED);
-
-            let in_flight_fence =
-                match unsafe { device_manager.device.create_fence(&fence_create_info, None) } {
-                    Ok(fence) => fence,
-                    Err(e) => {
-                        log!("cannot create fence: {}", e);
-                        return Err(CrystalError::SwapChainIsNotSupported);
-                    }
-                };
-
-            in_flight_fences.push(in_flight_fence);
-        }
 
         Ok(Arc::new(Presentation {
             device_manager,
@@ -463,12 +398,8 @@ impl Presentation {
             frames_in_flight,
             msaa_samples,
 
-            image_available_semaphores,
-            render_finished_semaphores,
-            in_flight_fences,
-
-            current_frame: RwLock::new(0),
-            image_index: RwLock::new(0),
+            current_frame: Mutex::new(0),
+            image_index: Mutex::new(0),
         }))
     }
 }

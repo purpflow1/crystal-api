@@ -1,7 +1,7 @@
 use std::{
     collections::BTreeMap,
     ffi::CStr,
-    sync::{Arc, RwLock},
+    sync::{Arc, Mutex},
     u64,
 };
 
@@ -28,7 +28,7 @@ use crate::{
     errors::{CrystalError, CrystalResult},
     images::Image2D,
     traits::{self, Layout},
-    vulkan::commands::GpuFuture,
+    vulkan::commands::{GpuFuture, GpuSync},
 };
 
 pub struct VulkanEntry {
@@ -37,7 +37,13 @@ pub struct VulkanEntry {
     _debug_utils_messanger: Option<DebugUtilsMessanger>,
 
     presentation: Arc<Presentation>,
-    future: RwLock<Option<std::pin::Pin<Box<dyn Future<Output = VkResult<Box<GpuFuture>>>>>>>,
+    future: Mutex<
+        Option<
+            std::pin::Pin<
+                Box<dyn Future<Output = Result<Box<GpuFuture>, (vk::Result, Arc<Mutex<GpuSync>>)>>>,
+            >,
+        >,
+    >,
 
     pub render_targets: BTreeMap<u16, Arc<VulkanRenderTarget>>,
 }
@@ -203,14 +209,14 @@ impl VulkanEntry {
             _debug_utils_messanger: None,
 
             presentation,
-            future: RwLock::new(None),
+            future: Mutex::new(None),
 
             render_targets,
         }))
     }
 
     pub fn current_frame(&self) -> usize {
-        *self.presentation.current_frame.read().unwrap()
+        *self.presentation.current_frame.lock().unwrap()
     }
 
     pub async fn render_and_present(
@@ -225,27 +231,17 @@ impl VulkanEntry {
 
         let mut recreate_swapchain = false;
 
-        let now = match self.future.write().unwrap().as_mut() {
-            Some(future) => {
-                let mut now = None;
-
-                match future.await {
-                    Ok(n) => {
-                        now = Some(n.wait().unwrap());
-                    }
-                    Err(vk::Result::ERROR_OUT_OF_DATE_KHR | vk::Result::SUBOPTIMAL_KHR) => {
-                        recreate_swapchain = true;
-                    }
-                    Err(e) => {
-                        panic!("failed to present queue: {}", e);
-                    }
-                };
-
-                match now {
-                    Some(now) => now,
-                    None => GpuFuture::now(self.device_manager.clone()),
+        let now = match self.future.lock().unwrap().as_mut() {
+            Some(future) => match future.await {
+                Ok(n) => n.wait().unwrap(),
+                Err((vk::Result::ERROR_OUT_OF_DATE_KHR | vk::Result::SUBOPTIMAL_KHR, sync)) => {
+                    recreate_swapchain = true;
+                    GpuFuture::now_with_sync(self.device_manager.clone(), sync)
                 }
-            }
+                Err((e, _)) => {
+                    panic!("failed to present queue: {}", e);
+                }
+            },
             None => GpuFuture::now(self.device_manager.clone()),
         };
 
@@ -259,11 +255,11 @@ impl VulkanEntry {
             render_target
                 .update_resources(self.presentation.swapchain.extent(), images)
                 .expect("cannot update render target size");
-            *self.future.write().unwrap() = None;
+            *self.future.lock().unwrap() = None;
         }
 
         match now.acquire_next_image(&self.presentation) {
-            Ok((idx, _)) => *self.presentation.image_index.write().unwrap() = idx,
+            Ok((idx, _)) => *self.presentation.image_index.lock().unwrap() = idx,
             Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
                 let images = self.presentation.swapchain.recreate()?;
                 render_target.update_resources(self.presentation.swapchain.extent(), images)?;
@@ -275,7 +271,7 @@ impl VulkanEntry {
             }
         };
 
-        let current_frame = *self.presentation.current_frame.read().unwrap();
+        let current_frame = self.presentation.current_frame.lock().unwrap();
 
         let color = 0.2f32;
         let mut clear_color = vk::ClearColorValue::default();
@@ -297,12 +293,12 @@ impl VulkanEntry {
                 .graphics
                 .clone()
                 .unwrap()
-                .record_command_buffer(current_frame, |command_buffer, device| {
+                .record_command_buffer(*current_frame, |command_buffer, device| {
                     let render_pass_begin = vk::RenderPassBeginInfo::default()
                         .render_pass(render_target.render_pass)
                         .framebuffer(
                             *render_target.framebuffers
-                                [*self.presentation.image_index.read().unwrap() as usize]
+                                [*self.presentation.image_index.lock().unwrap() as usize]
                                 .read()
                                 .unwrap(),
                         )
@@ -354,7 +350,7 @@ impl VulkanEntry {
                                 self.device_manager.clone(),
                                 command_buffer,
                                 self.presentation.frames_in_flight as usize,
-                                current_frame,
+                                *current_frame,
                             )
                             .unwrap();
                     }
@@ -363,12 +359,14 @@ impl VulkanEntry {
                 })?,
         );
 
+        drop(current_frame);
+
         let future = gpu_future.then_swapchain_present(
             self.command_manager.present.clone().unwrap(),
             self.presentation.clone(),
         );
 
-        *self.future.write().unwrap() = Some(Box::pin(future));
+        *self.future.lock().unwrap() = Some(Box::pin(future));
 
         Ok(())
     }

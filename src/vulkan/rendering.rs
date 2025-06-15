@@ -121,6 +121,7 @@ impl VulkanPipeline {
                 ShaderStage::Vertex => vk::ShaderStageFlags::VERTEX,
                 ShaderStage::Fragment => vk::ShaderStageFlags::FRAGMENT,
                 ShaderStage::Geometry => vk::ShaderStageFlags::GEOMETRY,
+                _ => unimplemented!(),
             };
 
             let shader_module_create_info =

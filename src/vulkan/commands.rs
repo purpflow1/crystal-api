@@ -1,4 +1,4 @@
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 
 use ash::{
     prelude::VkResult,
@@ -13,26 +13,161 @@ use crate::{
 
 use super::images::Image;
 
+pub struct GpuSync {
+    device_manager: Arc<DeviceManager>,
+
+    image_available_semaphores: Vec<vk::Semaphore>,
+    render_finished_semaphores: Vec<vk::Semaphore>,
+    in_flight_fences: Vec<vk::Fence>,
+
+    pub n_pass: Mutex<usize>,
+}
+
+impl Drop for GpuSync {
+    fn drop(&mut self) {
+        unsafe {
+            self.image_available_semaphores
+                .iter()
+                .chain(self.render_finished_semaphores.iter())
+                .for_each(|&semaphore| {
+                    self.device_manager
+                        .device
+                        .destroy_semaphore(semaphore, None)
+                });
+
+            self.in_flight_fences
+                .iter()
+                .for_each(|&fence| self.device_manager.device.destroy_fence(fence, None));
+        }
+    }
+}
+
+impl GpuSync {
+    fn new(device_manager: Arc<DeviceManager>) -> CrystalResult<Self> {
+        let mut image_available_semaphores = vec![];
+        let mut render_finished_semaphores = vec![];
+        let mut in_flight_fences = vec![];
+
+        for _ in 0..2 {
+            let (semaphore_create_info, fence_create_info) = Default::default();
+
+            for i in 0..2 {
+                let semaphore = match unsafe {
+                    device_manager
+                        .device
+                        .create_semaphore(&semaphore_create_info, None)
+                } {
+                    Ok(semaphore) => semaphore,
+                    Err(e) => {
+                        log!("cannot create semaphore: {}", e);
+                        return Err(CrystalError::SyncError);
+                    }
+                };
+
+                if i == 0 {
+                    render_finished_semaphores.push(semaphore);
+                } else {
+                    image_available_semaphores.push(semaphore);
+                }
+            }
+
+            let in_flight_fence =
+                match unsafe { device_manager.device.create_fence(&fence_create_info, None) } {
+                    Ok(fence) => fence,
+                    Err(e) => {
+                        log!("cannot create fence: {}", e);
+                        return Err(CrystalError::SwapChainIsNotSupported);
+                    }
+                };
+
+            in_flight_fences.push(in_flight_fence);
+        }
+        Ok(Self {
+            device_manager,
+            image_available_semaphores,
+            render_finished_semaphores,
+            in_flight_fences,
+            n_pass: Mutex::new(0),
+        })
+    }
+
+    fn wait_for_last_fence(&self) -> VkResult<()> {
+        let (fence, _, _) = self.get_last_resources();
+        unsafe {
+            self.device_manager
+                .device
+                .clone()
+                .wait_for_fences(&[fence], true, u64::MAX)
+        }
+    }
+
+    fn wait_for_fence(&self) -> VkResult<()> {
+        let (fence, _, _) = self.get_resources();
+        unsafe {
+            self.device_manager
+                .device
+                .clone()
+                .wait_for_fences(&[fence], true, u64::MAX)
+        }
+    }
+
+    fn get_resources(&self) -> (vk::Fence, vk::Semaphore, vk::Semaphore) {
+        let n_pass = *self.n_pass.lock().unwrap();
+
+        (
+            self.in_flight_fences[n_pass],
+            self.image_available_semaphores[n_pass],
+            self.render_finished_semaphores[n_pass],
+        )
+    }
+
+    fn get_last_resources(&self) -> (vk::Fence, vk::Semaphore, vk::Semaphore) {
+        let n_pass = (*self.n_pass.lock().unwrap() + 1) % 2;
+        (
+            self.in_flight_fences[n_pass],
+            self.image_available_semaphores[n_pass],
+            self.render_finished_semaphores[n_pass],
+        )
+    }
+
+    fn reset_fence(&self) -> VkResult<()> {
+        let fence = self.in_flight_fences[*self.n_pass.lock().unwrap()];
+
+        if !fence.is_null() {
+            unsafe { self.device_manager.device.clone().reset_fences(&[fence]) }
+        } else {
+            Ok(())
+        }
+    }
+
+    fn next_pass(&self) {
+        let mut n_pass = self.n_pass.lock().unwrap();
+        *n_pass = (*n_pass + 1) % 2;
+    }
+}
+
 pub struct GpuFuture {
     device_manager: Arc<DeviceManager>,
     command_buffer: Arc<RwLock<CommandBufferManager>>,
-    fence: RwLock<vk::Fence>,
-}
-
-impl Clone for GpuFuture {
-    fn clone(&self) -> Self {
-        Self {
-            device_manager: self.device_manager.clone(),
-            command_buffer: self.command_buffer.clone(),
-            fence: RwLock::new(*self.fence.read().unwrap()),
-        }
-    }
+    sync: Arc<Mutex<GpuSync>>,
 }
 
 unsafe impl Send for GpuFuture {}
 unsafe impl Sync for GpuFuture {}
 
 impl GpuFuture {
+    pub fn now_with_sync(
+        device_manager: Arc<DeviceManager>,
+        sync: Arc<Mutex<GpuSync>>,
+    ) -> Box<Self> {
+        Box::new(Self {
+            device_manager: device_manager.clone(),
+            command_buffer: Arc::new(RwLock::new(CommandBufferManager {
+                handler: vk::CommandBuffer::null(),
+            })),
+            sync,
+        })
+    }
     pub fn now(device_manager: Arc<DeviceManager>) -> Box<Self> {
         Self::from_command_entry(
             device_manager,
@@ -49,9 +184,9 @@ impl GpuFuture {
         let buffer = (*buffer).clone();
 
         Box::new(Self {
-            device_manager,
+            device_manager: device_manager.clone(),
             command_buffer: Arc::new(RwLock::new(buffer)),
-            fence: RwLock::new(vk::Fence::null()),
+            sync: Arc::new(Mutex::new(GpuSync::new(device_manager).unwrap())),
         })
     }
 
@@ -61,27 +196,20 @@ impl GpuFuture {
     }
 
     pub fn wait(self: Box<Self>) -> VkResult<Box<Self>> {
-        let fence = *self.fence.read().unwrap();
-
-        unsafe {
-            self.device_manager
-                .device
-                .clone()
-                .wait_for_fences(&[fence], true, u64::MAX)?;
-        }
+        self.sync.lock().unwrap().wait_for_last_fence()?;
 
         Ok(self)
     }
 
-    pub fn boxed(&self) -> Box<Self> {
-        Box::new(self.clone())
-    }
-
     pub fn acquire_next_image(&self, presentation: &Presentation) -> VkResult<(u32, bool)> {
-        let current_frame = presentation.current_frame.read().unwrap();
+        let sync = self.sync.lock().unwrap();
+
+        let (_, image_available_semaphore, _) = sync.get_resources();
+
+        let result;
 
         unsafe {
-            let result = presentation
+            result = presentation
                 .swapchain
                 .swapchain
                 .write()
@@ -89,58 +217,50 @@ impl GpuFuture {
                 .acquire_next_image(
                     *presentation.swapchain.swapchain_khr.read().unwrap(),
                     u64::MAX,
-                    presentation.image_available_semaphores[*current_frame],
+                    image_available_semaphore,
                     vk::Fence::null(),
                 );
-
-            let next_fence = presentation.in_flight_fences[*current_frame];
-            *self.fence.write().unwrap() = next_fence;
-
-            if !next_fence.is_null() {
-                self.device_manager
-                    .device
-                    .clone()
-                    .reset_fences(&[next_fence])?;
-            }
-
-            result
         }
+
+        sync.reset_fence().unwrap();
+
+        result
     }
 
     pub async fn then_swapchain_present(
         self: Box<Self>,
         command_entry: Arc<CommandEntry>,
         presentation: Arc<Presentation>,
-    ) -> VkResult<Box<Self>> {
+    ) -> Result<Box<Self>, (vk::Result, Arc<Mutex<GpuSync>>)> {
         let swapchain = presentation.swapchain.clone();
 
-        let mut current_frame = presentation.current_frame.write().unwrap();
+        let sync = self.sync.lock().unwrap();
+        let (fence, image_available_semaphore, render_finished_semaphore) = sync.get_resources();
 
-        let wait_semaphores = [presentation.image_available_semaphores[*current_frame]];
-        let signal_semaphores = [presentation.render_finished_semaphores[*current_frame]];
-
-        let fence = presentation.in_flight_fences[*current_frame];
-        *self.fence.write().unwrap() = fence;
+        let image_semaphores = [image_available_semaphore];
+        let render_semaphores = [render_finished_semaphore];
 
         let swaphchains = [*swapchain.swapchain_khr.read().unwrap()];
-        let indices = [*presentation.image_index.read().unwrap()];
+        let indices = [*presentation.image_index.lock().unwrap()];
         let command_buffer = self.command_buffer.clone();
         let device_manager = self.device_manager.clone();
 
         let command_buffers = [command_buffer.read().unwrap().handler];
 
         let submit_info = vk::SubmitInfo::default()
-            .wait_semaphores(&wait_semaphores)
-            .signal_semaphores(&signal_semaphores)
+            .wait_semaphores(&image_semaphores)
+            .signal_semaphores(&render_semaphores)
             .wait_dst_stage_mask(&[vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT])
             .command_buffers(&command_buffers);
 
         let present_info = vk::PresentInfoKHR::default()
-            .wait_semaphores(&signal_semaphores)
+            .wait_semaphores(&render_semaphores)
             .swapchains(&swaphchains)
             .image_indices(&indices);
 
         let command_entry = command_entry.clone();
+
+        let result;
 
         unsafe {
             device_manager
@@ -148,14 +268,20 @@ impl GpuFuture {
                 .queue_submit(command_entry.queue, &[submit_info], fence)
                 .unwrap();
 
-            swapchain
+            result = swapchain
                 .swapchain
                 .write()
                 .unwrap()
-                .queue_present(command_entry.queue, &present_info)?
+                .queue_present(command_entry.queue, &present_info);
         };
 
-        *current_frame = (*current_frame + 1) % presentation.frames_in_flight as usize;
+        if result.is_ok() {
+            sync.next_pass();
+        } else {
+            return Err((result.err().unwrap(), self.sync.clone()));
+        }
+
+        drop(sync);
 
         Ok(self)
     }
