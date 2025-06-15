@@ -43,7 +43,7 @@ pub fn find_depth_format(
 }
 
 pub struct DepthResources {
-    pub image: Image,
+    pub image: Arc<Image>,
 }
 
 impl DepthResources {

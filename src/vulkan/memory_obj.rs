@@ -10,8 +10,8 @@ use super::devices::DeviceManager;
 use super::memory::BufferManager;
 
 pub struct VulkanObjectMemoryManager {
-    pub vertex_buffer_manager: BufferManager,
-    pub index_buffer_manager: BufferManager,
+    pub vertex_buffer_manager: Arc<BufferManager>,
+    pub index_buffer_manager: Arc<BufferManager>,
 }
 
 impl traits::ObjectMemoryManager for VulkanObjectMemoryManager {

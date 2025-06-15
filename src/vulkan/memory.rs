@@ -1,4 +1,7 @@
-use std::{ffi::c_void, sync::Arc};
+use std::{
+    ffi::c_void,
+    sync::{Arc, RwLock},
+};
 
 use ash::vk;
 
@@ -13,8 +16,22 @@ pub struct BufferManager {
     device_manager: Arc<DeviceManager>,
     pub buffer: vk::Buffer,
     device_memory: vk::DeviceMemory,
-    mapped_memory: Option<*mut c_void>,
+    mapped_memory: RwLock<Option<*mut c_void>>,
     size: u64,
+}
+
+impl Drop for BufferManager {
+    fn drop(&mut self) {
+        unsafe {
+            if let Some(_) = *self.mapped_memory.read().unwrap() {
+                self.device_manager.device.unmap_memory(self.device_memory);
+            }
+            self.device_manager
+                .device
+                .free_memory(self.device_memory, None);
+            self.device_manager.device.destroy_buffer(self.buffer, None);
+        }
+    }
 }
 
 impl BufferManager {
@@ -23,7 +40,7 @@ impl BufferManager {
         size: u64,
         usage: vk::BufferUsageFlags,
         properties: vk::MemoryPropertyFlags,
-    ) -> CrystalResult<Self> {
+    ) -> CrystalResult<Arc<Self>> {
         let create_info = vk::BufferCreateInfo::default()
             .size(size)
             .usage(usage)
@@ -71,21 +88,21 @@ impl BufferManager {
             }
         };
 
-        Ok(Self {
+        Ok(Arc::new(Self {
             device_manager,
             buffer,
             device_memory,
-            mapped_memory: None,
+            mapped_memory: RwLock::new(None),
             size,
-        })
+        }))
     }
 
-    pub fn map_memory(&mut self, size: u64, offset: u64) -> CrystalResult<()> {
-        if self.mapped_memory.is_some() {
+    pub fn map_memory(&self, size: u64, offset: u64) -> CrystalResult<()> {
+        if self.mapped_memory.read().unwrap().is_some() {
             unsafe { self.device_manager.device.unmap_memory(self.device_memory) };
         }
 
-        self.mapped_memory = match unsafe {
+        *self.mapped_memory.write().unwrap() = match unsafe {
             self.device_manager.device.map_memory(
                 self.device_memory,
                 offset,
@@ -116,6 +133,8 @@ impl BufferManager {
         unsafe {
             let ptr = self
                 .mapped_memory
+                .read()
+                .unwrap()
                 .unwrap()
                 .byte_add(offset * size_of::<T>());
             ptr.copy_from(

@@ -1,7 +1,4 @@
-use std::{
-    cell::{Ref, RefCell},
-    sync::Arc,
-};
+use std::{cell::RefCell, sync::Arc};
 
 use crate::{
     GpuVec, errors::CrystalResult, images::Image2D, mesh::Attribute, object::Object,
@@ -9,7 +6,7 @@ use crate::{
 };
 
 pub trait GraphicsApi {
-    fn render(&mut self, layouts: &[Arc<RefCell<dyn Layout>>]) -> CrystalResult<()>;
+    fn render_and_present(&mut self, layouts: Vec<Arc<dyn Layout>>) -> CrystalResult<()>;
 
     fn create_layout(
         &self,
@@ -17,7 +14,7 @@ pub trait GraphicsApi {
         image_sampled_num: u32,
         max_instance_num: u64,
         buffers: &[(bool, u64)],
-    ) -> CrystalResult<Arc<RefCell<dyn Layout>>>;
+    ) -> CrystalResult<Arc<dyn Layout>>;
 
     fn create_texture(
         &self,
@@ -25,31 +22,31 @@ pub trait GraphicsApi {
         anisotropy_texels: f32,
     ) -> CrystalResult<Arc<dyn Texture>>;
 
-    fn get_viewport(&self) -> Arc<RefCell<dyn RenderTarget>>;
+    fn get_viewport(&self) -> Arc<dyn RenderTarget>;
     fn get_current_frame(&self) -> usize;
 }
 
 pub trait RenderTarget {
     fn create_graphics_pipeline(
         &self,
-        layout: Ref<dyn Layout>,
+        layout: Arc<dyn Layout>,
         shaders: &[Shader],
         attributes: &[Attribute],
     ) -> CrystalResult<Arc<dyn Pipeline>>;
 
-    fn update_size(&mut self, width: u32, height: u32) -> CrystalResult<()>;
+    fn update_size(&self, width: u32, height: u32) -> CrystalResult<()>;
+
+    fn as_vulkan(self: Arc<Self>) -> Option<Arc<vulkan::VulkanRenderTarget>> {
+        None
+    }
 }
 
 pub trait Layout {
-    fn as_vulkan_mut(&mut self) -> Option<&mut vulkan::VulkanLayout> {
+    fn as_vulkan(self: Arc<Self>) -> Option<Arc<vulkan::VulkanLayout>> {
         None
     }
 
-    fn as_vulkan_ref(&self) -> Option<&vulkan::VulkanLayout> {
-        None
-    }
-
-    fn add_object_to_queue(&mut self, object: Arc<RefCell<Object>>);
+    fn add_object_to_queue(&self, object: Arc<RefCell<Object>>);
 
     fn write_to_buffer(
         &self,
@@ -62,7 +59,7 @@ pub trait Layout {
 }
 
 pub trait Texture {
-    fn as_vulkan_arc(self: Arc<Self>) -> Option<Arc<vulkan::VulkanTexture>> {
+    fn as_vulkan(self: Arc<Self>) -> Option<Arc<vulkan::VulkanTexture>> {
         None
     }
 }
@@ -78,11 +75,7 @@ pub(crate) trait ObjectMemoryManager {
 }
 
 pub trait Pipeline {
-    fn as_vulkan_mut(&mut self) -> Option<&mut ash::vk::Pipeline> {
-        None
-    }
-
-    fn as_vulkan_ref(&self) -> Option<&ash::vk::Pipeline> {
+    fn as_vulkan(self: Arc<Self>) -> Option<Arc<vulkan::VulkanPipeline>> {
         None
     }
 }

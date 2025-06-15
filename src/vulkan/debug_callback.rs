@@ -16,6 +16,15 @@ pub struct DebugUtilsMessanger {
     _debug_utils_messanger: vk::DebugUtilsMessengerEXT,
 }
 
+impl Drop for DebugUtilsMessanger {
+    fn drop(&mut self) {
+        unsafe {
+            self._debug_utils
+                .destroy_debug_utils_messenger(self._debug_utils_messanger, None);
+        }
+    }
+}
+
 #[allow(unused_variables)]
 unsafe extern "system" fn debug_callback(
     message_severity: DebugUtilsMessageSeverityFlagsEXT,
@@ -28,10 +37,8 @@ unsafe extern "system" fn debug_callback(
         Some(cstr) => {
             if message_severity.contains(DebugUtilsMessageSeverityFlagsEXT::ERROR) {
                 panic!("fatal: {}", cstr.to_str().unwrap());
-            } else if message_severity.contains(DebugUtilsMessageSeverityFlagsEXT::INFO) {
-                log!("INFO: {}", cstr.to_str().unwrap());
             } else {
-                log!("DEBUG_CALLBACK: {}", cstr.to_str().unwrap());
+                log!("DEBUG: {}", cstr.to_str().unwrap());
             }
         }
         None => log!("debug callback was called, but invalid callback data was provided"),

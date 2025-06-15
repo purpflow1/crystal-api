@@ -1,4 +1,8 @@
-use std::{cell::Ref, ffi::CString, iter::zip, sync::Arc};
+use std::{
+    ffi::CString,
+    iter::zip,
+    sync::{Arc, RwLock},
+};
 
 use ash::vk;
 
@@ -19,49 +23,104 @@ use super::{
 
 pub struct VulkanRenderTarget {
     device_manager: Arc<DeviceManager>,
-    pub extent: vk::Extent2D,
+    pub extent: RwLock<vk::Extent2D>,
     pub render_pass: vk::RenderPass,
 
     pub framebuffers: Vec<vk::Framebuffer>,
+    pub color_images: Vec<Arc<Image>>,
     depth_resources: Vec<DepthResources>,
 
     pub msaa_samples: vk::SampleCountFlags,
 }
 
-impl traits::Pipeline for vk::Pipeline {
-    fn as_vulkan_mut(&mut self) -> Option<&mut ash::vk::Pipeline> {
-        Some(self)
-    }
+impl Drop for VulkanRenderTarget {
+    fn drop(&mut self) {
+        unsafe {
+            self.framebuffers.iter().for_each(|&framebuffer| {
+                self.device_manager
+                    .device
+                    .destroy_framebuffer(framebuffer, None)
+            });
 
-    fn as_vulkan_ref(&self) -> Option<&ash::vk::Pipeline> {
-        Some(self)
+            self.device_manager
+                .device
+                .destroy_render_pass(self.render_pass, None);
+        }
     }
 }
 
-impl traits::RenderTarget for VulkanRenderTarget {
-    fn update_size(&mut self, width: u32, height: u32) -> CrystalResult<()> {
-        self.extent = vk::Extent2D { width, height };
-        Ok(())
+#[derive(Clone)]
+struct ShaderStageInfo {
+    device_manager: Arc<DeviceManager>,
+    module: vk::ShaderModule,
+    stage: vk::ShaderStageFlags,
+    entry_point: CString,
+}
+
+impl Drop for ShaderStageInfo {
+    fn drop(&mut self) {
+        unsafe {
+            self.device_manager
+                .device
+                .destroy_shader_module(self.module, None);
+        }
+    }
+}
+
+impl ShaderStageInfo {
+    pub fn as_vk<'a>(&self) -> vk::PipelineShaderStageCreateInfo<'a> {
+        vk::PipelineShaderStageCreateInfo {
+            stage: self.stage,
+            module: self.module,
+            p_name: self.entry_point.as_ptr(),
+            ..Default::default()
+        }
+    }
+}
+
+pub struct VulkanPipeline {
+    device_manager: Arc<DeviceManager>,
+    pub handle: vk::Pipeline,
+    stages: Vec<Arc<ShaderStageInfo>>,
+}
+
+impl Drop for VulkanPipeline {
+    fn drop(&mut self) {
+        unsafe {
+            self.device_manager
+                .device
+                .destroy_pipeline(self.handle, None);
+        }
+    }
+}
+
+impl VulkanPipeline {
+    fn stages_as_vk<'a>(
+        stages: impl IntoIterator<Item = Arc<ShaderStageInfo>>,
+    ) -> Vec<vk::PipelineShaderStageCreateInfo<'a>> {
+        stages.into_iter().map(|stage| stage.as_vk()).collect()
     }
 
-    fn create_graphics_pipeline(
-        &self,
-        layout: Ref<dyn traits::Layout>,
+    pub fn from_render_pass(
+        device_manager: Arc<DeviceManager>,
+        layout: Arc<dyn traits::Layout>,
         shaders: &[Shader],
         attributes: &[Attribute],
-    ) -> CrystalResult<Arc<dyn traits::Pipeline>> {
+        extent: vk::Extent2D,
+        msaa_samples: vk::SampleCountFlags,
+        render_pass: vk::RenderPass,
+    ) -> CrystalResult<Arc<Self>> {
         if shaders.is_empty() {
             log!("no shaders specified");
             return Err(CrystalError::ShaderError);
         }
 
-        let mut shader_modules = Vec::new();
+        let mut stages = Vec::new();
 
-        let en = CString::new("main").unwrap();
-        let entry_point_name = en.as_c_str();
+        let entry_point = CString::new("main").unwrap();
 
         for shader in shaders {
-            let shader_stage_flag = match shader.stage {
+            let stage = match shader.stage {
                 ShaderStage::Vertex => vk::ShaderStageFlags::VERTEX,
                 ShaderStage::Fragment => vk::ShaderStageFlags::FRAGMENT,
                 ShaderStage::Geometry => vk::ShaderStageFlags::GEOMETRY,
@@ -71,7 +130,7 @@ impl traits::RenderTarget for VulkanRenderTarget {
                 vk::ShaderModuleCreateInfo::default().code(shader.code.as_words());
 
             let module = match unsafe {
-                self.device_manager
+                device_manager
                     .device
                     .create_shader_module(&shader_module_create_info, None)
             } {
@@ -82,12 +141,14 @@ impl traits::RenderTarget for VulkanRenderTarget {
                 }
             };
 
-            let shader_stage_create_info = vk::PipelineShaderStageCreateInfo::default()
-                .stage(shader_stage_flag)
-                .module(module)
-                .name(entry_point_name);
+            let shader_stage_info = ShaderStageInfo {
+                device_manager: device_manager.clone(),
+                module,
+                stage,
+                entry_point: entry_point.clone(),
+            };
 
-            shader_modules.push(shader_stage_create_info);
+            stages.push(Arc::new(shader_stage_info));
         }
 
         let binding_descriptions = &[vk::VertexInputBindingDescription::default()
@@ -123,12 +184,12 @@ impl traits::RenderTarget for VulkanRenderTarget {
         let viewport = vk::Viewport::default()
             .x(0.)
             .y(0.)
-            .width(self.extent.width as f32)
-            .height(self.extent.height as f32)
+            .width(extent.width as f32)
+            .height(extent.height as f32)
             .min_depth(0.)
             .max_depth(1.);
 
-        let scissor = vk::Rect2D::default().extent(self.extent);
+        let scissor = vk::Rect2D::default().extent(extent);
 
         let dynamic_states = &[vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
 
@@ -153,7 +214,7 @@ impl traits::RenderTarget for VulkanRenderTarget {
 
         let multisampling = vk::PipelineMultisampleStateCreateInfo::default()
             .sample_shading_enable(false)
-            .rasterization_samples(self.msaa_samples);
+            .rasterization_samples(msaa_samples);
 
         let color_blend_attachment = vk::PipelineColorBlendAttachmentState::default()
             .color_write_mask(vk::ColorComponentFlags::RGBA)
@@ -177,13 +238,15 @@ impl traits::RenderTarget for VulkanRenderTarget {
             .depth_compare_op(vk::CompareOp::LESS)
             .depth_bounds_test_enable(false);
 
-        let layout = match layout.as_vulkan_ref() {
+        let layout = match layout.as_vulkan() {
             Some(layout) => layout,
             None => panic!("fatal: wrong layout type, expected vulkan"),
         };
 
+        let stages_vk = Self::stages_as_vk(stages.clone());
+
         let pipeline_create_info = vk::GraphicsPipelineCreateInfo::default()
-            .stages(&shader_modules)
+            .stages(&stages_vk)
             .vertex_input_state(&vertex_input_info)
             .input_assembly_state(&input_assembly)
             .viewport_state(&viewport_state)
@@ -193,16 +256,20 @@ impl traits::RenderTarget for VulkanRenderTarget {
             .dynamic_state(&dynamic_state)
             .depth_stencil_state(&depth_stencil_state)
             .layout(layout.pipeline_layout)
-            .render_pass(self.render_pass);
+            .render_pass(render_pass);
 
         match unsafe {
-            self.device_manager.device.create_graphics_pipelines(
+            device_manager.device.create_graphics_pipelines(
                 vk::PipelineCache::null(),
                 &[pipeline_create_info],
                 None,
             )
         } {
-            Ok(pipeline) => Ok(Arc::new(pipeline[0])),
+            Ok(pipeline) => Ok(Arc::new(Self {
+                device_manager,
+                handle: pipeline[0],
+                stages,
+            })),
             Err(es) => {
                 log!("cannot create graphics pipeline: {}", es.1);
                 Err(CrystalError::CannotCreateRenderPass)
@@ -211,15 +278,53 @@ impl traits::RenderTarget for VulkanRenderTarget {
     }
 }
 
+impl traits::Pipeline for VulkanPipeline {
+    fn as_vulkan(self: Arc<Self>) -> Option<Arc<VulkanPipeline>> {
+        Some(self)
+    }
+}
+
+impl traits::RenderTarget for VulkanRenderTarget {
+    fn as_vulkan(self: Arc<Self>) -> Option<Arc<super::VulkanRenderTarget>> {
+        Some(self)
+    }
+
+    fn update_size(&self, width: u32, height: u32) -> CrystalResult<()> {
+        *self.extent.write().unwrap() = vk::Extent2D { width, height };
+        Ok(())
+    }
+
+    fn create_graphics_pipeline(
+        &self,
+        layout: Arc<dyn traits::Layout>,
+        shaders: &[Shader],
+        attributes: &[Attribute],
+    ) -> CrystalResult<Arc<dyn traits::Pipeline>> {
+        Ok(VulkanPipeline::from_render_pass(
+            self.device_manager.clone(),
+            layout.as_vulkan().unwrap(),
+            shaders,
+            attributes,
+            *self.extent.try_read().unwrap(),
+            self.msaa_samples,
+            self.render_pass,
+        )?)
+    }
+}
+
 impl VulkanRenderTarget {
+    pub(crate) fn extent(&self) -> vk::Extent2D {
+        *self.extent.read().unwrap()
+    }
+
     pub(crate) fn new(
         instance: &ash::Instance,
         device_manager: Arc<DeviceManager>,
         image_format: vk::Format,
         extent: vk::Extent2D,
-        image_views: &[vk::ImageView],
+        images: Vec<vk::ImageView>,
         msaa_samples: u8,
-    ) -> CrystalResult<Self> {
+    ) -> CrystalResult<Arc<Self>> {
         let counts = device_manager
             .device_properties
             .limits
@@ -364,8 +469,9 @@ impl VulkanRenderTarget {
 
         let mut framebuffers = vec![];
         let mut depth_resources = vec![];
+        let mut color_images = vec![];
 
-        for image_view in image_views {
+        for image_view in images {
             let depth_resource = DepthResources::new(
                 device_manager.clone(),
                 instance,
@@ -392,10 +498,10 @@ impl VulkanRenderTarget {
                 vec![
                     color_image.image_view,
                     depth_resource.image.image_view,
-                    *image_view,
+                    image_view,
                 ]
             } else {
-                vec![*image_view, depth_resource.image.image_view]
+                vec![image_view, depth_resource.image.image_view]
             };
 
             depth_resources.push(depth_resource);
@@ -416,17 +522,19 @@ impl VulkanRenderTarget {
                     }
                 };
             framebuffers.push(framebuffer);
+            color_images.push(color_image);
         }
 
-        Ok(Self {
+        Ok(Arc::new(Self {
             device_manager,
-            extent,
+            extent: RwLock::new(extent),
             render_pass,
             framebuffers,
 
             depth_resources,
+            color_images,
 
             msaa_samples: samples,
-        })
+        }))
     }
 }

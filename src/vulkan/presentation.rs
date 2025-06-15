@@ -24,7 +24,16 @@ pub struct PresentSurface {
     pub surface_khr: vk::SurfaceKHR,
 }
 
+impl Drop for PresentSurface {
+    fn drop(&mut self) {
+        unsafe {
+            self.surface.destroy_surface(self.surface_khr, None);
+        }
+    }
+}
+
 pub struct Presentation {
+    device_manager: Arc<DeviceManager>,
     pub surface: Arc<PresentSurface>,
     pub extent: vk::Extent2D,
     pub swapchain: ash::khr::swapchain::Device,
@@ -32,18 +41,43 @@ pub struct Presentation {
 
     pub queue_family_indices: [u32; 2],
 
-    swapchain_images: Vec<vk::Image>,
-    pub swapchain_image_views: Vec<vk::ImageView>,
     pub image_format: vk::Format,
+    pub swapchain_image_views: Vec<vk::ImageView>,
 
     pub image_available_semaphores: Vec<vk::Semaphore>,
     pub render_finished_semaphores: Vec<vk::Semaphore>,
     pub in_flight_fences: Vec<vk::Fence>,
 
     pub current_frame: usize,
+    pub image_index: u32,
 
     pub frames_in_flight: u32,
     pub msaa_samples: u8,
+}
+
+impl Drop for Presentation {
+    fn drop(&mut self) {
+        unsafe {
+            self.swapchain_image_views.iter().for_each(|&image_view| {
+                self.device_manager
+                    .device
+                    .destroy_image_view(image_view, None)
+            });
+            self.swapchain.destroy_swapchain(self.swapchain_khr, None);
+            self.image_available_semaphores
+                .iter()
+                .chain(self.render_finished_semaphores.iter())
+                .for_each(|&semaphore| {
+                    self.device_manager
+                        .device
+                        .destroy_semaphore(semaphore, None)
+                });
+
+            self.in_flight_fences
+                .iter()
+                .for_each(|&fence| self.device_manager.device.destroy_fence(fence, None));
+        }
+    }
 }
 
 impl Presentation {
@@ -71,7 +105,6 @@ impl Presentation {
     }
 
     pub fn new(
-        instance: &ash::Instance,
         device_manager: Arc<DeviceManager>,
         surface: Arc<PresentSurface>,
         frames_in_flight: u32,
@@ -91,7 +124,8 @@ impl Presentation {
             device_manager.clone(),
         )?;
 
-        let swapchain = ash::khr::swapchain::Device::new(instance, &device_manager.device);
+        let swapchain =
+            ash::khr::swapchain::Device::new(&device_manager.instance, &device_manager.device);
         let swapchain_khr =
             match unsafe { swapchain.create_swapchain(&swapchain_create_info, None) } {
                 Ok(swapchain_khr) => swapchain_khr,
@@ -109,11 +143,11 @@ impl Presentation {
             }
         };
 
-        let mut swapchain_image_views = vec![];
-
         let mut image_available_semaphores = vec![];
         let mut render_finished_semaphores = vec![];
         let mut in_flight_fences = vec![];
+
+        let mut swapchain_image_views = vec![];
 
         for &swapchain_image in &swapchain_images {
             let create_info = vk::ImageViewCreateInfo::default()
@@ -184,6 +218,7 @@ impl Presentation {
         }
 
         Ok(Presentation {
+            device_manager,
             surface,
             frames_in_flight,
             msaa_samples,
@@ -192,17 +227,17 @@ impl Presentation {
 
             queue_family_indices,
 
+            swapchain_image_views,
+
             image_available_semaphores,
             render_finished_semaphores,
             in_flight_fences,
 
             current_frame: 0,
+            image_index: 0,
 
             swapchain,
             swapchain_khr,
-
-            swapchain_images,
-            swapchain_image_views,
         })
     }
 

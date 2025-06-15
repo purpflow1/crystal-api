@@ -56,7 +56,7 @@ struct Context {
     window: Option<Window>,
     graphics: Option<Box<dyn GraphicsApi>>,
 
-    layout_pbr: Option<Arc<RefCell<dyn Layout>>>,
+    layout_pbr: Option<Arc<dyn Layout>>,
 
     settings: GraphicsApiInitSettings,
     scene: Scene,
@@ -165,9 +165,8 @@ impl ApplicationHandler for Context {
             .unwrap();
 
         let pipeline_pbr = render_target
-            .borrow()
             .create_graphics_pipeline(
-                layout_pbr.borrow(),
+                layout_pbr.clone(),
                 &shaders_pbr,
                 &VertexTexture::get_attributes(),
             )
@@ -214,7 +213,7 @@ impl ApplicationHandler for Context {
 
         let current_frame = graphics.get_current_frame();
 
-        let mut layout_pbr = self.layout_pbr.as_ref().unwrap().borrow_mut();
+        let layout_pbr = self.layout_pbr.clone().unwrap();
 
         let transforms = [
             glam::Mat4::from_scale_rotation_translation(
@@ -317,7 +316,7 @@ impl ApplicationHandler for Context {
         drop(layout_pbr);
 
         graphics
-            .render(&[self.layout_pbr.as_ref().unwrap().clone()])
+            .render_and_present(vec![self.layout_pbr.as_ref().unwrap().clone()])
             .unwrap();
 
         if MAX_FPS != 0 && !event_loop.exiting() {
@@ -367,7 +366,6 @@ impl ApplicationHandler for Context {
                     .as_ref()
                     .unwrap()
                     .get_viewport()
-                    .borrow_mut()
                     .update_size(extent.width, extent.height)
                     .unwrap();
                 self.scene.camera.proj = glam::Mat4::perspective_lh(

@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use ash::vk;
 
@@ -12,13 +12,28 @@ use crate::{
 use super::{commands::CommandManager, devices::DeviceManager, memory::BufferManager};
 
 pub struct Image {
+    pub device_manager: Arc<DeviceManager>,
     pub image: vk::Image,
     pub image_view: vk::ImageView,
-    pub _image_memory: vk::DeviceMemory,
-    pub layout: vk::ImageLayout,
+    pub image_memory: vk::DeviceMemory,
+    pub layout: RwLock<vk::ImageLayout>,
     pub extent: vk::Extent3D,
     pub mip_levels: u32,
     pub anisotropy_texels: f32,
+}
+
+impl Drop for Image {
+    fn drop(&mut self) {
+        unsafe {
+            self.device_manager
+                .device
+                .free_memory(self.image_memory, None);
+            self.device_manager
+                .device
+                .destroy_image_view(self.image_view, None);
+            self.device_manager.device.destroy_image(self.image, None);
+        }
+    }
 }
 
 impl Image {
@@ -34,7 +49,7 @@ impl Image {
         mem_property: vk::MemoryPropertyFlags,
         generate_mips: bool,
         anisotropy_texels: f32,
-    ) -> CrystalResult<Self> {
+    ) -> CrystalResult<Arc<Self>> {
         let layout = vk::ImageLayout::UNDEFINED;
 
         let extent = vk::Extent3D::default().width(width).height(height).depth(1);
@@ -124,36 +139,36 @@ impl Image {
             }
         };
 
-        Ok(Self {
-            _image_memory: image_memory,
+        Ok(Arc::new(Self {
+            device_manager,
+            image_memory,
             image,
             image_view,
-            layout,
+            layout: RwLock::new(layout),
             extent,
             mip_levels,
             anisotropy_texels,
-        })
+        }))
     }
 }
 
 pub struct VulkanTexture {
-    pub staging_buffer_manager: BufferManager,
-    pub image: Image,
+    pub staging_buffer_manager: Arc<BufferManager>,
+    pub image: Arc<Image>,
 }
 
 impl traits::Texture for VulkanTexture {
-    fn as_vulkan_arc(self: Arc<Self>) -> Option<Arc<super::VulkanTexture>> {
+    fn as_vulkan(self: Arc<Self>) -> Option<Arc<super::VulkanTexture>> {
         Some(self)
     }
 }
 
 impl VulkanTexture {
     pub(crate) fn new(
-        instance: &ash::Instance,
         device_manager: Arc<DeviceManager>,
         image: &Image2D,
         anisotropy_texels: f32,
-    ) -> CrystalResult<Self> {
+    ) -> CrystalResult<Arc<Self>> {
         let image_size = (image.height * image.width * image.channels) as u64;
 
         let buffer_manager = BufferManager::new(
@@ -173,7 +188,9 @@ impl VulkanTexture {
         };
 
         let format_properties = unsafe {
-            instance.get_physical_device_format_properties(device_manager.physical_device, format)
+            device_manager
+                .instance
+                .get_physical_device_format_properties(device_manager.physical_device, format)
         };
 
         if format_properties.optimal_tiling_features
@@ -202,19 +219,20 @@ impl VulkanTexture {
             anisotropy_texels,
         )?;
 
-        Ok(Self {
+        Ok(Arc::new(Self {
             staging_buffer_manager: buffer_manager,
             image,
-        })
+        }))
     }
 
-    pub fn prepare_texture_image(&mut self, command_manager: &CommandManager) -> CrystalResult<()> {
+    pub fn prepare_texture_image(&self, command_manager: &CommandManager) -> CrystalResult<()> {
         let command_entry = command_manager.graphics.as_ref().unwrap();
 
         command_entry
-            .transition_image_layout(&mut self.image, vk::ImageLayout::TRANSFER_DST_OPTIMAL)?;
-        command_entry.copy_buffer_to_image(&mut self.image, &self.staging_buffer_manager.buffer)?;
-        command_entry.generate_mipmaps(&self.image)?;
+            .transition_image_layout(self.image.clone(), vk::ImageLayout::TRANSFER_DST_OPTIMAL)?;
+        command_entry
+            .copy_buffer_to_image(self.image.clone(), &self.staging_buffer_manager.buffer)?;
+        command_entry.generate_mipmaps(self.image.clone())?;
         /*command_entry
         .transition_image_layout(&mut self.image, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)?;*/
 

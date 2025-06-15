@@ -8,7 +8,10 @@ use crate::{
     vulkan::presentation::PresentSurface,
 };
 
-pub(crate) struct DeviceManager {
+#[derive(Clone)]
+pub struct DeviceManager {
+    pub entry: Arc<ash::Entry>,
+    pub instance: Arc<ash::Instance>,
     pub device: Arc<ash::Device>,
     pub physical_device: vk::PhysicalDevice,
     pub memory_properties: vk::PhysicalDeviceMemoryProperties,
@@ -20,6 +23,7 @@ impl Drop for DeviceManager {
     fn drop(&mut self) {
         unsafe {
             self.device.destroy_device(None);
+            self.instance.destroy_instance(None);
         }
     }
 }

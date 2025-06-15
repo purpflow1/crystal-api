@@ -1,7 +1,7 @@
 use std::{
     cell::RefCell,
     collections::{BTreeMap, VecDeque},
-    sync::Arc,
+    sync::{Arc, RwLock},
 };
 
 use ash::vk;
@@ -20,37 +20,82 @@ use super::{
 };
 
 pub struct VulkanLayout {
-    _descriptor_pool: vk::DescriptorPool,
-    uniform_buffer_managers_sets: Vec<Vec<BufferManager>>,
-    storage_buffer_managers_sets: Vec<Vec<BufferManager>>,
+    device_manager: Arc<DeviceManager>,
+
+    descriptor_pool: vk::DescriptorPool,
+    descriptor_set_layouts: Vec<vk::DescriptorSetLayout>,
+
+    uniform_buffer_managers_sets: Vec<Vec<Arc<BufferManager>>>,
+    storage_buffer_managers_sets: Vec<Vec<Arc<BufferManager>>>,
 
     uniform_descriptor_sets: Vec<vk::DescriptorSet>,
     storage_descriptor_sets: Vec<vk::DescriptorSet>,
     sampler_descriptor_sets: Vec<vk::DescriptorSet>,
 
-    sampler_binding_data: BTreeMap<u64, usize>,
-    sampler_binding_data_pool: Vec<u64>,
-
     pub pipeline_layout: vk::PipelineLayout,
 
     image_views_sampled_num: u32,
     max_instance_num: u64,
-    samplers: BTreeMap<u32, vk::Sampler>,
 
-    object_render_queue: VecDeque<Arc<RefCell<Object>>>,
+    sampler_binding_data: RwLock<BTreeMap<u64, usize>>,
+    sampler_binding_data_pool: RwLock<Vec<u64>>,
+    samplers: RwLock<BTreeMap<u32, vk::Sampler>>,
+    object_render_queue: RwLock<VecDeque<Arc<RefCell<Object>>>>,
+}
+
+impl Drop for VulkanLayout {
+    fn drop(&mut self) {
+        unsafe {
+            // descriptorPool must have been created with the VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT flag
+            //
+            // let descriptor_sets: Vec<vk::DescriptorSet> = self
+            //     .uniform_descriptor_sets
+            //     .iter()
+            //     .chain(self.storage_descriptor_sets.iter())
+            //     .chain(self.sampler_descriptor_sets.iter())
+            //     .map(|&descriptor_set| descriptor_set)
+            //     .collect();
+
+            // self.device_manager
+            //     .device
+            //     .free_descriptor_sets(self.descriptor_pool, &descriptor_sets)
+            //     .unwrap();
+
+            self.samplers
+                .read()
+                .unwrap()
+                .iter()
+                .for_each(|(_, &sampler)| {
+                    self.device_manager.device.destroy_sampler(sampler, None)
+                });
+
+            self.descriptor_set_layouts.iter().for_each(|&layout| {
+                self.device_manager
+                    .device
+                    .destroy_descriptor_set_layout(layout, None)
+            });
+
+            self.device_manager
+                .device
+                .destroy_descriptor_pool(self.descriptor_pool, None);
+
+            self.device_manager
+                .device
+                .destroy_pipeline_layout(self.pipeline_layout, None);
+        }
+    }
 }
 
 impl traits::Layout for VulkanLayout {
-    fn as_vulkan_mut(&mut self) -> Option<&mut super::VulkanLayout> {
+    fn as_vulkan(self: Arc<Self>) -> Option<Arc<super::VulkanLayout>> {
         Some(self)
     }
 
-    fn as_vulkan_ref(&self) -> Option<&super::VulkanLayout> {
-        Some(self)
-    }
-
-    fn add_object_to_queue(&mut self, object: Arc<RefCell<Object>>) {
-        self.object_render_queue.push_back(object);
+    fn add_object_to_queue(&self, object: Arc<RefCell<Object>>) {
+        self.object_render_queue
+            .try_write()
+            .unwrap()
+            .push_back(object);
     }
 
     fn write_to_buffer(
@@ -77,7 +122,7 @@ impl VulkanLayout {
         max_instance_num: u64,
 
         buffers: &[(bool, u64)],
-    ) -> CrystalResult<Self> {
+    ) -> CrystalResult<Arc<Self>> {
         let pool_sizes = [
             vk::DescriptorPoolSize::default()
                 .descriptor_count(frames_in_flight)
@@ -268,7 +313,7 @@ impl VulkanLayout {
                 let size = buffer.1;
 
                 if buffer.0 {
-                    let mut uniform_buffer_manager = BufferManager::new(
+                    let uniform_buffer_manager = BufferManager::new(
                         device_manager.clone(),
                         size,
                         vk::BufferUsageFlags::UNIFORM_BUFFER,
@@ -303,7 +348,7 @@ impl VulkanLayout {
 
                     current_uniform += 1;
                 } else {
-                    let mut storage_buffer_manager = BufferManager::new(
+                    let storage_buffer_manager = BufferManager::new(
                         device_manager.clone(),
                         size,
                         vk::BufferUsageFlags::STORAGE_BUFFER,
@@ -344,7 +389,7 @@ impl VulkanLayout {
             storage_buffer_managers_sets.push(storage_buffer_managers);
         }
 
-        let descriptor_set_layouts = [
+        let descriptor_set_layouts = vec![
             ubo_descriptor_set_layout,
             ssbo_descriptor_set_layout,
             sampler_descriptor_set_layout,
@@ -366,8 +411,12 @@ impl VulkanLayout {
             }
         };
 
-        Ok(Self {
-            _descriptor_pool: descriptor_pool,
+        Ok(Arc::new(Self {
+            device_manager,
+
+            descriptor_pool,
+            descriptor_set_layouts,
+
             uniform_buffer_managers_sets,
             storage_buffer_managers_sets,
 
@@ -375,21 +424,20 @@ impl VulkanLayout {
             storage_descriptor_sets,
             sampler_descriptor_sets,
 
-            sampler_binding_data: BTreeMap::new(),
-            sampler_binding_data_pool: vec![],
-
             image_views_sampled_num,
             max_instance_num,
 
             pipeline_layout,
-            samplers: BTreeMap::new(),
 
-            object_render_queue: VecDeque::new(),
-        })
+            sampler_binding_data: RwLock::new(BTreeMap::new()),
+            sampler_binding_data_pool: RwLock::new(vec![]),
+            samplers: RwLock::new(BTreeMap::new()),
+            object_render_queue: RwLock::new(VecDeque::new()),
+        }))
     }
 
     pub(crate) fn render(
-        &mut self,
+        &self,
         device_manager: Arc<DeviceManager>,
         command_buffer: &vk::CommandBuffer,
         frames_in_flight: usize,
@@ -411,8 +459,13 @@ impl VulkanLayout {
 
         let mut current_object_idx = 0usize;
 
-        while self.object_render_queue.len() > 0 {
-            let obj = self.object_render_queue.pop_front().unwrap();
+        while self.object_render_queue.read().unwrap().len() > 0 {
+            let obj = self
+                .object_render_queue
+                .try_write()
+                .unwrap()
+                .pop_front()
+                .unwrap();
             let mut obj = obj.borrow_mut();
 
             match obj.mesh.clone() {
@@ -437,7 +490,7 @@ impl VulkanLayout {
                 Some(textures) => {
                     let texture_sets: Vec<Arc<VulkanTexture>> = textures
                         .iter()
-                        .map(|texture| match texture.1.clone().as_vulkan_arc() {
+                        .map(|texture| match texture.1.clone().as_vulkan() {
                             Some(tex) => tex,
                             None => panic!("fatal: wrong type of textures, expected vulkan"),
                         })
@@ -468,8 +521,8 @@ impl VulkanLayout {
                 None => panic!("fatal: wrong object memory manager type, expected vulkan"),
             };
 
-            let pipeline = match obj.pipeline.as_vulkan_ref() {
-                Some(pipeline) => *pipeline,
+            let pipeline = match obj.pipeline.clone().as_vulkan() {
+                Some(pipeline) => pipeline,
                 None => panic!("fatal: wrong pipeline type, expected vulkan"),
             };
 
@@ -480,7 +533,7 @@ impl VulkanLayout {
                 device_manager.device.cmd_bind_pipeline(
                     *command_buffer,
                     vk::PipelineBindPoint::GRAPHICS,
-                    pipeline,
+                    pipeline.handle,
                 );
 
                 device_manager.device.cmd_bind_index_buffer(
@@ -521,12 +574,12 @@ impl VulkanLayout {
     }
 
     fn get_sampler(
-        &mut self,
+        &self,
         device_manager: Arc<DeviceManager>,
         mip_levels: u32,
         anisotropy_texels: f32,
     ) -> CrystalResult<vk::Sampler> {
-        match self.samplers.get(&mip_levels) {
+        match self.samplers.read().unwrap().get(&mip_levels) {
             Some(sampler) => return Ok(*sampler),
             None => (),
         };
@@ -557,17 +610,22 @@ impl VulkanLayout {
             }
         };
 
-        self.samplers.insert(mip_levels, sampler);
+        self.samplers
+            .try_write()
+            .unwrap()
+            .insert(mip_levels, sampler);
 
         Ok(sampler)
     }
 
-    fn release_sampler_descriptor_sets(&mut self) {
+    fn release_sampler_descriptor_sets(&self) {
         let mut to_delete_sets = vec![];
 
-        for &slot in self.sampler_binding_data.keys() {
+        for &slot in self.sampler_binding_data.read().unwrap().keys() {
             if self
                 .sampler_binding_data_pool
+                .read()
+                .unwrap()
                 .iter()
                 .find(|&&x| x == slot)
                 .is_none()
@@ -576,32 +634,41 @@ impl VulkanLayout {
             }
         }
 
-        self.sampler_binding_data_pool.clear();
+        self.sampler_binding_data_pool.try_write().unwrap().clear();
 
         for to_delete in to_delete_sets {
-            self.sampler_binding_data.remove(&to_delete).unwrap();
+            self.sampler_binding_data
+                .try_write()
+                .unwrap()
+                .remove(&to_delete)
+                .unwrap();
         }
     }
 
     pub(crate) fn init_sampler_descriptor_sets(
-        &mut self,
+        &self,
         device_manager: Arc<DeviceManager>,
         frames_in_flight: usize,
         object_id: u64,
         textures_set: &[Arc<VulkanTexture>],
     ) -> CrystalResult<Vec<vk::DescriptorSet>> {
-        let texture_set_idx = match self.sampler_binding_data.get(&object_id) {
+        let mut sampler_binding_data = self.sampler_binding_data.write().unwrap();
+        let sampler = sampler_binding_data.get(&object_id);
+
+        let texture_set_idx = match sampler {
             Some(&idx) => {
                 let sets = self.sampler_descriptor_sets
                     [frames_in_flight as usize * idx..frames_in_flight as usize * (idx + 1)]
                     .to_vec();
-                self.sampler_binding_data_pool.push(object_id);
+                self.sampler_binding_data_pool
+                    .try_write()
+                    .unwrap()
+                    .push(object_id);
                 return Ok(sets);
             }
             None => {
                 let mut idx = 0usize;
-                while self
-                    .sampler_binding_data
+                while sampler_binding_data
                     .iter()
                     .find(|binding| *binding.1 == idx)
                     .is_some()
@@ -612,8 +679,11 @@ impl VulkanLayout {
                     log!("Exceeded number of maximum image number");
                     return Err(CrystalError::DescriptorError);
                 }
-                self.sampler_binding_data.insert(object_id, idx);
-                self.sampler_binding_data_pool.push(object_id);
+                sampler_binding_data.insert(object_id, idx);
+                self.sampler_binding_data_pool
+                    .try_write()
+                    .unwrap()
+                    .push(object_id);
                 idx
             }
         };
