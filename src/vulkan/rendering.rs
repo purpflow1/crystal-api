@@ -26,21 +26,18 @@ pub struct VulkanRenderTarget {
     pub extent: RwLock<vk::Extent2D>,
     pub render_pass: vk::RenderPass,
 
-    pub framebuffers: Vec<vk::Framebuffer>,
-    pub color_images: Vec<Arc<Image>>,
-    depth_resources: Vec<DepthResources>,
+    pub framebuffers: Vec<RwLock<vk::Framebuffer>>,
+    pub color_images: RwLock<Vec<Arc<Image>>>,
+    depth_resources: RwLock<Vec<DepthResources>>,
 
     pub msaa_samples: vk::SampleCountFlags,
+    image_format: vk::Format,
 }
 
 impl Drop for VulkanRenderTarget {
     fn drop(&mut self) {
         unsafe {
-            self.framebuffers.iter().for_each(|&framebuffer| {
-                self.device_manager
-                    .device
-                    .destroy_framebuffer(framebuffer, None)
-            });
+            self.destroy_framebuffers();
 
             self.device_manager
                 .device
@@ -289,11 +286,6 @@ impl traits::RenderTarget for VulkanRenderTarget {
         Some(self)
     }
 
-    fn update_size(&self, width: u32, height: u32) -> CrystalResult<()> {
-        *self.extent.write().unwrap() = vk::Extent2D { width, height };
-        Ok(())
-    }
-
     fn create_graphics_pipeline(
         &self,
         layout: Arc<dyn traits::Layout>,
@@ -317,8 +309,106 @@ impl VulkanRenderTarget {
         *self.extent.read().unwrap()
     }
 
+    fn destroy_framebuffers(&self) {
+        unsafe {
+            self.framebuffers.iter().for_each(|framebuffer| {
+                self.device_manager
+                    .device
+                    .destroy_framebuffer(*framebuffer.read().unwrap(), None)
+            });
+        }
+    }
+
+    pub fn update_resources(
+        &self,
+        extent: vk::Extent2D,
+        images: Vec<vk::ImageView>,
+    ) -> CrystalResult<()> {
+        *self.extent.write().unwrap() = extent;
+        self.destroy_framebuffers();
+        let (framebuffers, depth_resources, color_images) = Self::create_resources(
+            self.device_manager.clone(),
+            self.image_format,
+            extent,
+            images,
+            self.msaa_samples,
+            self.render_pass,
+        )?;
+
+        zip(&self.framebuffers, framebuffers).for_each(|(framebuffer_left, framebuffer_right)| {
+            *framebuffer_left.write().unwrap() = framebuffer_right
+        });
+        *self.depth_resources.write().unwrap() = depth_resources;
+        *self.color_images.write().unwrap() = color_images;
+
+        Ok(())
+    }
+
+    pub(crate) fn create_resources(
+        device_manager: Arc<DeviceManager>,
+        image_format: vk::Format,
+        extent: vk::Extent2D,
+        images: Vec<vk::ImageView>,
+        samples: vk::SampleCountFlags,
+        render_pass: vk::RenderPass,
+    ) -> CrystalResult<(Vec<vk::Framebuffer>, Vec<DepthResources>, Vec<Arc<Image>>)> {
+        let mut framebuffers = vec![];
+        let mut depth_resources = vec![];
+        let mut color_images = vec![];
+
+        for image_view in images {
+            let depth_resource =
+                DepthResources::new(device_manager.clone(), extent.width, extent.height, samples)?;
+
+            let color_image = Image::new(
+                device_manager.clone(),
+                extent.width,
+                extent.height,
+                samples,
+                image_format,
+                vk::ImageTiling::OPTIMAL,
+                vk::ImageAspectFlags::COLOR,
+                vk::ImageUsageFlags::TRANSIENT_ATTACHMENT | vk::ImageUsageFlags::COLOR_ATTACHMENT,
+                vk::MemoryPropertyFlags::DEVICE_LOCAL,
+                false,
+                1.,
+            )?;
+
+            let attachments = if samples != vk::SampleCountFlags::TYPE_1 {
+                vec![
+                    color_image.image_view,
+                    depth_resource.image.image_view,
+                    image_view,
+                ]
+            } else {
+                vec![image_view, depth_resource.image.image_view]
+            };
+
+            depth_resources.push(depth_resource);
+
+            let create_info = vk::FramebufferCreateInfo::default()
+                .render_pass(render_pass)
+                .attachments(&attachments)
+                .width(extent.width)
+                .height(extent.height)
+                .layers(1);
+
+            let framebuffer =
+                match unsafe { device_manager.device.create_framebuffer(&create_info, None) } {
+                    Ok(framebuffer) => framebuffer,
+                    Err(e) => {
+                        log!("cannot create framebuffer: {}", e);
+                        return Err(CrystalError::CannotCreateFramebuffer);
+                    }
+                };
+            framebuffers.push(framebuffer);
+            color_images.push(color_image);
+        }
+
+        Ok((framebuffers, depth_resources, color_images))
+    }
+
     pub(crate) fn new(
-        instance: &ash::Instance,
         device_manager: Arc<DeviceManager>,
         image_format: vk::Format,
         extent: vk::Extent2D,
@@ -367,7 +457,6 @@ impl VulkanRenderTarget {
 
         let depth_attachment = vk::AttachmentDescription::default()
             .format(find_depth_format(
-                instance,
                 device_manager.clone(),
                 vk::ImageTiling::OPTIMAL,
                 vk::FormatFeatureFlags::DEPTH_STENCIL_ATTACHMENT,
@@ -467,74 +556,29 @@ impl VulkanRenderTarget {
             }
         };
 
-        let mut framebuffers = vec![];
-        let mut depth_resources = vec![];
-        let mut color_images = vec![];
-
-        for image_view in images {
-            let depth_resource = DepthResources::new(
-                device_manager.clone(),
-                instance,
-                extent.width,
-                extent.height,
-                samples,
-            )?;
-
-            let color_image = Image::new(
-                device_manager.clone(),
-                extent.width,
-                extent.height,
-                samples,
-                image_format,
-                vk::ImageTiling::OPTIMAL,
-                vk::ImageAspectFlags::COLOR,
-                vk::ImageUsageFlags::TRANSIENT_ATTACHMENT | vk::ImageUsageFlags::COLOR_ATTACHMENT,
-                vk::MemoryPropertyFlags::DEVICE_LOCAL,
-                false,
-                1.,
-            )?;
-
-            let attachments = if samples != vk::SampleCountFlags::TYPE_1 {
-                vec![
-                    color_image.image_view,
-                    depth_resource.image.image_view,
-                    image_view,
-                ]
-            } else {
-                vec![image_view, depth_resource.image.image_view]
-            };
-
-            depth_resources.push(depth_resource);
-
-            let create_info = vk::FramebufferCreateInfo::default()
-                .render_pass(render_pass)
-                .attachments(&attachments)
-                .width(extent.width)
-                .height(extent.height)
-                .layers(1);
-
-            let framebuffer =
-                match unsafe { device_manager.device.create_framebuffer(&create_info, None) } {
-                    Ok(framebuffer) => framebuffer,
-                    Err(e) => {
-                        log!("cannot create framebuffer: {}", e);
-                        return Err(CrystalError::CannotCreateFramebuffer);
-                    }
-                };
-            framebuffers.push(framebuffer);
-            color_images.push(color_image);
-        }
+        let (framebuffers, depth_resources, color_images) = Self::create_resources(
+            device_manager.clone(),
+            image_format,
+            extent,
+            images,
+            samples,
+            render_pass,
+        )?;
 
         Ok(Arc::new(Self {
             device_manager,
             extent: RwLock::new(extent),
             render_pass,
-            framebuffers,
+            framebuffers: framebuffers
+                .iter()
+                .map(|framebuffer| RwLock::new(*framebuffer))
+                .collect(),
 
-            depth_resources,
-            color_images,
+            depth_resources: RwLock::new(depth_resources),
+            color_images: RwLock::new(color_images),
 
             msaa_samples: samples,
+            image_format,
         }))
     }
 }

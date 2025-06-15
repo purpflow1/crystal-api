@@ -34,8 +34,6 @@ pub trait RenderTarget {
         attributes: &[Attribute],
     ) -> CrystalResult<Arc<dyn Pipeline>>;
 
-    fn update_size(&self, width: u32, height: u32) -> CrystalResult<()>;
-
     fn as_vulkan(self: Arc<Self>) -> Option<Arc<vulkan::VulkanRenderTarget>> {
         None
     }

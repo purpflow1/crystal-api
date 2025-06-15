@@ -83,12 +83,17 @@ impl GpuFuture {
         presentation: &Presentation,
     ) -> VkResult<(u32, bool)> {
         unsafe {
-            let result = presentation.swapchain.acquire_next_image(
-                presentation.swapchain_khr,
-                u64::MAX,
-                presentation.image_available_semaphores[presentation.current_frame],
-                vk::Fence::null(),
-            );
+            let result = presentation
+                .swapchain
+                .swapchain
+                .write()
+                .unwrap()
+                .acquire_next_image(
+                    *presentation.swapchain.swapchain_khr.read().unwrap(),
+                    u64::MAX,
+                    presentation.image_available_semaphores[presentation.current_frame],
+                    vk::Fence::null(),
+                );
 
             let next_fence = presentation.in_flight_fences[presentation.current_frame];
             *self.fence.write().unwrap() = next_fence;
@@ -135,7 +140,7 @@ impl GpuFuture {
             }
         };
 
-        let swaphchains = &[presentation.swapchain_khr];
+        let swaphchains = &[*presentation.swapchain.swapchain_khr.read().unwrap()];
         let indices = &[presentation.image_index];
 
         let present_info = vk::PresentInfoKHR::default()
@@ -146,6 +151,9 @@ impl GpuFuture {
         match unsafe {
             presentation
                 .swapchain
+                .swapchain
+                .write()
+                .unwrap()
                 .queue_present(command_entry.queue, &present_info)
         } {
             Ok(_) => (),

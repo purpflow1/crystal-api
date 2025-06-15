@@ -7,7 +7,6 @@ use crate::errors::CrystalResult;
 use super::{devices::DeviceManager, images::Image};
 
 pub fn find_depth_format(
-    instance: &ash::Instance,
     device_manager: Arc<DeviceManager>,
     tiling: vk::ImageTiling,
     features: vk::FormatFeatureFlags,
@@ -19,7 +18,9 @@ pub fn find_depth_format(
         vk::Format::D24_UNORM_S8_UINT,
     ] {
         let properties = unsafe {
-            instance.get_physical_device_format_properties(device_manager.physical_device, format)
+            device_manager
+                .instance
+                .get_physical_device_format_properties(device_manager.physical_device, format)
         };
 
         if tiling == vk::ImageTiling::LINEAR
@@ -49,7 +50,6 @@ pub struct DepthResources {
 impl DepthResources {
     pub fn new(
         device_manager: Arc<DeviceManager>,
-        instance: &ash::Instance,
         width: u32,
         height: u32,
         samples: vk::SampleCountFlags,
@@ -57,7 +57,7 @@ impl DepthResources {
         let tiling = vk::ImageTiling::OPTIMAL;
         let features = vk::FormatFeatureFlags::DEPTH_STENCIL_ATTACHMENT;
 
-        let depth_format = find_depth_format(instance, device_manager.clone(), tiling, features);
+        let depth_format = find_depth_format(device_manager.clone(), tiling, features);
 
         let image = Image::new(
             device_manager.clone(),

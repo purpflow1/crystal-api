@@ -362,12 +362,6 @@ impl ApplicationHandler for Context {
                 let window = self.window.as_ref().unwrap();
                 let extent = window.inner_size();
 
-                self.graphics
-                    .as_ref()
-                    .unwrap()
-                    .get_viewport()
-                    .update_size(extent.width, extent.height)
-                    .unwrap();
                 self.scene.camera.proj = glam::Mat4::perspective_lh(
                     PI / 4.,
                     extent.width as f32 / extent.height as f32,

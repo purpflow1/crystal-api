@@ -15,7 +15,7 @@ use super::{
 };
 
 use crate::{
-    GraphicsApi, GraphicsApiInitSettings, RenderTarget,
+    GraphicsApi, GraphicsApiInitSettings,
     debug::log,
     errors::{CrystalError, CrystalResult},
     images::Image2D,
@@ -54,11 +54,8 @@ impl GraphicsApi for VulkanEntry {
         match now.clone().acquire_next_image(&self.presentation) {
             Ok((idx, _)) => self.presentation.image_index = idx,
             Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
-                self.presentation.recreate_swapchain()?;
-                render_target_dyn.update_size(
-                    self.presentation.extent.width,
-                    self.presentation.extent.height,
-                )?;
+                let images = self.presentation.swapchain.recreate()?;
+                render_target.update_resources(self.presentation.swapchain.extent(), images)?;
                 return Ok(());
             }
             Err(e) => {
@@ -87,18 +84,18 @@ impl GraphicsApi for VulkanEntry {
                 |command_buffer, device| {
                     let render_pass_begin = vk::RenderPassBeginInfo::default()
                         .render_pass(render_target.render_pass)
-                        .framebuffer(render_target.framebuffers[self.presentation.image_index as usize])
+                        .framebuffer(*render_target.framebuffers[self.presentation.image_index as usize].read().unwrap())
                         .render_area(vk::Rect2D {
                             offset: vk::Offset2D::default().x(0).y(0),
                             extent: vk::Extent2D {
                                 width: render_target
                                     .extent()
                                     .width
-                                    .min(self.presentation.extent.width),
+                                    .min(self.presentation.swapchain.extent().width),
                                 height: render_target
                                     .extent()
                                     .height
-                                    .min(self.presentation.extent.height),
+                                    .min(self.presentation.swapchain.extent().height),
                             }, // render_target.extent,
                         })
                         .clear_values(clear_values);
@@ -155,14 +152,14 @@ impl GraphicsApi for VulkanEntry {
         {
             Ok(()) => self.future = Some(future),
             Err(vk::Result::ERROR_OUT_OF_DATE_KHR | vk::Result::SUBOPTIMAL_KHR) => {
-                self.presentation
-                    .recreate_swapchain()
+                let images = self
+                    .presentation
+                    .swapchain
+                    .recreate()
                     .expect("cannot recreate swapchain");
+
                 render_target
-                    .update_size(
-                        self.presentation.extent.width,
-                        self.presentation.extent.height,
-                    )
+                    .update_resources(self.presentation.swapchain.extent(), images)
                     .expect("cannot update render target size");
                 self.future = None;
             }
@@ -341,14 +338,18 @@ impl VulkanEntry {
         )?;
 
         let viewport_render_target = VulkanRenderTarget::new(
-            &instance,
             device_manager.clone(),
-            presentation.image_format,
+            presentation.swapchain.swapchain_info.surface_format.format,
             vk::Extent2D {
                 width: settings.width,
                 height: settings.height,
             },
-            presentation.swapchain_image_views.clone(),
+            presentation
+                .swapchain
+                .swapchain_image_views
+                .read()
+                .unwrap()
+                .clone(),
             presentation.msaa_samples,
         )?;
 

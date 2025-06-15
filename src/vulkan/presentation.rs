@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use ash::{
     Entry,
@@ -32,84 +32,24 @@ impl Drop for PresentSurface {
     }
 }
 
-pub struct Presentation {
+pub struct SwapchainInfo {
     device_manager: Arc<DeviceManager>,
-    pub surface: Arc<PresentSurface>,
-    pub extent: vk::Extent2D,
-    pub swapchain: ash::khr::swapchain::Device,
-    pub swapchain_khr: vk::SwapchainKHR,
+    surface: Arc<PresentSurface>,
 
-    pub queue_family_indices: [u32; 2],
+    queue_family_indices: [u32; 2],
+    pub surface_format: vk::SurfaceFormatKHR,
+    extent: RwLock<vk::Extent2D>,
+    present_mode: vk::PresentModeKHR,
+    support_details: SwapChainSupportDetails,
 
-    pub image_format: vk::Format,
-    pub swapchain_image_views: Vec<vk::ImageView>,
-
-    pub image_available_semaphores: Vec<vk::Semaphore>,
-    pub render_finished_semaphores: Vec<vk::Semaphore>,
-    pub in_flight_fences: Vec<vk::Fence>,
-
-    pub current_frame: usize,
-    pub image_index: u32,
-
-    pub frames_in_flight: u32,
-    pub msaa_samples: u8,
+    image_count: u32,
 }
 
-impl Drop for Presentation {
-    fn drop(&mut self) {
-        unsafe {
-            self.swapchain_image_views.iter().for_each(|&image_view| {
-                self.device_manager
-                    .device
-                    .destroy_image_view(image_view, None)
-            });
-            self.swapchain.destroy_swapchain(self.swapchain_khr, None);
-            self.image_available_semaphores
-                .iter()
-                .chain(self.render_finished_semaphores.iter())
-                .for_each(|&semaphore| {
-                    self.device_manager
-                        .device
-                        .destroy_semaphore(semaphore, None)
-                });
-
-            self.in_flight_fences
-                .iter()
-                .for_each(|&fence| self.device_manager.device.destroy_fence(fence, None));
-        }
-    }
-}
-
-impl Presentation {
-    pub fn create_surface<T: HasWindowHandle + HasDisplayHandle>(
-        entry: &Entry,
-        instance: &ash::Instance,
-        window: &T,
-    ) -> Arc<PresentSurface> {
-        let surface = ash::khr::surface::Instance::new(entry, instance);
-        let surface_khr = unsafe {
-            ash_window::create_surface(
-                &entry,
-                &instance,
-                window.display_handle().unwrap().as_raw(),
-                window.window_handle().unwrap().as_raw(),
-                None,
-            )
-            .unwrap()
-        };
-
-        Arc::new(PresentSurface {
-            surface,
-            surface_khr,
-        })
-    }
-
-    pub fn new(
+impl SwapchainInfo {
+    fn new(
         device_manager: Arc<DeviceManager>,
         surface: Arc<PresentSurface>,
-        frames_in_flight: u32,
-        msaa_samples: u8,
-    ) -> CrystalResult<Self> {
+    ) -> CrystalResult<Arc<Self>> {
         let queue_family_indices = [
             device_manager
                 .queue_families_indices
@@ -118,131 +58,59 @@ impl Presentation {
             device_manager.queue_families_indices.present_index.unwrap(),
         ];
 
-        let swapchain_create_info: vk::SwapchainCreateInfoKHR = Self::create_swapchain_info(
-            &queue_family_indices,
-            surface.clone(),
-            device_manager.clone(),
-        )?;
+        let swap_chain_support_details =
+            Self::query_swap_chain_support(surface.clone(), &device_manager.physical_device)?;
 
-        let swapchain =
-            ash::khr::swapchain::Device::new(&device_manager.instance, &device_manager.device);
-        let swapchain_khr =
-            match unsafe { swapchain.create_swapchain(&swapchain_create_info, None) } {
-                Ok(swapchain_khr) => swapchain_khr,
-                Err(e) => {
-                    log!("cannot create swapchain: {}", e);
-                    return Err(CrystalError::SwapChainError);
-                }
-            };
-
-        let swapchain_images = match unsafe { swapchain.get_swapchain_images(swapchain_khr) } {
-            Ok(images) => images,
-            Err(e) => {
-                log!("cannot get swapchain images: {}", e);
-                return Err(CrystalError::SwapChainError);
+        let swap_surface_format = match swap_chain_support_details.formats.iter().find(|format| {
+            format.format == vk::Format::B8G8R8A8_SRGB
+                && format.color_space == vk::ColorSpaceKHR::SRGB_NONLINEAR
+        }) {
+            Some(&format) => format,
+            None => {
+                log!("not found required swap surface format");
+                return Err(CrystalError::SwapChainIsNotSupported);
             }
         };
 
-        let mut image_available_semaphores = vec![];
-        let mut render_finished_semaphores = vec![];
-        let mut in_flight_fences = vec![];
+        let swap_extent =
+            if swap_chain_support_details.capabilities.current_extent.width != u32::MAX {
+                swap_chain_support_details.capabilities.current_extent
+            } else {
+                log!("unknown surface extent");
+                return Err(CrystalError::SwapChainIsNotSupported);
+            };
 
-        let mut swapchain_image_views = vec![];
-
-        for &swapchain_image in &swapchain_images {
-            let create_info = vk::ImageViewCreateInfo::default()
-                .image(swapchain_image)
-                .view_type(vk::ImageViewType::TYPE_2D)
-                .format(swapchain_create_info.image_format)
-                .components(vk::ComponentMapping {
-                    r: vk::ComponentSwizzle::IDENTITY,
-                    g: vk::ComponentSwizzle::IDENTITY,
-                    b: vk::ComponentSwizzle::IDENTITY,
-                    a: vk::ComponentSwizzle::IDENTITY,
-                })
-                .subresource_range(
-                    vk::ImageSubresourceRange::default()
-                        .aspect_mask(vk::ImageAspectFlags::COLOR)
-                        .base_mip_level(0)
-                        .level_count(1)
-                        .base_array_layer(0)
-                        .layer_count(1),
-                );
-
-            let image_view =
-                match unsafe { device_manager.device.create_image_view(&create_info, None) } {
-                    Ok(image_view) => image_view,
-                    Err(e) => {
-                        log!("cannot create image view: {}", e);
-                        return Err(CrystalError::SwapChainError);
-                    }
-                };
-
-            swapchain_image_views.push(image_view);
-
-            let semaphore_create_info = vk::SemaphoreCreateInfo::default();
-
-            for i in 0..2 {
-                let semaphore = match unsafe {
-                    device_manager
-                        .device
-                        .create_semaphore(&semaphore_create_info, None)
-                } {
-                    Ok(semaphore) => semaphore,
-                    Err(e) => {
-                        log!("cannot create semaphore: {}", e);
-                        return Err(CrystalError::SwapChainIsNotSupported);
-                    }
-                };
-
-                if i == 0 {
-                    render_finished_semaphores.push(semaphore);
-                } else {
-                    image_available_semaphores.push(semaphore);
-                }
+        let image_count = {
+            let max_image_count = swap_chain_support_details.capabilities.max_image_count;
+            let min_image_count = swap_chain_support_details.capabilities.min_image_count;
+            if max_image_count > 0 {
+                max_image_count
+            } else {
+                min_image_count
             }
+        };
 
-            let fence_create_info =
-                vk::FenceCreateInfo::default().flags(vk::FenceCreateFlags::SIGNALED);
+        let swap_present_mode = match swap_chain_support_details
+            .present_modes
+            .iter()
+            .find(|&&mode| mode == vk::PresentModeKHR::MAILBOX)
+        {
+            Some(&mode) => mode,
+            None => vk::PresentModeKHR::FIFO,
+        };
 
-            let in_flight_fence =
-                match unsafe { device_manager.device.create_fence(&fence_create_info, None) } {
-                    Ok(fence) => fence,
-                    Err(e) => {
-                        log!("cannot create fence: {}", e);
-                        return Err(CrystalError::SwapChainIsNotSupported);
-                    }
-                };
-
-            in_flight_fences.push(in_flight_fence);
-        }
-
-        Ok(Presentation {
+        Ok(Arc::new(Self {
             device_manager,
             surface,
-            frames_in_flight,
-            msaa_samples,
-            extent: swapchain_create_info.image_extent,
-            image_format: swapchain_create_info.image_format,
 
             queue_family_indices,
+            surface_format: swap_surface_format,
+            extent: RwLock::new(swap_extent),
+            present_mode: swap_present_mode,
+            support_details: swap_chain_support_details,
 
-            swapchain_image_views,
-
-            image_available_semaphores,
-            render_finished_semaphores,
-            in_flight_fences,
-
-            current_frame: 0,
-            image_index: 0,
-
-            swapchain,
-            swapchain_khr,
-        })
-    }
-
-    pub fn recreate_swapchain(&mut self) -> CrystalResult<()> {
-        unimplemented!("recreating swapchain")
+            image_count,
+        }))
     }
 
     fn query_swap_chain_support(
@@ -296,73 +164,311 @@ impl Presentation {
         })
     }
 
-    pub fn create_swapchain_info<'a>(
-        queue_family_indices: &'a [u32; 2],
-        surface: Arc<PresentSurface>,
-        device_manager: Arc<DeviceManager>,
-    ) -> CrystalResult<vk::SwapchainCreateInfoKHR<'a>> {
-        let swap_chain_support_details =
-            Self::query_swap_chain_support(surface.clone(), &device_manager.physical_device)?;
-
-        let swap_surface_format = match swap_chain_support_details.formats.iter().find(|format| {
-            format.format == vk::Format::B8G8R8A8_SRGB
-                && format.color_space == vk::ColorSpaceKHR::SRGB_NONLINEAR
-        }) {
-            Some(&format) => format,
-            None => {
-                log!("not found required swap surface format");
-                return Err(CrystalError::SwapChainIsNotSupported);
+    pub fn update_extent(&self) -> CrystalResult<()> {
+        let capabilities = match unsafe {
+            self.surface
+                .surface
+                .get_physical_device_surface_capabilities(
+                    self.device_manager.physical_device,
+                    self.surface.surface_khr,
+                )
+        } {
+            Ok(data) => data,
+            Err(e) => {
+                log!("cannot get physical device surface capabilities: {}", e);
+                return Err(CrystalError::CannotInitDevice);
             }
         };
 
-        let swap_extent =
-            if swap_chain_support_details.capabilities.current_extent.width != u32::MAX {
-                swap_chain_support_details.capabilities.current_extent
-            } else {
-                log!("unknown surface extent");
-                return Err(CrystalError::SwapChainIsNotSupported);
-            };
+        *self.extent.write().unwrap() = capabilities.current_extent;
 
-        let image_count = {
-            let max_image_count = swap_chain_support_details.capabilities.max_image_count;
-            let min_image_count = swap_chain_support_details.capabilities.min_image_count;
-            if max_image_count > 0 {
-                max_image_count
-            } else {
-                min_image_count
-            }
-        };
+        Ok(())
+    }
 
-        let swap_present_mode = match swap_chain_support_details
-            .present_modes
-            .iter()
-            .find(|&&mode| mode == vk::PresentModeKHR::MAILBOX)
-        {
-            Some(&mode) => mode,
-            None => vk::PresentModeKHR::FIFO,
-        };
-
+    pub fn as_vk<'a>(&'a self) -> vk::SwapchainCreateInfoKHR<'a> {
         let mut swapchain_create_info = vk::SwapchainCreateInfoKHR::default()
-            .surface(surface.surface_khr)
-            .min_image_count(image_count)
-            .image_format(swap_surface_format.format)
-            .image_color_space(swap_surface_format.color_space)
-            .image_extent(swap_extent)
+            .surface(self.surface.surface_khr)
+            .min_image_count(self.image_count)
+            .image_format(self.surface_format.format)
+            .image_color_space(self.surface_format.color_space)
+            .image_extent(*self.extent.read().unwrap())
             .image_array_layers(1)
             .image_usage(vk::ImageUsageFlags::COLOR_ATTACHMENT)
-            .pre_transform(swap_chain_support_details.capabilities.current_transform)
+            .pre_transform(self.support_details.capabilities.current_transform)
             .composite_alpha(vk::CompositeAlphaFlagsKHR::OPAQUE)
             .image_sharing_mode(vk::SharingMode::EXCLUSIVE)
-            .present_mode(swap_present_mode)
+            .present_mode(self.present_mode)
             .clipped(true)
             .old_swapchain(vk::SwapchainKHR::null());
 
-        if queue_family_indices[0] != queue_family_indices[1] {
+        if self.queue_family_indices[0] != self.queue_family_indices[1] {
             swapchain_create_info = swapchain_create_info
                 .image_sharing_mode(vk::SharingMode::CONCURRENT)
-                .queue_family_indices(queue_family_indices)
+                .queue_family_indices(&self.queue_family_indices)
         }
 
-        Ok(swapchain_create_info)
+        swapchain_create_info
+    }
+}
+
+pub struct Swapchain {
+    device_manager: Arc<DeviceManager>,
+    pub swapchain_info: Arc<SwapchainInfo>,
+
+    pub swapchain: RwLock<ash::khr::swapchain::Device>,
+    pub swapchain_khr: RwLock<vk::SwapchainKHR>,
+    pub swapchain_image_views: RwLock<Vec<vk::ImageView>>,
+}
+
+impl Drop for Swapchain {
+    fn drop(&mut self) {
+        self.destroy();
+    }
+}
+
+impl Swapchain {
+    fn destroy(&self) {
+        unsafe {
+            self.device_manager.device.device_wait_idle().unwrap();
+
+            self.swapchain_image_views
+                .read()
+                .unwrap()
+                .iter()
+                .for_each(|&image_view| {
+                    self.device_manager
+                        .device
+                        .destroy_image_view(image_view, None)
+                });
+            self.swapchain
+                .read()
+                .unwrap()
+                .destroy_swapchain(*self.swapchain_khr.read().unwrap(), None);
+        }
+    }
+
+    pub fn extent(&self) -> vk::Extent2D {
+        *self.swapchain_info.extent.read().unwrap()
+    }
+
+    fn from_info(
+        device_manager: Arc<DeviceManager>,
+        swapchain_create_info: Arc<SwapchainInfo>,
+    ) -> CrystalResult<(
+        ash::khr::swapchain::Device,
+        vk::SwapchainKHR,
+        Vec<vk::ImageView>,
+    )> {
+        let swapchain =
+            ash::khr::swapchain::Device::new(&device_manager.instance, &device_manager.device);
+        let swapchain_khr =
+            match unsafe { swapchain.create_swapchain(&swapchain_create_info.as_vk(), None) } {
+                Ok(swapchain_khr) => swapchain_khr,
+                Err(e) => {
+                    log!("cannot create swapchain: {}", e);
+                    return Err(CrystalError::SwapChainError);
+                }
+            };
+
+        let swapchain_images = match unsafe { swapchain.get_swapchain_images(swapchain_khr) } {
+            Ok(images) => images,
+            Err(e) => {
+                log!("cannot get swapchain images: {}", e);
+                return Err(CrystalError::SwapChainError);
+            }
+        };
+
+        let mut swapchain_image_views = vec![];
+
+        for &swapchain_image in &swapchain_images {
+            let create_info = vk::ImageViewCreateInfo::default()
+                .image(swapchain_image)
+                .view_type(vk::ImageViewType::TYPE_2D)
+                .format(swapchain_create_info.surface_format.format)
+                .components(vk::ComponentMapping {
+                    r: vk::ComponentSwizzle::IDENTITY,
+                    g: vk::ComponentSwizzle::IDENTITY,
+                    b: vk::ComponentSwizzle::IDENTITY,
+                    a: vk::ComponentSwizzle::IDENTITY,
+                })
+                .subresource_range(
+                    vk::ImageSubresourceRange::default()
+                        .aspect_mask(vk::ImageAspectFlags::COLOR)
+                        .base_mip_level(0)
+                        .level_count(1)
+                        .base_array_layer(0)
+                        .layer_count(1),
+                );
+
+            let image_view =
+                match unsafe { device_manager.device.create_image_view(&create_info, None) } {
+                    Ok(image_view) => image_view,
+                    Err(e) => {
+                        log!("cannot create image view: {}", e);
+                        return Err(CrystalError::SwapChainError);
+                    }
+                };
+
+            swapchain_image_views.push(image_view);
+        }
+
+        Ok((swapchain, swapchain_khr, swapchain_image_views))
+    }
+
+    fn new(
+        device_manager: Arc<DeviceManager>,
+        surface: Arc<PresentSurface>,
+    ) -> CrystalResult<Arc<Self>> {
+        let swapchain_create_info = SwapchainInfo::new(device_manager.clone(), surface.clone())?;
+        let (swapchain, swapchain_khr, swapchain_image_views) =
+            Self::from_info(device_manager.clone(), swapchain_create_info.clone())?;
+
+        Ok(Arc::new(Self {
+            device_manager,
+            swapchain_info: swapchain_create_info,
+            swapchain: RwLock::new(swapchain),
+            swapchain_khr: RwLock::new(swapchain_khr),
+            swapchain_image_views: RwLock::new(swapchain_image_views),
+        }))
+    }
+
+    pub fn recreate(&self) -> CrystalResult<Vec<vk::ImageView>> {
+        self.destroy();
+        self.swapchain_info.update_extent()?;
+        let (swapchain, swapchain_khr, swapchain_image_views) =
+            Swapchain::from_info(self.device_manager.clone(), self.swapchain_info.clone())?;
+
+        *self.swapchain.write().unwrap() = swapchain;
+        *self.swapchain_khr.write().unwrap() = swapchain_khr;
+        *self.swapchain_image_views.write().unwrap() = swapchain_image_views.clone();
+
+        Ok(swapchain_image_views)
+    }
+}
+
+pub struct Presentation {
+    device_manager: Arc<DeviceManager>,
+    pub surface: Arc<PresentSurface>,
+    pub swapchain: Arc<Swapchain>,
+
+    pub image_available_semaphores: Vec<vk::Semaphore>,
+    pub render_finished_semaphores: Vec<vk::Semaphore>,
+    pub in_flight_fences: Vec<vk::Fence>,
+
+    pub current_frame: usize,
+    pub image_index: u32,
+
+    pub frames_in_flight: u32,
+    pub msaa_samples: u8,
+}
+
+impl Drop for Presentation {
+    fn drop(&mut self) {
+        unsafe {
+            self.image_available_semaphores
+                .iter()
+                .chain(self.render_finished_semaphores.iter())
+                .for_each(|&semaphore| {
+                    self.device_manager
+                        .device
+                        .destroy_semaphore(semaphore, None)
+                });
+
+            self.in_flight_fences
+                .iter()
+                .for_each(|&fence| self.device_manager.device.destroy_fence(fence, None));
+        }
+    }
+}
+
+impl Presentation {
+    pub fn create_surface<T: HasWindowHandle + HasDisplayHandle>(
+        entry: &Entry,
+        instance: &ash::Instance,
+        window: &T,
+    ) -> Arc<PresentSurface> {
+        let surface = ash::khr::surface::Instance::new(entry, instance);
+        let surface_khr = unsafe {
+            ash_window::create_surface(
+                &entry,
+                &instance,
+                window.display_handle().unwrap().as_raw(),
+                window.window_handle().unwrap().as_raw(),
+                None,
+            )
+            .unwrap()
+        };
+
+        Arc::new(PresentSurface {
+            surface,
+            surface_khr,
+        })
+    }
+
+    pub fn new(
+        device_manager: Arc<DeviceManager>,
+        surface: Arc<PresentSurface>,
+        frames_in_flight: u32,
+        msaa_samples: u8,
+    ) -> CrystalResult<Self> {
+        let mut image_available_semaphores = vec![];
+        let mut render_finished_semaphores = vec![];
+        let mut in_flight_fences = vec![];
+
+        let swapchain = Swapchain::new(device_manager.clone(), surface.clone())?;
+
+        for _ in 0..swapchain.swapchain_info.as_ref().image_count {
+            let semaphore_create_info = vk::SemaphoreCreateInfo::default();
+
+            for i in 0..2 {
+                let semaphore = match unsafe {
+                    device_manager
+                        .device
+                        .create_semaphore(&semaphore_create_info, None)
+                } {
+                    Ok(semaphore) => semaphore,
+                    Err(e) => {
+                        log!("cannot create semaphore: {}", e);
+                        return Err(CrystalError::SwapChainIsNotSupported);
+                    }
+                };
+
+                if i == 0 {
+                    render_finished_semaphores.push(semaphore);
+                } else {
+                    image_available_semaphores.push(semaphore);
+                }
+            }
+
+            let fence_create_info =
+                vk::FenceCreateInfo::default().flags(vk::FenceCreateFlags::SIGNALED);
+
+            let in_flight_fence =
+                match unsafe { device_manager.device.create_fence(&fence_create_info, None) } {
+                    Ok(fence) => fence,
+                    Err(e) => {
+                        log!("cannot create fence: {}", e);
+                        return Err(CrystalError::SwapChainIsNotSupported);
+                    }
+                };
+
+            in_flight_fences.push(in_flight_fence);
+        }
+
+        Ok(Presentation {
+            device_manager,
+            surface,
+            swapchain,
+
+            frames_in_flight,
+            msaa_samples,
+
+            image_available_semaphores,
+            render_finished_semaphores,
+            in_flight_fences,
+
+            current_frame: 0,
+            image_index: 0,
+        })
     }
 }
