@@ -1,11 +1,11 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashSet},
     ffi::CStr,
     sync::{Arc, Mutex},
-    u64,
+    thread::JoinHandle,
 };
 
-use ash::vk::{self, EXT_DEBUG_UTILS_NAME, KHR_SWAPCHAIN_NAME};
+use ash::vk::{self, EXT_DEBUG_UTILS_NAME, Handle, KHR_SWAPCHAIN_NAME};
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
 use super::{
@@ -20,12 +20,16 @@ use super::{
 };
 
 use crate::{
-    GraphicsApiInitSettings,
+    GpuSampler, GraphicsApiInitSettings,
     debug::log,
     errors::{CrystalError, CrystalResult},
     images::Image2D,
+    object::Object,
     traits::{self, Layout},
-    vulkan::commands::{GpuFuture, GpuSync},
+    vulkan::{
+        VulkanObjectMemoryManager,
+        commands::{GpuFuture, GpuSync},
+    },
 };
 
 pub struct VulkanEntry {
@@ -42,7 +46,19 @@ pub struct VulkanEntry {
         >,
     >,
 
+    thread_handle:
+        Mutex<Option<JoinHandle<Result<Box<GpuFuture>, (vk::Result, Arc<Mutex<GpuSync>>)>>>>,
+
     pub render_targets: BTreeMap<u16, Arc<VulkanRenderTarget>>,
+}
+
+impl Drop for VulkanEntry {
+    fn drop(&mut self) {
+        let mut handle_lock = self.thread_handle.lock().unwrap();
+        if let Some(_handle) = &*handle_lock {
+            let _ = handle_lock.take().unwrap().join().unwrap();
+        }
+    }
 }
 
 impl VulkanEntry {
@@ -131,14 +147,7 @@ impl VulkanEntry {
             create_debug_utils_messanger(&entry, &instance)?
         };
 
-        if settings.viewport_frames_in_flight == 0 {
-            panic!(
-                "fatal: wrong frames in flight count: {}",
-                settings.viewport_frames_in_flight
-            );
-        }
-
-        let surface = Presentation::create_surface(&entry, &instance, window);
+        let surface = Presentation::create_surface(&entry, &instance, window, settings.vsync);
 
         let (physical_device, queue_families_indices) =
             pick_physical_device(&instance, Some(surface.clone()), &device_extensions)?;
@@ -167,14 +176,10 @@ impl VulkanEntry {
         });
 
         let command_manager =
-            CommandManager::new(device_manager.clone(), settings.viewport_frames_in_flight)?;
+            CommandManager::new(device_manager.clone(), settings.double_buffering)?;
 
-        let presentation = Presentation::new(
-            device_manager.clone(),
-            surface,
-            settings.viewport_frames_in_flight,
-            settings.msaa_samples,
-        )?;
+        let presentation =
+            Presentation::new(device_manager.clone(), surface, settings.msaa_samples)?;
 
         let viewport_render_target = VulkanRenderTarget::new(
             device_manager.clone(),
@@ -207,19 +212,13 @@ impl VulkanEntry {
 
             presentation,
             future: Mutex::new(None),
+            thread_handle: Mutex::new(None),
 
             render_targets,
         }))
     }
 
-    pub fn current_frame(&self) -> usize {
-        *self.presentation.current_frame.lock().unwrap()
-    }
-
-    pub async fn render_and_present(
-        self: Arc<Self>,
-        layouts: Vec<Arc<dyn Layout>>,
-    ) -> CrystalResult<()> {
+    pub fn render_and_present(self: Arc<Self>, objects: &[Arc<Object>]) -> CrystalResult<()> {
         let render_target_dyn = self.get_viewport();
         let render_target = render_target_dyn
             .clone()
@@ -229,8 +228,9 @@ impl VulkanEntry {
         let mut swapchain_out_of_date = false;
         let mut suboptimal = false;
 
-        let now = match self.future.lock().unwrap().as_mut() {
-            Some(future) => match future.await {
+        let mut handle_lock = self.thread_handle.lock().unwrap();
+        let now = match &*handle_lock {
+            Some(_handle) => match handle_lock.take().unwrap().join().unwrap() {
                 Ok(n) => n.wait().unwrap(),
                 Err((vk::Result::ERROR_OUT_OF_DATE_KHR, sync)) => {
                     swapchain_out_of_date = true;
@@ -248,27 +248,38 @@ impl VulkanEntry {
             None => GpuFuture::now(self.device_manager.clone()),
         };
 
+        drop(handle_lock);
+
         if swapchain_out_of_date {
-            let images = self
-                .presentation
-                .swapchain
-                .recreate()
-                .expect("cannot recreate swapchain");
-
-            if suboptimal {
-                render_target
-                    .update_resources(self.presentation.swapchain.extent(), images)
-                    .expect("cannot update render target size");
-            }
-
+            self.presentation.swapchain.recreate()?;
             *self.future.lock().unwrap() = None;
+        }
+
+        if suboptimal {
+            render_target.update_resources(
+                self.presentation.swapchain.extent(),
+                self.presentation
+                    .swapchain
+                    .swapchain_image_views
+                    .read()
+                    .unwrap()
+                    .clone(),
+            )?;
         }
 
         match now.acquire_next_image(&self.presentation) {
             Ok((idx, _)) => *self.presentation.image_index.lock().unwrap() = idx,
             Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
-                let images = self.presentation.swapchain.recreate()?;
-                render_target.update_resources(self.presentation.swapchain.extent(), images)?;
+                self.presentation.swapchain.recreate()?;
+                render_target.update_resources(
+                    self.presentation.swapchain.extent(),
+                    self.presentation
+                        .swapchain
+                        .swapchain_image_views
+                        .read()
+                        .unwrap()
+                        .clone(),
+                )?;
                 return Ok(());
             }
             Err(e) => {
@@ -277,7 +288,7 @@ impl VulkanEntry {
             }
         };
 
-        let current_frame = self.presentation.current_frame.lock().unwrap();
+        let n_pass = now.n_pass();
 
         let color = 0.2f32;
         let mut clear_color = vk::ClearColorValue::default();
@@ -299,7 +310,7 @@ impl VulkanEntry {
                 .graphics
                 .clone()
                 .unwrap()
-                .record_command_buffer(*current_frame, |command_buffer, device| {
+                .record_command_buffer(n_pass, |command_buffer, device| {
                     let render_pass_begin = vk::RenderPassBeginInfo::default()
                         .render_pass(render_target.render_pass)
                         .framebuffer(
@@ -341,67 +352,106 @@ impl VulkanEntry {
                     let scissors = &[scissor];
                     unsafe { device.cmd_set_scissor(*command_buffer, 0, scissors) }
 
-                    for layout in layouts.clone() {
-                        let layout_downcasted = match layout.as_vulkan() {
-                            Some(layout) => layout,
-                            None => {
-                                panic!(
-                                    "fatal: wrong layout type passed into render, expected vulkan"
-                                )
-                            }
-                        };
+                    let layouts: HashSet<_> = objects
+                        .iter()
+                        .map(|object| object.pipeline.clone().as_vulkan().unwrap().layout.clone())
+                        .collect();
 
-                        layout_downcasted
-                            .render(
-                                self.device_manager.clone(),
-                                command_buffer,
-                                self.presentation.frames_in_flight as usize,
-                                *current_frame,
-                            )
-                            .unwrap();
+                    // TODO optimize
+                    for layout in layouts {
+                        let objects: Vec<Arc<Object>> = objects
+                            .iter()
+                            .filter_map(|object| {
+                                if object
+                                    .pipeline
+                                    .clone()
+                                    .as_vulkan()
+                                    .unwrap()
+                                    .layout
+                                    .pipeline_layout
+                                    .as_raw()
+                                    == layout.pipeline_layout.as_raw()
+                                {
+                                    Some(object.clone())
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect();
+
+                        layout.render(&objects, command_buffer).unwrap();
                     }
 
                     unsafe { device.cmd_end_render_pass(*command_buffer) }
                 })?,
         );
 
-        drop(current_frame);
+        let present = self.command_manager.present.clone().unwrap();
+        let presentation = self.presentation.clone();
 
-        let future = gpu_future.then_swapchain_present(
-            self.command_manager.present.clone().unwrap(),
-            self.presentation.clone(),
-        );
+        let handle =
+            std::thread::spawn(move || gpu_future.then_swapchain_present(present, presentation));
 
-        *self.future.lock().unwrap() = Some(Box::pin(future));
+        let mut handle_lock = self.thread_handle.lock().unwrap();
+        *handle_lock = Some(handle);
 
         Ok(())
     }
 
     pub fn create_layout(
         &self,
-        frames_in_flight: u32,
-        image_view_sampled_num: u32,
-        max_instance_num: u64,
-        buffers: &[(bool, u64)],
+        sampler_num: usize,
+        uniform_num: usize,
+        storage_num: usize,
     ) -> CrystalResult<Arc<dyn Layout>> {
         Ok(layout::VulkanLayout::new(
             self.device_manager.clone(),
-            image_view_sampled_num,
-            frames_in_flight,
-            max_instance_num,
-            buffers,
+            sampler_num,
+            uniform_num,
+            storage_num,
+            self.command_manager
+                .graphics
+                .clone()
+                .unwrap()
+                .double_buffering,
         )?)
     }
 
-    pub fn create_texture(
+    pub fn create_sampler(
         &self,
         image: &Image2D,
         anisotropy_texels: f32,
-    ) -> CrystalResult<Arc<dyn traits::Texture>> {
-        let texture = VulkanTexture::new(self.device_manager.clone(), image, anisotropy_texels)?;
+    ) -> CrystalResult<Arc<GpuSampler>> {
+        let texture = VulkanTexture::new(
+            self.device_manager.clone(),
+            image,
+            self.command_manager.clone(),
+            anisotropy_texels,
+        )?;
+        Ok(GpuSampler::from_texture(texture))
+    }
 
-        texture.prepare_texture_image(&self.command_manager)?;
-        Ok(texture)
+    pub fn register_meshes(&self, objects: &[Arc<Object>]) {
+        objects.iter().for_each(|object| {
+            let mut memory_manager = object.memory_manager.write().unwrap();
+
+            match object.mesh.clone() {
+                Some(mesh) => match *memory_manager {
+                    Some(_) => {}
+                    None => {
+                        *memory_manager = Some(
+                            VulkanObjectMemoryManager::new(
+                                self.device_manager.clone(),
+                                &mesh.vertices,
+                                &mesh.indices,
+                            )
+                            .unwrap(),
+                        );
+                    }
+                },
+                None => {}
+            }
+        });
     }
 
     pub fn get_viewport(&self) -> Arc<dyn traits::RenderTarget> {

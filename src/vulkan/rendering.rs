@@ -13,6 +13,7 @@ use crate::{
     mesh::{Attribute, VertexTexture},
     shader::Shader,
     traits,
+    vulkan::VulkanLayout,
 };
 
 use super::{
@@ -77,6 +78,7 @@ impl ShaderStageInfo {
 
 pub struct VulkanPipeline {
     device_manager: Arc<DeviceManager>,
+    pub(crate) layout: Arc<VulkanLayout>,
     pub handle: vk::Pipeline,
     stages: Vec<Arc<ShaderStageInfo>>,
 }
@@ -125,7 +127,7 @@ impl VulkanPipeline {
             };
 
             let shader_module_create_info =
-                vk::ShaderModuleCreateInfo::default().code(shader.code.as_words());
+                vk::ShaderModuleCreateInfo::default().code(&shader.code);
 
             let module = match unsafe {
                 device_manager
@@ -265,6 +267,7 @@ impl VulkanPipeline {
         } {
             Ok(pipeline) => Ok(Arc::new(Self {
                 device_manager,
+                layout,
                 handle: pipeline[0],
                 stages,
             })),

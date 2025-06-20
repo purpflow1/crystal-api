@@ -1,7 +1,8 @@
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 use crate::{
-    GpuVec, errors::CrystalResult, mesh::Attribute, object::Object, shader::Shader, vulkan,
+    errors::CrystalResult, gpu_data::IntoGpuBuffer, mesh::Attribute, object::Object,
+    shader::Shader, vulkan,
 };
 
 pub trait RenderTarget: Sync + Send {
@@ -22,16 +23,14 @@ pub trait Layout: Sync + Send {
         None
     }
 
-    fn add_object_to_queue(&self, object: Arc<RwLock<Object>>);
-
-    fn write_to_buffer(
+    fn add_buffer(
         &self,
+        binding: usize,
         is_uniform: bool,
-        frame: usize,
-        buffer: usize,
-        offset: usize,
-        data: GpuVec,
+        data: Arc<dyn IntoGpuBuffer>,
     ) -> CrystalResult<()>;
+
+    fn register_samplers(&self, objects: &[Arc<Object>]) -> CrystalResult<()>;
 }
 
 pub trait Texture: Sync + Send {

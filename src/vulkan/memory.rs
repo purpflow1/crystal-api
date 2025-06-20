@@ -16,7 +16,7 @@ pub struct BufferManager {
     device_manager: Arc<DeviceManager>,
     pub buffer: vk::Buffer,
     device_memory: vk::DeviceMemory,
-    mapped_memory: RwLock<Option<*mut c_void>>,
+    pub mapped_memory: RwLock<Option<*mut c_void>>,
     size: u64,
 }
 
@@ -100,12 +100,14 @@ impl BufferManager {
         }))
     }
 
-    pub fn map_memory(&self, size: u64, offset: u64) -> CrystalResult<()> {
-        if self.mapped_memory.read().unwrap().is_some() {
+    pub fn map_memory(&self, size: u64, offset: u64) -> CrystalResult<*mut u8> {
+        let mut mapped_memory = self.mapped_memory.write().unwrap();
+
+        if mapped_memory.is_some() {
             unsafe { self.device_manager.device.unmap_memory(self.device_memory) };
         }
 
-        *self.mapped_memory.write().unwrap() = match unsafe {
+        *mapped_memory = match unsafe {
             self.device_manager.device.map_memory(
                 self.device_memory,
                 offset,
@@ -120,7 +122,7 @@ impl BufferManager {
             }
         };
 
-        Ok(())
+        Ok(mapped_memory.unwrap() as *mut u8)
     }
 
     pub fn write<T: Copy>(&self, data: &[T], offset: usize) -> CrystalResult<()> {

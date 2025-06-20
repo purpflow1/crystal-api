@@ -22,6 +22,7 @@ pub struct SwapChainSupportDetails {
 pub struct PresentSurface {
     pub surface: ash::khr::surface::Instance,
     pub surface_khr: vk::SurfaceKHR,
+    pub vsync: bool,
 }
 
 impl Drop for PresentSurface {
@@ -96,7 +97,17 @@ impl SwapchainInfo {
             .find(|&&mode| mode == vk::PresentModeKHR::MAILBOX)
         {
             Some(&mode) => mode,
-            None => vk::PresentModeKHR::FIFO,
+            None => {
+                log!("no MAILBOX support!");
+
+                if surface.vsync {
+                    log!("choosing FIFO");
+                    vk::PresentModeKHR::FIFO
+                } else {
+                    log!("choosing IMMEDIATE");
+                    vk::PresentModeKHR::IMMEDIATE
+                }
+            }
         };
 
         Ok(Arc::new(Self {
@@ -332,7 +343,7 @@ impl Swapchain {
         }))
     }
 
-    pub fn recreate(&self) -> CrystalResult<Vec<vk::ImageView>> {
+    pub fn recreate(&self) -> CrystalResult<()> {
         self.destroy();
         self.swapchain_info.update_extent()?;
         let (swapchain, swapchain_khr, swapchain_image_views) =
@@ -340,9 +351,9 @@ impl Swapchain {
 
         *self.swapchain.write().unwrap() = swapchain;
         *self.swapchain_khr.write().unwrap() = swapchain_khr;
-        *self.swapchain_image_views.write().unwrap() = swapchain_image_views.clone();
+        *self.swapchain_image_views.write().unwrap() = swapchain_image_views;
 
-        Ok(swapchain_image_views)
+        Ok(())
     }
 }
 
@@ -351,10 +362,8 @@ pub struct Presentation {
     pub surface: Arc<PresentSurface>,
     pub swapchain: Arc<Swapchain>,
 
-    pub current_frame: Mutex<usize>,
     pub image_index: Mutex<u32>,
 
-    pub frames_in_flight: u32,
     pub msaa_samples: u8,
 }
 
@@ -363,6 +372,7 @@ impl Presentation {
         entry: &Entry,
         instance: &ash::Instance,
         window: &T,
+        vsync: bool,
     ) -> Arc<PresentSurface> {
         let surface = ash::khr::surface::Instance::new(entry, instance);
         let surface_khr = unsafe {
@@ -379,13 +389,13 @@ impl Presentation {
         Arc::new(PresentSurface {
             surface,
             surface_khr,
+            vsync,
         })
     }
 
     pub fn new(
         device_manager: Arc<DeviceManager>,
         surface: Arc<PresentSurface>,
-        frames_in_flight: u32,
         msaa_samples: u8,
     ) -> CrystalResult<Arc<Self>> {
         let swapchain = Swapchain::new(device_manager.clone(), surface.clone())?;
@@ -395,10 +405,8 @@ impl Presentation {
             surface,
             swapchain,
 
-            frames_in_flight,
             msaa_samples,
 
-            current_frame: Mutex::new(0),
             image_index: Mutex::new(0),
         }))
     }

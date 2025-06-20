@@ -1,14 +1,12 @@
 use crystal_api::{errors::CrystalResult, object::Object, vulkan::VulkanEntry, *};
-use pollster::FutureExt;
 
 use std::{
     f32::consts::PI,
     fs::File,
     io::BufReader,
-    iter::zip,
     path::Path,
-    sync::{Arc, RwLock},
-    time::{Duration, SystemTime},
+    sync::Arc,
+    time::{Duration, Instant},
 };
 
 use images::Image2D;
@@ -21,15 +19,13 @@ use winit::{
     window::Window,
 };
 
-const MAX_INSTANCE_NUM: u64 = 3;
-const IMAGE_SAMPLED_NUM: u64 = 8;
-const MAX_FPS: u16 = 0;
+const MAX_INSTANCE_NUM: usize = 3;
 
 struct State {
     delta_time: Duration,
     delta_time_sum: Duration,
-    current_frame: u16,
-    startup_time: SystemTime,
+    current_frame: usize,
+    now: Option<Instant>,
 }
 
 #[derive(Clone, Copy)]
@@ -46,10 +42,14 @@ impl Camera {
 
 struct Scene {
     camera: Camera,
-    ambient_lights: Vec<glam::Vec4>,
-    point_lights: Vec<(glam::Vec4, glam::Vec4)>,
-    direct_lights: Vec<(glam::Vec4, glam::Vec4)>,
-    objects_pbr: Vec<Arc<RwLock<Object>>>,
+
+    light: Arc<GpuVec<[f32; 3]>>,
+    light_info: Arc<GpuVec<[u32; 3]>>,
+
+    uniform: Arc<GpuVec<(glam::Mat4, f32)>>,
+    transforms: Arc<GpuVec<glam::Mat4>>,
+
+    objects_pbr: Vec<Arc<Object>>,
 }
 
 struct Context {
@@ -90,12 +90,12 @@ impl Context {
                         glam::Vec3::new(0., -1., 0.),
                     ),
                 },
-                ambient_lights: vec![glam::Vec4::new(0.1, 0.1, 0.1, 0.)],
-                point_lights: vec![(
-                    glam::Vec4::new(1., 1., 1., 0.),
-                    glam::Vec4::new(0., 5., 0., 0.),
-                )],
-                direct_lights: vec![],
+
+                light: GpuVec::with_len(60),
+                light_info: GpuVec::with_len(3),
+                transforms: GpuVec::with_len(MAX_INSTANCE_NUM),
+
+                uniform: GpuVec::with_len(1),
                 objects_pbr: vec![],
             },
 
@@ -103,7 +103,7 @@ impl Context {
                 delta_time: Duration::ZERO,
                 delta_time_sum: Duration::ZERO,
                 current_frame: 0,
-                startup_time: SystemTime::now(),
+                now: None,
             },
         })
     }
@@ -111,16 +111,21 @@ impl Context {
 
 impl ApplicationHandler for Context {
     fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
-        let window = event_loop
-            .create_window(
-                Window::default_attributes()
-                    .with_inner_size(LogicalSize::new(self.settings.width, self.settings.height))
-                    .with_min_inner_size(LogicalSize::new(
-                        self.settings.width / 2,
-                        self.settings.height / 2,
-                    )),
-            )
-            .unwrap();
+        let window = {
+            event_loop
+                .create_window(
+                    Window::default_attributes()
+                        .with_inner_size(LogicalSize::new(
+                            self.settings.width,
+                            self.settings.height,
+                        ))
+                        .with_min_inner_size(LogicalSize::new(
+                            self.settings.width / 4,
+                            self.settings.height / 4,
+                        )),
+                )
+                .unwrap()
+        };
 
         let graphics = VulkanEntry::with_presentation(&self.settings, &window)
             .expect("cannot create vulkan entry");
@@ -135,33 +140,32 @@ impl ApplicationHandler for Context {
         let default_texture_image =
             Image2D::new(Path::new("resources/textures/default.png")).unwrap();
 
-        let default_texture_map = graphics
-            .create_texture(&default_texture_image, 1.0)
+        let default_sampler = graphics
+            .create_sampler(&default_texture_image, 1.0)
             .unwrap();
 
         let test_texture_image = Image2D::new(Path::new("resources/textures/test.png")).unwrap();
 
-        let test_texture_map = graphics.create_texture(&test_texture_image, 1.0).unwrap();
+        let test_sampler = graphics.create_sampler(&test_texture_image, 1.0).unwrap();
 
-        let layout_pbr = graphics
-            .create_layout(
-                self.settings.viewport_frames_in_flight,
-                IMAGE_SAMPLED_NUM as u32,
-                MAX_INSTANCE_NUM,
-                &[
-                    (
-                        true,
-                        size_of::<glam::Mat4>() as u64 + size_of::<f32>() as u64 + 12, // because of 16 bit alignment
-                    ),
-                    (false, size_of::<glam::Mat4>() as u64 * MAX_INSTANCE_NUM), // model data
-                    (false, size_of::<glam::Vec3>() as u64 * 60),               // light
-                    (false, size_of::<u32>() as u64 * 3),                       // light data
-                    (
-                        false,
-                        MAX_INSTANCE_NUM * size_of::<u32>() as u64 * IMAGE_SAMPLED_NUM,
-                    ), // texture data
-                ],
-            )
+        let layout_pbr = graphics.create_layout(32, 32, 32).unwrap();
+
+        self.scene
+            .light
+            .clone_from_slice(&[[1., 1., 1.], [1., 1., 1.]]);
+        self.scene.light_info.clone_from_slice(&[[1, 0, 0]]);
+
+        layout_pbr
+            .add_buffer(0, true, self.scene.uniform.clone())
+            .unwrap();
+        layout_pbr
+            .add_buffer(0, false, self.scene.transforms.clone())
+            .unwrap();
+        layout_pbr
+            .add_buffer(1, false, self.scene.light.clone())
+            .unwrap();
+        layout_pbr
+            .add_buffer(2, false, self.scene.light_info.clone())
             .unwrap();
 
         let pipeline_pbr = render_target
@@ -182,38 +186,48 @@ impl ApplicationHandler for Context {
         let obj1 = Object::with_mesh_textured(
             pipeline_pbr.clone(),
             mesh1.clone(),
-            &[(0, test_texture_map.clone())],
+            &[(0, test_sampler.clone())],
         );
 
         let obj2 = Object::with_mesh_textured(
             pipeline_pbr.clone(),
             mesh1.clone(),
-            &[(0, default_texture_map.clone())],
+            &[(0, default_sampler)],
         );
 
-        let obj3 = Object::with_mesh_textured(
-            pipeline_pbr.clone(),
-            mesh1.clone(),
-            &[(0, test_texture_map)],
-        );
+        let obj3 =
+            Object::with_mesh_textured(pipeline_pbr.clone(), mesh1.clone(), &[(0, test_sampler)]);
 
         self.scene.objects_pbr.push(obj1);
         self.scene.objects_pbr.push(obj2);
         self.scene.objects_pbr.push(obj3);
+
+        graphics.register_meshes(&self.scene.objects_pbr);
+        layout_pbr
+            .register_samplers(&self.scene.objects_pbr)
+            .unwrap();
 
         self.graphics = Some(graphics);
         self.window = Some(window);
         self.layout_pbr = Some(layout_pbr);
     }
 
-    fn about_to_wait(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
-        let now = std::time::Instant::now();
+    fn about_to_wait(&mut self, _event_loop: &winit::event_loop::ActiveEventLoop) {
+        if let Some(now) = self.state.now {
+            self.state.delta_time = now.elapsed();
+            self.state.delta_time_sum += self.state.delta_time;
+            self.state.current_frame += 1;
+
+            if self.state.delta_time_sum.as_secs_f64() >= 1. {
+                println!("FPS: {}", self.state.current_frame);
+                self.state.delta_time_sum = Duration::ZERO;
+                self.state.current_frame = 0;
+            }
+        }
+
+        self.state.now = Some(std::time::Instant::now());
 
         let graphics = self.graphics.clone().unwrap();
-
-        let current_frame = graphics.current_frame();
-
-        let layout_pbr = self.layout_pbr.clone().unwrap();
 
         let transforms = [
             glam::Mat4::from_scale_rotation_translation(
@@ -227,119 +241,17 @@ impl ApplicationHandler for Context {
             glam::Mat4::from_translation(glam::Vec3::new(-3., 0., 1.)),
         ];
 
-        for (idx, object) in zip(0..self.scene.objects_pbr.len(), &self.scene.objects_pbr) {
-            let obj = object.read().unwrap();
-
-            layout_pbr.add_object_to_queue(object.clone());
-
-            match &obj.textures {
-                None => {}
-                Some(textures) => {
-                    for image_idx in 0..IMAGE_SAMPLED_NUM as u32 {
-                        layout_pbr
-                            .write_to_buffer(
-                                false,
-                                current_frame,
-                                3,
-                                (idx as u32 * IMAGE_SAMPLED_NUM as u32 + image_idx) as usize,
-                                GpuVec::new(&[
-                                    if textures
-                                        .iter()
-                                        .find(|texture| texture.0 == image_idx)
-                                        .is_some()
-                                    {
-                                        1u32
-                                    } else {
-                                        0u32
-                                    },
-                                ]),
-                            )
-                            .unwrap();
-                    }
-                }
-            };
-        }
-
         let ubo = (
             self.scene.camera.calc_eye_matrix(),
-            self.state.startup_time.elapsed().unwrap().as_secs_f32(),
+            self.state.now.unwrap().elapsed().as_secs_f32(),
         );
 
-        layout_pbr
-            .write_to_buffer(true, current_frame, 0, 0, GpuVec::new(&[ubo]))
-            .expect("cannot update UBO");
+        self.scene.uniform.clone_from_slice(&[ubo]);
+        self.scene.transforms.clone_from_slice(&transforms);
 
-        layout_pbr
-            .write_to_buffer(false, current_frame, 0, 0, GpuVec::new(&transforms))
-            .expect("cannot update SSBO");
-
-        layout_pbr
-            .write_to_buffer(
-                false,
-                current_frame,
-                1,
-                0,
-                GpuVec::new(&self.scene.ambient_lights),
-            )
-            .expect("cannot update LBO");
-
-        layout_pbr
-            .write_to_buffer(
-                false,
-                current_frame,
-                1,
-                self.scene.ambient_lights.len(),
-                GpuVec::new(&self.scene.direct_lights),
-            )
-            .expect("cannot update LBO");
-
-        layout_pbr
-            .write_to_buffer(
-                false,
-                current_frame,
-                1,
-                self.scene.ambient_lights.len() + self.scene.direct_lights.len(),
-                GpuVec::new(&self.scene.point_lights),
-            )
-            .expect("cannot update LBO");
-
-        let info_light = [
-            self.scene.ambient_lights.len() as u32,
-            self.scene.direct_lights.len() as u32,
-            self.scene.point_lights.len() as u32,
-        ];
-
-        layout_pbr
-            .write_to_buffer(false, current_frame, 2, 0, GpuVec::new(&info_light))
-            .expect("cannot update ILBO");
-
-        drop(layout_pbr);
-
-        let layouts = vec![self.layout_pbr.clone().unwrap()];
-
-        let future = graphics.render_and_present(layouts);
-        future.block_on().unwrap();
-
-        if MAX_FPS != 0 && !event_loop.exiting() {
-            let time_to_sleep = Duration::from_secs_f64(1. / MAX_FPS as f64)
-                .checked_sub(now.elapsed())
-                .unwrap_or(Duration::ZERO);
-
-            std::thread::sleep(time_to_sleep);
-        }
-
-        self.state.delta_time = now.elapsed();
-        self.state.delta_time_sum += self.state.delta_time;
-        self.state.current_frame += 1;
-
-        if self.state.delta_time_sum.as_secs_f64() >= 1. {
-            // println!(
-            //     "FPS: {}",
-            //     (1. / (self.state.delta_time_sum.as_secs_f64() / self.settings.max_fps as f64))
-            //         as u16
-            // );
-            self.state.delta_time_sum = Duration::ZERO;
-        }
+        graphics
+            .render_and_present(&self.scene.objects_pbr)
+            .unwrap();
     }
 
     fn window_event(
@@ -379,14 +291,14 @@ impl ApplicationHandler for Context {
 
 fn main() -> CrystalResult<()> {
     let settings = GraphicsApiInitSettings::default()
-        .viewport_frames_in_flight(2)
+        .double_buffering(false)
+        .vsync(false)
         .msaa_samples(8)
         .width(1000)
         .height(700);
 
     let event_loop = EventLoop::new().unwrap();
     event_loop.set_control_flow(ControlFlow::Poll);
-    event_loop.set_control_flow(ControlFlow::Wait);
 
     let mut context = Context::new(settings)?;
     event_loop

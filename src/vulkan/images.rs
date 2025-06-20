@@ -167,6 +167,7 @@ impl VulkanTexture {
     pub(crate) fn new(
         device_manager: Arc<DeviceManager>,
         image: &Image2D,
+        command_manager: Arc<CommandManager>,
         anisotropy_texels: f32,
     ) -> CrystalResult<Arc<Self>> {
         let image_size = (image.height * image.width * image.channels) as u64;
@@ -219,13 +220,17 @@ impl VulkanTexture {
             anisotropy_texels,
         )?;
 
-        Ok(Arc::new(Self {
+        let texture = Arc::new(Self {
             staging_buffer_manager: buffer_manager,
             image,
-        }))
+        });
+
+        texture.prepare_texture_image(command_manager)?;
+
+        Ok(texture)
     }
 
-    pub fn prepare_texture_image(&self, command_manager: &CommandManager) -> CrystalResult<()> {
+    pub fn prepare_texture_image(&self, command_manager: Arc<CommandManager>) -> CrystalResult<()> {
         let command_entry = command_manager.graphics.as_ref().unwrap();
 
         command_entry

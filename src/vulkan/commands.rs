@@ -20,12 +20,14 @@ pub struct GpuSync {
     render_finished_semaphores: Vec<vk::Semaphore>,
     in_flight_fences: Vec<vk::Fence>,
 
-    pub n_pass: Mutex<usize>,
+    pub n_pass: usize,
 }
 
 impl Drop for GpuSync {
     fn drop(&mut self) {
         unsafe {
+            self.device_manager.device.device_wait_idle().unwrap();
+
             self.image_available_semaphores
                 .iter()
                 .chain(self.render_finished_semaphores.iter())
@@ -87,7 +89,7 @@ impl GpuSync {
             image_available_semaphores,
             render_finished_semaphores,
             in_flight_fences,
-            n_pass: Mutex::new(0),
+            n_pass: 0,
         })
     }
 
@@ -112,17 +114,15 @@ impl GpuSync {
     }
 
     fn get_resources(&self) -> (vk::Fence, vk::Semaphore, vk::Semaphore) {
-        let n_pass = *self.n_pass.lock().unwrap();
-
         (
-            self.in_flight_fences[n_pass],
-            self.image_available_semaphores[n_pass],
-            self.render_finished_semaphores[n_pass],
+            self.in_flight_fences[self.n_pass],
+            self.image_available_semaphores[self.n_pass],
+            self.render_finished_semaphores[self.n_pass],
         )
     }
 
     fn get_last_resources(&self) -> (vk::Fence, vk::Semaphore, vk::Semaphore) {
-        let n_pass = (*self.n_pass.lock().unwrap() + 1) % 2;
+        let n_pass = (self.n_pass + 1) % 2;
         (
             self.in_flight_fences[n_pass],
             self.image_available_semaphores[n_pass],
@@ -131,7 +131,7 @@ impl GpuSync {
     }
 
     fn reset_fence(&self) -> VkResult<()> {
-        let fence = self.in_flight_fences[*self.n_pass.lock().unwrap()];
+        let fence = self.in_flight_fences[self.n_pass];
 
         if !fence.is_null() {
             unsafe { self.device_manager.device.clone().reset_fences(&[fence]) }
@@ -140,9 +140,8 @@ impl GpuSync {
         }
     }
 
-    fn next_pass(&self) {
-        let mut n_pass = self.n_pass.lock().unwrap();
-        *n_pass = (*n_pass + 1) % 2;
+    fn next_pass(&mut self) {
+        self.n_pass = (self.n_pass + 1) % 2;
     }
 }
 
@@ -168,6 +167,7 @@ impl GpuFuture {
             sync,
         })
     }
+
     pub fn now(device_manager: Arc<DeviceManager>) -> Box<Self> {
         Self::from_command_entry(
             device_manager,
@@ -188,6 +188,10 @@ impl GpuFuture {
             command_buffer: Arc::new(RwLock::new(buffer)),
             sync: Arc::new(Mutex::new(GpuSync::new(device_manager).unwrap())),
         })
+    }
+
+    pub fn n_pass(self: &Self) -> usize {
+        self.sync.lock().unwrap().n_pass
     }
 
     pub fn join(self: Box<Self>, other: Box<Self>) -> Box<Self> {
@@ -227,14 +231,14 @@ impl GpuFuture {
         result
     }
 
-    pub async fn then_swapchain_present(
+    pub fn then_swapchain_present(
         self: Box<Self>,
         command_entry: Arc<CommandEntry>,
         presentation: Arc<Presentation>,
     ) -> Result<Box<Self>, (vk::Result, Arc<Mutex<GpuSync>>)> {
         let swapchain = presentation.swapchain.clone();
 
-        let sync = self.sync.lock().unwrap();
+        let mut sync = self.sync.lock().unwrap();
         let (fence, image_available_semaphore, render_finished_semaphore) = sync.get_resources();
 
         let image_semaphores = [image_available_semaphore];
@@ -311,6 +315,7 @@ pub struct CommandEntry {
     command_buffers: Vec<Arc<CommandBufferManager>>,
     queue: vk::Queue,
     queue_family_index: u32,
+    pub double_buffering: bool,
 }
 
 impl Drop for CommandEntry {
@@ -342,7 +347,7 @@ impl CommandEntry {
         device_manager: Arc<DeviceManager>,
         queue_family_index: u32,
         flags: vk::CommandPoolCreateFlags,
-        command_buffer_count: u32,
+        double_buffering: bool,
     ) -> CrystalResult<Self> {
         let create_info = vk::CommandPoolCreateInfo::default()
             .flags(flags)
@@ -363,7 +368,7 @@ impl CommandEntry {
         let allocate_info = vk::CommandBufferAllocateInfo::default()
             .command_pool(command_pool)
             .level(vk::CommandBufferLevel::PRIMARY)
-            .command_buffer_count(command_buffer_count);
+            .command_buffer_count(if double_buffering { 2 } else { 1 });
 
         let command_buffers = match unsafe {
             device_manager
@@ -389,6 +394,7 @@ impl CommandEntry {
             command_buffers,
             queue,
             queue_family_index,
+            double_buffering,
         })
     }
 
@@ -711,15 +717,17 @@ impl CommandEntry {
 
     pub fn record_command_buffer<P>(
         &self,
-        buffer_idx: usize,
+        n_pass: usize,
         predicate: P,
     ) -> CrystalResult<Box<GpuFuture>>
     where
         P: Fn(&vk::CommandBuffer, Arc<ash::Device>),
     {
+        let n_pass = if self.double_buffering { n_pass } else { 0 };
+
         match unsafe {
             self.device_manager.device.reset_command_buffer(
-                self.command_buffers[buffer_idx].handler,
+                self.command_buffers[n_pass].handler,
                 vk::CommandBufferResetFlags::empty(),
             )
         } {
@@ -735,7 +743,7 @@ impl CommandEntry {
         match unsafe {
             self.device_manager
                 .device
-                .begin_command_buffer(self.command_buffers[buffer_idx].handler, &begin_info)
+                .begin_command_buffer(self.command_buffers[n_pass].handler, &begin_info)
         } {
             Ok(_) => {}
             Err(e) => {
@@ -745,14 +753,14 @@ impl CommandEntry {
         };
 
         predicate(
-            &self.command_buffers[buffer_idx].handler,
+            &self.command_buffers[n_pass].handler,
             self.device_manager.device.clone(),
         );
 
         match unsafe {
             self.device_manager
                 .device
-                .end_command_buffer(self.command_buffers[buffer_idx].handler)
+                .end_command_buffer(self.command_buffers[n_pass].handler)
         } {
             Ok(_) => {}
             Err(e) => {
@@ -763,7 +771,7 @@ impl CommandEntry {
 
         Ok(GpuFuture::from_command_entry(
             self.device_manager.clone(),
-            self.command_buffers[buffer_idx].clone(),
+            self.command_buffers[n_pass].clone(),
         ))
     }
 }
@@ -777,14 +785,14 @@ pub struct CommandManager {
 impl CommandManager {
     pub(crate) fn new(
         device_manager: Arc<DeviceManager>,
-        graphics_command_buffer_count: u32,
+        double_buffering: bool,
     ) -> CrystalResult<Arc<Self>> {
         let graphics = match device_manager.queue_families_indices.graphics_index {
             Some(idx) => Some(Arc::new(CommandEntry::new(
                 device_manager.clone(),
                 idx,
                 vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER,
-                graphics_command_buffer_count,
+                double_buffering,
             )?)),
             None => None,
         };
@@ -794,7 +802,7 @@ impl CommandManager {
                 device_manager.clone(),
                 idx,
                 vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER,
-                graphics_command_buffer_count,
+                double_buffering,
             )?)),
             None => None,
         };

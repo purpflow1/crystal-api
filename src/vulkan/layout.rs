@@ -1,38 +1,44 @@
 use std::{
     collections::{BTreeMap, VecDeque},
+    hash::Hash,
     sync::{Arc, Mutex, MutexGuard, RwLock},
+    thread::JoinHandle,
 };
 
-use ash::vk;
+use ash::vk::{self, Handle};
+use pollster::FutureExt;
 
 use crate::{
-    GpuVec,
+    GpuSampler,
     debug::log,
     errors::{CrystalError, CrystalResult},
+    gpu_data::{IntoGpuBuffer, IntoGpuTexture, PtrHandler},
     object::Object,
     traits,
+    vulkan::VulkanTexture,
 };
 
-use super::{
-    devices::DeviceManager, images::VulkanTexture, memory::BufferManager,
-    memory_obj::VulkanObjectMemoryManager,
-};
+use super::{devices::DeviceManager, memory::BufferManager};
 
 struct LayoutDynamicData {
     device_manager: Arc<DeviceManager>,
-
-    uniform_buffer_managers_sets: Vec<Vec<Arc<BufferManager>>>,
-    storage_buffer_managers_sets: Vec<Vec<Arc<BufferManager>>>,
 
     uniform_descriptor_sets: Vec<vk::DescriptorSet>,
     storage_descriptor_sets: Vec<vk::DescriptorSet>,
     sampler_descriptor_sets: Vec<vk::DescriptorSet>,
 
-    sampler_binding_data: BTreeMap<u64, usize>,
-    sampler_binding_data_pool: Vec<u64>,
+    n_pass: usize,
+    double_buffering: bool,
+
+    sampler_binding_data: BTreeMap<usize, (Arc<VulkanTexture>, Arc<RwLock<bool>>)>,
+    buffer_managers_sets: BTreeMap<usize, (Vec<Arc<BufferManager>>, Arc<dyn IntoGpuBuffer>)>,
     samplers: BTreeMap<u32, vk::Sampler>,
-    object_render_queue: VecDeque<Arc<RwLock<Object>>>,
+
+    thread_handle: Option<JoinHandle<()>>,
 }
+
+unsafe impl Sync for LayoutDynamicData {}
+unsafe impl Send for LayoutDynamicData {}
 
 impl Drop for LayoutDynamicData {
     fn drop(&mut self) {
@@ -44,6 +50,245 @@ impl Drop for LayoutDynamicData {
     }
 }
 
+impl LayoutDynamicData {
+    fn update_data(&mut self) {
+        if let Some(_handle) = &self.thread_handle {
+            self.thread_handle.take().unwrap().join().unwrap();
+        }
+
+        let indices_to_clean: Vec<usize> = self
+            .sampler_binding_data
+            .iter()
+            .filter(|(_, (_, alive))| !*alive.read().unwrap())
+            .map(|(ind, _)| *ind)
+            .collect();
+
+        for ind in indices_to_clean {
+            self.sampler_binding_data.remove(&ind);
+        }
+
+        let mut buffer_tasks = VecDeque::new();
+
+        let indices_to_clean: Vec<usize> = self
+            .buffer_managers_sets
+            .iter()
+            .filter(|(_, (buffers, gpu_buffer))| {
+                let ptr = gpu_buffer.get_ptr();
+                let mut ptr = ptr.0.write().unwrap();
+
+                if ptr.is_null() {
+                    true
+                } else {
+                    for task in gpu_buffer.query_tasks() {
+                        *ptr = (*buffers[self.n_pass].mapped_memory.read().unwrap()).unwrap()
+                            as *mut u8;
+
+                        buffer_tasks.push_back((task, PtrHandler(RwLock::new(*ptr))));
+                    }
+                    false
+                }
+            })
+            .map(|(ind, _)| *ind)
+            .collect();
+
+        for ind in indices_to_clean {
+            self.buffer_managers_sets.remove(&ind);
+        }
+
+        if self.double_buffering {
+            self.n_pass = (self.n_pass + 1) % 2;
+        };
+
+        let handle = std::thread::spawn(move || {
+            while let Some((task, ptr)) = buffer_tasks.pop_front() {
+                task.flush((*ptr.0.read().unwrap()) as *mut u8).block_on();
+            }
+        });
+
+        self.thread_handle = Some(handle);
+    }
+
+    fn add_textures(
+        &mut self,
+        descriptor_set_id: &mut usize,
+        samplers: &[(u32, Arc<GpuSampler>)],
+    ) -> CrystalResult<()> {
+        for (binding, texture) in samplers {
+            let id = (0..usize::MAX)
+                .find(|idx| {
+                    self.sampler_binding_data
+                        .iter()
+                        .find(|(x, _)| **x == *idx)
+                        .is_none()
+                })
+                .unwrap();
+
+            let vulkan_texture = texture.get_texture().as_vulkan().unwrap();
+            *descriptor_set_id = id;
+
+            self.sampler_binding_data
+                .insert(id, (vulkan_texture.clone(), texture.get_alive()));
+
+            let sampler = match self.samplers.get(&vulkan_texture.image.mip_levels) {
+                Some(sampler) => *sampler,
+                None => {
+                    let sampler_info = vk::SamplerCreateInfo::default()
+                        .mag_filter(vk::Filter::LINEAR)
+                        .min_filter(vk::Filter::LINEAR)
+                        .address_mode_u(vk::SamplerAddressMode::REPEAT)
+                        .address_mode_v(vk::SamplerAddressMode::REPEAT)
+                        .address_mode_w(vk::SamplerAddressMode::REPEAT)
+                        .anisotropy_enable(true)
+                        .anisotropy_enable(vulkan_texture.image.anisotropy_texels > 1.)
+                        .max_anisotropy(vulkan_texture.image.anisotropy_texels)
+                        .border_color(vk::BorderColor::INT_OPAQUE_BLACK)
+                        .unnormalized_coordinates(false)
+                        .compare_enable(false)
+                        .compare_op(vk::CompareOp::ALWAYS)
+                        .mipmap_mode(vk::SamplerMipmapMode::LINEAR)
+                        .mip_lod_bias(0.)
+                        .min_lod(0.)
+                        .max_lod(vulkan_texture.image.mip_levels as f32);
+
+                    match unsafe {
+                        self.device_manager
+                            .device
+                            .create_sampler(&sampler_info, None)
+                    } {
+                        Ok(sampler) => {
+                            self.samplers
+                                .insert(vulkan_texture.image.mip_levels, sampler);
+                            sampler
+                        }
+                        Err(e) => {
+                            log!("cannot create sampler: {}", e);
+                            return Err(CrystalError::ImageError);
+                        }
+                    }
+                }
+            };
+
+            let image_infos = [vk::DescriptorImageInfo::default()
+                .image_view(vulkan_texture.image.image_view)
+                .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                .sampler(sampler)];
+
+            let descriptor_write = {
+                let descriptor_set = self.sampler_descriptor_sets[*descriptor_set_id];
+
+                vk::WriteDescriptorSet::default()
+                    .dst_set(descriptor_set)
+                    .dst_binding(*binding)
+                    .dst_array_element(0)
+                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                    .image_info(&image_infos)
+            };
+
+            unsafe {
+                self.device_manager
+                    .device
+                    .update_descriptor_sets(&[descriptor_write], &[])
+            };
+        }
+
+        Ok(())
+    }
+
+    fn add_buffer(
+        &mut self,
+        binding: usize,
+        is_uniform: bool,
+        data: Arc<dyn crate::gpu_data::IntoGpuBuffer>,
+    ) -> CrystalResult<()> {
+        let size = data.size() as u64;
+
+        let (descriptor_type, buffer_usage) = if is_uniform {
+            (
+                vk::DescriptorType::UNIFORM_BUFFER,
+                vk::BufferUsageFlags::UNIFORM_BUFFER,
+            )
+        } else {
+            (
+                vk::DescriptorType::STORAGE_BUFFER,
+                vk::BufferUsageFlags::STORAGE_BUFFER,
+            )
+        };
+
+        let idx = (0..usize::MAX)
+            .find(|idx| {
+                self.buffer_managers_sets
+                    .iter()
+                    .find(|(x, _)| **x == *idx)
+                    .is_none()
+            })
+            .unwrap();
+
+        let mut buffers = vec![];
+
+        for buffer_idx in 0..if self.double_buffering { 2 } else { 1 } {
+            let buffer_manager = BufferManager::new(
+                self.device_manager.clone(),
+                size,
+                buffer_usage,
+                vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+            )?;
+
+            let ptr = buffer_manager.map_memory(size, 0)?;
+            buffers.push(buffer_manager.clone());
+
+            *data.get_ptr().0.write().unwrap() = ptr;
+
+            let uniform_buffer_info = vk::DescriptorBufferInfo::default()
+                .buffer(buffer_manager.buffer)
+                .offset(0)
+                .range(size);
+
+            let buffer_infos = &[uniform_buffer_info];
+
+            let descriptor_set = if is_uniform {
+                self.uniform_descriptor_sets[buffer_idx]
+            } else {
+                self.storage_descriptor_sets[buffer_idx]
+            };
+
+            let descriptor_write = vk::WriteDescriptorSet::default()
+                .dst_set(descriptor_set)
+                .dst_binding(binding as u32)
+                .dst_array_element(0)
+                .descriptor_type(descriptor_type)
+                .descriptor_count(1)
+                .buffer_info(buffer_infos);
+
+            unsafe {
+                self.device_manager
+                    .device
+                    .update_descriptor_sets(&[descriptor_write], &[])
+            };
+        }
+
+        let tasks = data.query_tasks();
+
+        if buffers.len() > 1 {
+            let ptr = (*buffers[1].mapped_memory.read().unwrap()).unwrap() as *mut u8;
+
+            for task in tasks.clone() {
+                task.flush(ptr).block_on();
+            }
+        }
+
+        let ptr = (*buffers[0].mapped_memory.read().unwrap()).unwrap() as *mut u8;
+
+        for task in tasks {
+            task.flush(ptr).block_on();
+        }
+
+        let to_push = (buffers, data);
+        self.buffer_managers_sets.insert(idx, to_push);
+
+        Ok(())
+    }
+}
+
 pub struct VulkanLayout {
     device_manager: Arc<DeviceManager>,
 
@@ -52,10 +297,19 @@ pub struct VulkanLayout {
 
     pub pipeline_layout: vk::PipelineLayout,
 
-    image_views_sampled_num: u32,
-    max_instance_num: u64,
-
     dynamic_data: Mutex<LayoutDynamicData>,
+}
+
+impl PartialEq for VulkanLayout {
+    fn eq(&self, other: &Self) -> bool {
+        self.pipeline_layout.as_raw() == other.pipeline_layout.as_raw()
+    }
+}
+impl Eq for VulkanLayout {}
+impl Hash for VulkanLayout {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.pipeline_layout.as_raw().hash(state);
+    }
 }
 
 impl Drop for VulkanLayout {
@@ -98,58 +352,58 @@ impl traits::Layout for VulkanLayout {
         Some(self)
     }
 
-    fn add_object_to_queue(&self, object: Arc<RwLock<Object>>) {
-        self.dynamic_data
-            .lock()
-            .unwrap()
-            .object_render_queue
-            .push_back(object);
+    fn add_buffer(
+        &self,
+        binding: usize,
+        is_uniform: bool,
+        data: Arc<dyn crate::gpu_data::IntoGpuBuffer>,
+    ) -> CrystalResult<()> {
+        let mut dynamic_data = self.dynamic_data.lock().unwrap();
+        dynamic_data.add_buffer(binding, is_uniform, data)
     }
 
-    fn write_to_buffer(
-        &self,
-        is_uniform: bool,
-        frame: usize,
-        buffer: usize,
-        offset: usize,
-        data: GpuVec,
-    ) -> CrystalResult<()> {
-        // let frame = self.frame;
+    fn register_samplers(&self, objects: &[Arc<Object>]) -> CrystalResult<()> {
+        let mut dynamic_data = self.dynamic_data.lock().unwrap();
 
-        let dynamic_data = self.dynamic_data.lock().unwrap();
-
-        if is_uniform {
-            dynamic_data.uniform_buffer_managers_sets[frame][buffer].write(data.as_words(), offset)
-        } else {
-            dynamic_data.storage_buffer_managers_sets[frame][buffer].write(data.as_words(), offset)
-        }
+        objects.iter().for_each(|object| {
+            dynamic_data
+                .add_textures(
+                    &mut *object.id.lock().unwrap(),
+                    object.samplers.as_ref().expect("object has no samplers!"),
+                )
+                .unwrap()
+        });
+        Ok(())
     }
 }
 
 impl VulkanLayout {
     pub(crate) fn new(
         device_manager: Arc<DeviceManager>,
-        image_views_sampled_num: u32,
-        frames_in_flight: u32,
-        max_instance_num: u64,
+        sampler_num: usize,
+        uniform_num: usize,
+        storage_num: usize,
 
-        buffers: &[(bool, u64)],
+        double_buffering: bool,
     ) -> CrystalResult<Arc<Self>> {
+        let buffer_count = if double_buffering { 2 } else { 1 };
+
         let pool_sizes = [
             vk::DescriptorPoolSize::default()
-                .descriptor_count(frames_in_flight)
+                .descriptor_count(buffer_count)
                 .ty(vk::DescriptorType::UNIFORM_BUFFER),
             vk::DescriptorPoolSize::default()
-                .descriptor_count(frames_in_flight)
+                .descriptor_count(buffer_count)
                 .ty(vk::DescriptorType::STORAGE_BUFFER),
             vk::DescriptorPoolSize::default()
-                .descriptor_count(frames_in_flight)
+                .descriptor_count(buffer_count)
                 .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER),
         ];
 
         let pool_info = vk::DescriptorPoolCreateInfo::default()
             .pool_sizes(&pool_sizes)
-            .max_sets(frames_in_flight * (2 + max_instance_num as u32));
+            .max_sets(buffer_count * (uniform_num + storage_num) as u32 + sampler_num as u32)
+            .flags(vk::DescriptorPoolCreateFlags::UPDATE_AFTER_BIND);
 
         let descriptor_pool = match unsafe {
             device_manager
@@ -163,50 +417,35 @@ impl VulkanLayout {
             }
         };
 
-        let mut ubo_bindings = vec![];
-        let mut ssbo_bindings = vec![];
+        let ubo_bindings: Vec<_> = (0..uniform_num)
+            .map(|idx| {
+                vk::DescriptorSetLayoutBinding::default()
+                    .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+                    .stage_flags(vk::ShaderStageFlags::ALL_GRAPHICS)
+                    .descriptor_count(uniform_num as u32)
+                    .binding(idx as u32)
+            })
+            .collect();
 
-        for buffer in buffers {
-            if buffer.0 {
-                ubo_bindings.push(
-                    vk::DescriptorSetLayoutBinding::default()
-                        .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-                        .stage_flags(vk::ShaderStageFlags::ALL_GRAPHICS)
-                        .descriptor_count(1),
-                )
-            } else {
-                ssbo_bindings.push(
-                    vk::DescriptorSetLayoutBinding::default()
-                        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                        .stage_flags(vk::ShaderStageFlags::ALL_GRAPHICS)
-                        .descriptor_count(1),
-                )
-            }
-        }
+        let ssbo_bindings: Vec<_> = (0..storage_num)
+            .map(|idx| {
+                vk::DescriptorSetLayoutBinding::default()
+                    .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                    .stage_flags(vk::ShaderStageFlags::ALL_GRAPHICS)
+                    .descriptor_count(storage_num as u32)
+                    .binding(idx as u32)
+            })
+            .collect();
 
-        let ubo_bindings_count = ubo_bindings.len() as u32;
-        for idx in 0..ubo_bindings_count {
-            ubo_bindings[idx as usize].descriptor_count = ubo_bindings_count;
-            ubo_bindings[idx as usize].binding = idx as u32;
-        }
-
-        let ssbo_bindings_count = ssbo_bindings.len() as u32;
-        for idx in 0..ssbo_bindings_count {
-            ssbo_bindings[idx as usize].descriptor_count = ssbo_bindings_count;
-            ssbo_bindings[idx as usize].binding = idx as u32;
-        }
-
-        let mut sampler_bindings = vec![];
-
-        for i in 0..image_views_sampled_num {
-            sampler_bindings.push(
+        let sampler_bindings: Vec<_> = (0..sampler_num)
+            .map(|idx| {
                 vk::DescriptorSetLayoutBinding::default()
                     .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                     .stage_flags(vk::ShaderStageFlags::FRAGMENT)
-                    .descriptor_count(image_views_sampled_num)
-                    .binding(i),
-            )
-        }
+                    .descriptor_count(sampler_num as u32)
+                    .binding(idx as u32)
+            })
+            .collect();
 
         let ubo_descriptor_set_layout_create_info =
             vk::DescriptorSetLayoutCreateInfo::default().bindings(&ubo_bindings);
@@ -256,12 +495,9 @@ impl VulkanLayout {
             }
         };
 
-        let ubo_layouts = vec![ubo_descriptor_set_layout; frames_in_flight as usize];
-        let ssbo_layouts = vec![ssbo_descriptor_set_layout; frames_in_flight as usize];
-        let sampler_layouts = vec![
-            sampler_descriptor_set_layout;
-            frames_in_flight as usize * max_instance_num as usize
-        ];
+        let ubo_layouts = vec![ubo_descriptor_set_layout; buffer_count as usize];
+        let ssbo_layouts = vec![ssbo_descriptor_set_layout; buffer_count as usize];
+        let sampler_layouts = vec![sampler_descriptor_set_layout; sampler_num];
 
         let ubo_alloc_info = vk::DescriptorSetAllocateInfo::default()
             .descriptor_pool(descriptor_pool)
@@ -311,96 +547,6 @@ impl VulkanLayout {
             }
         };
 
-        let mut uniform_buffer_managers_sets = vec![];
-        let mut storage_buffer_managers_sets = vec![];
-
-        for i in 0..frames_in_flight as usize {
-            let mut uniform_buffer_managers = vec![];
-            let mut storage_buffer_managers = vec![];
-
-            let mut current_uniform = 0;
-            let mut current_storage = 0;
-
-            for buffer in buffers {
-                let size = buffer.1;
-
-                if buffer.0 {
-                    let uniform_buffer_manager = BufferManager::new(
-                        device_manager.clone(),
-                        size,
-                        vk::BufferUsageFlags::UNIFORM_BUFFER,
-                        vk::MemoryPropertyFlags::HOST_VISIBLE
-                            | vk::MemoryPropertyFlags::HOST_COHERENT,
-                    )?;
-
-                    uniform_buffer_manager.map_memory(size, 0)?;
-
-                    let uniform_buffer_info = vk::DescriptorBufferInfo::default()
-                        .buffer(uniform_buffer_manager.buffer)
-                        .offset(0)
-                        .range(size);
-
-                    uniform_buffer_managers.push(uniform_buffer_manager);
-
-                    let buffer_infos = &[uniform_buffer_info];
-
-                    let descriptor_write = vk::WriteDescriptorSet::default()
-                        .dst_set(uniform_descriptor_sets[i])
-                        .dst_binding(current_uniform)
-                        .dst_array_element(0)
-                        .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-                        .descriptor_count(1)
-                        .buffer_info(buffer_infos);
-
-                    unsafe {
-                        device_manager
-                            .device
-                            .update_descriptor_sets(&[descriptor_write], &[])
-                    };
-
-                    current_uniform += 1;
-                } else {
-                    let storage_buffer_manager = BufferManager::new(
-                        device_manager.clone(),
-                        size,
-                        vk::BufferUsageFlags::STORAGE_BUFFER,
-                        vk::MemoryPropertyFlags::HOST_VISIBLE
-                            | vk::MemoryPropertyFlags::HOST_COHERENT,
-                    )?;
-
-                    storage_buffer_manager.map_memory(size, 0)?;
-
-                    let storage_buffer_info = vk::DescriptorBufferInfo::default()
-                        .buffer(storage_buffer_manager.buffer)
-                        .offset(0)
-                        .range(size);
-
-                    storage_buffer_managers.push(storage_buffer_manager);
-
-                    let buffer_infos = &[storage_buffer_info];
-
-                    let descriptor_write = vk::WriteDescriptorSet::default()
-                        .dst_set(storage_descriptor_sets[i])
-                        .dst_binding(current_storage)
-                        .dst_array_element(0)
-                        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                        .descriptor_count(1)
-                        .buffer_info(buffer_infos);
-
-                    unsafe {
-                        device_manager
-                            .device
-                            .update_descriptor_sets(&[descriptor_write], &[])
-                    };
-
-                    current_storage += 1;
-                }
-            }
-
-            uniform_buffer_managers_sets.push(uniform_buffer_managers);
-            storage_buffer_managers_sets.push(storage_buffer_managers);
-        }
-
         let descriptor_set_layouts = vec![
             ubo_descriptor_set_layout,
             ssbo_descriptor_set_layout,
@@ -429,35 +575,36 @@ impl VulkanLayout {
             descriptor_pool,
             descriptor_set_layouts,
 
-            image_views_sampled_num,
-            max_instance_num,
-
             pipeline_layout,
 
             dynamic_data: Mutex::new(LayoutDynamicData {
                 device_manager,
-                uniform_buffer_managers_sets,
-                storage_buffer_managers_sets,
+
                 uniform_descriptor_sets,
                 storage_descriptor_sets,
                 sampler_descriptor_sets,
 
+                n_pass: 0,
+                double_buffering,
+
                 sampler_binding_data: BTreeMap::new(),
-                sampler_binding_data_pool: vec![],
+
+                buffer_managers_sets: BTreeMap::new(),
                 samplers: BTreeMap::new(),
-                object_render_queue: VecDeque::new(),
+                thread_handle: None,
             }),
         }))
     }
 
     pub(crate) fn render(
         &self,
-        device_manager: Arc<DeviceManager>,
+        objects: &[Arc<Object>],
         command_buffer: &vk::CommandBuffer,
-        frames_in_flight: usize,
-        frame: usize,
     ) -> CrystalResult<()> {
         let mut dynamic_data = self.dynamic_data.lock().unwrap();
+        let device_manager = dynamic_data.device_manager.clone();
+
+        dynamic_data.update_data();
 
         unsafe {
             device_manager.device.cmd_bind_descriptor_sets(
@@ -466,80 +613,44 @@ impl VulkanLayout {
                 self.pipeline_layout,
                 0,
                 &[
-                    dynamic_data.uniform_descriptor_sets[frame],
-                    dynamic_data.storage_descriptor_sets[frame],
+                    dynamic_data.uniform_descriptor_sets[dynamic_data.n_pass],
+                    dynamic_data.storage_descriptor_sets[dynamic_data.n_pass],
                 ],
                 &[],
             )
         }
 
-        let mut current_object_idx = 0usize;
+        for (current_object_idx, object) in objects.iter().enumerate() {
+            if let Some(_samplers) = &object.samplers {
+                let id = *object.id.lock().unwrap();
 
-        while dynamic_data.object_render_queue.len() > 0 {
-            let obj = dynamic_data.object_render_queue.pop_front().unwrap();
-
-            let mut obj = obj.write().unwrap();
-
-            match obj.mesh.clone() {
-                Some(mesh) => match obj.memory_manager {
-                    Some(_) => {}
-                    None => {
-                        obj.memory_manager = Some(
-                            VulkanObjectMemoryManager::new(
-                                device_manager.clone(),
-                                &mesh.vertices,
-                                &mesh.indices,
-                            )
-                            .unwrap(),
-                        );
-                    }
-                },
-                None => {}
-            }
-
-            match &obj.textures {
-                None => {}
-                Some(textures) => {
-                    let texture_sets: Vec<Arc<VulkanTexture>> = textures
-                        .iter()
-                        .map(|texture| match texture.1.clone().as_vulkan() {
-                            Some(tex) => tex,
-                            None => panic!("fatal: wrong type of textures, expected vulkan"),
-                        })
-                        .collect();
-
-                    let sets = self.init_sampler_descriptor_sets(
-                        &mut dynamic_data,
-                        frames_in_flight,
-                        textures.as_ptr() as usize as u64,
-                        &texture_sets,
-                    )?;
-
-                    unsafe {
-                        device_manager.device.cmd_bind_descriptor_sets(
-                            *command_buffer,
-                            vk::PipelineBindPoint::GRAPHICS,
-                            self.pipeline_layout,
-                            2,
-                            &[sets[frame]],
-                            &[],
-                        )
-                    }
+                unsafe {
+                    device_manager.device.cmd_bind_descriptor_sets(
+                        *command_buffer,
+                        vk::PipelineBindPoint::GRAPHICS,
+                        self.pipeline_layout,
+                        2,
+                        &[dynamic_data.sampler_descriptor_sets[id]],
+                        &[],
+                    )
                 }
             }
 
-            let object_memory_manager = match obj.memory_manager.as_ref().unwrap().as_vulkan_ref() {
-                Some(mm) => mm,
-                None => panic!("fatal: wrong object memory manager type, expected vulkan"),
-            };
-
-            let pipeline = match obj.pipeline.clone().as_vulkan() {
+            let pipeline = match object.pipeline.clone().as_vulkan() {
                 Some(pipeline) => pipeline,
                 None => panic!("fatal: wrong pipeline type, expected vulkan"),
             };
 
-            let index_buffer = object_memory_manager.index_buffer_manager.buffer;
-            let vertex_buffer = object_memory_manager.vertex_buffer_manager.buffer;
+            let memory_manager = object.memory_manager.read().unwrap();
+
+            let vulkan_memory_manager = memory_manager
+                .as_ref()
+                .expect("object has not registered to api!")
+                .as_vulkan_ref()
+                .unwrap();
+
+            let index_buffer = vulkan_memory_manager.index_buffer_manager.buffer;
+            let vertex_buffer = vulkan_memory_manager.vertex_buffer_manager.buffer;
 
             unsafe {
                 device_manager.device.cmd_bind_pipeline(
@@ -556,7 +667,7 @@ impl VulkanLayout {
                 );
             }
 
-            let index_count = obj.mesh.as_ref().unwrap().indices.len();
+            let index_count = object.mesh.as_ref().unwrap().indices.len();
 
             unsafe {
                 device_manager.device.cmd_bind_vertex_buffers(
@@ -577,11 +688,8 @@ impl VulkanLayout {
                     current_object_idx as u32,
                 )
             }
-
-            current_object_idx += 1;
         }
 
-        self.release_sampler_descriptor_sets(&mut dynamic_data);
         Ok(())
     }
 
@@ -629,116 +737,5 @@ impl VulkanLayout {
         dynamic_data.samplers.insert(mip_levels, sampler);
 
         Ok(sampler)
-    }
-
-    fn release_sampler_descriptor_sets(&self, dynamic_data: &mut MutexGuard<LayoutDynamicData>) {
-        let mut to_delete_sets = vec![];
-
-        for &slot in dynamic_data.sampler_binding_data.keys() {
-            if dynamic_data
-                .sampler_binding_data_pool
-                .iter()
-                .find(|&&x| x == slot)
-                .is_none()
-            {
-                to_delete_sets.push(slot);
-            }
-        }
-
-        dynamic_data.sampler_binding_data_pool.clear();
-
-        for to_delete in to_delete_sets {
-            dynamic_data
-                .sampler_binding_data
-                .remove(&to_delete)
-                .unwrap();
-        }
-    }
-
-    fn init_sampler_descriptor_sets(
-        &self,
-        dynamic_data: &mut MutexGuard<LayoutDynamicData>,
-        frames_in_flight: usize,
-        object_id: u64,
-        textures_set: &[Arc<VulkanTexture>],
-    ) -> CrystalResult<Vec<vk::DescriptorSet>> {
-        let sampler = dynamic_data.sampler_binding_data.get(&object_id);
-
-        let texture_set_idx = match sampler {
-            Some(&idx) => {
-                let sets = dynamic_data.sampler_descriptor_sets
-                    [frames_in_flight as usize * idx..frames_in_flight as usize * (idx + 1)]
-                    .to_vec();
-                dynamic_data.sampler_binding_data_pool.push(object_id);
-                return Ok(sets);
-            }
-            None => {
-                let mut idx = 0usize;
-                while dynamic_data
-                    .sampler_binding_data
-                    .iter()
-                    .find(|binding| *binding.1 == idx)
-                    .is_some()
-                {
-                    idx += 1;
-                }
-                if idx >= self.max_instance_num as usize {
-                    log!("Exceeded number of maximum image number");
-                    return Err(CrystalError::DescriptorError);
-                }
-                dynamic_data.sampler_binding_data.insert(object_id, idx);
-                dynamic_data.sampler_binding_data_pool.push(object_id);
-                idx
-            }
-        };
-
-        let sets = dynamic_data.sampler_descriptor_sets[frames_in_flight as usize * texture_set_idx
-            ..frames_in_flight as usize * (texture_set_idx + 1)]
-            .to_vec();
-
-        for current_frame in 0..frames_in_flight {
-            let mut image_info = vec![];
-
-            assert!(
-                (textures_set.len() as u32) <= self.image_views_sampled_num,
-                "fatal: the texture number limit for layout is exaggerated"
-            );
-
-            for texture in textures_set {
-                let sampler = self.get_sampler(
-                    dynamic_data,
-                    texture.image.mip_levels,
-                    texture.image.anisotropy_texels,
-                )?;
-
-                let descriptor_image_info = vk::DescriptorImageInfo::default()
-                    .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                    .image_view(texture.image.image_view)
-                    .sampler(sampler);
-
-                image_info.push(descriptor_image_info);
-            }
-
-            let mut descriptor_writes = vec![];
-
-            for image_view_idx in 0..textures_set.len() {
-                let sampler_descriptor_write = vk::WriteDescriptorSet::default()
-                    .dst_set(sets[current_frame])
-                    .dst_binding(image_view_idx as u32)
-                    .dst_array_element(0)
-                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                    .image_info(&image_info);
-
-                descriptor_writes.push(sampler_descriptor_write);
-            }
-
-            unsafe {
-                self.device_manager
-                    .device
-                    .update_descriptor_sets(&descriptor_writes, &[])
-            };
-        }
-
-        Ok(sets)
     }
 }
