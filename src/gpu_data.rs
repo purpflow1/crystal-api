@@ -74,7 +74,6 @@ pub trait IntoGpuBuffer: Sync + Send {
     fn size(&self) -> u64;
     fn get_ptr(&self) -> Arc<PtrHandler>;
     fn query_tasks(&self) -> Vec<GpuBufferTask>;
-    fn query_tasks_no_flush(&self) -> Vec<GpuBufferTask>;
 }
 
 pub struct GpuVec<T> {
@@ -103,12 +102,6 @@ impl<T: Sync + Send> IntoGpuBuffer for GpuVec<T> {
         let mut tasks = self.tasks.lock().unwrap();
         let tasks_cloned = (*tasks).clone();
         tasks.clear();
-        tasks_cloned
-    }
-
-    fn query_tasks_no_flush(&self) -> Vec<GpuBufferTask> {
-        let tasks = self.tasks.lock().unwrap();
-        let tasks_cloned = (*tasks).clone();
         tasks_cloned
     }
 }
