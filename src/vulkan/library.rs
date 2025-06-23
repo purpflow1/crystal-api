@@ -38,14 +38,6 @@ pub struct VulkanEntry {
     _debug_utils_messanger: Option<DebugUtilsMessanger>,
 
     presentation: Arc<Presentation>,
-    future: Mutex<
-        Option<
-            std::pin::Pin<
-                Box<dyn Future<Output = Result<Box<GpuFuture>, (vk::Result, Arc<Mutex<GpuSync>>)>>>,
-            >,
-        >,
-    >,
-
     thread_handle:
         Mutex<Option<JoinHandle<Result<Box<GpuFuture>, (vk::Result, Arc<Mutex<GpuSync>>)>>>>,
 
@@ -111,6 +103,7 @@ impl VulkanEntry {
         {
             layers = get_supported_validation_layers(&entry);
             if layers.is_empty() {
+                log!("no validation layers found!");
                 return CrystalResult::Err(CrystalError::CannotCreateDebugMessanger);
             }
 
@@ -147,7 +140,16 @@ impl VulkanEntry {
             create_debug_utils_messanger(&entry, &instance)?
         };
 
-        let surface = Presentation::create_surface(&entry, &instance, window, settings.vsync);
+        let surface = Presentation::create_surface(
+            &entry,
+            &instance,
+            window,
+            settings.vsync,
+            Some(vk::Extent2D {
+                width: settings.width,
+                height: settings.height,
+            }),
+        );
 
         let (physical_device, queue_families_indices) =
             pick_physical_device(&instance, Some(surface.clone()), &device_extensions)?;
@@ -211,11 +213,41 @@ impl VulkanEntry {
             _debug_utils_messanger: None,
 
             presentation,
-            future: Mutex::new(None),
             thread_handle: Mutex::new(None),
 
             render_targets,
         }))
+    }
+
+    pub fn recreate_resources(&self, width: u32, height: u32) -> CrystalResult<()> {
+        let mut handle_lock = self.thread_handle.lock().unwrap();
+        match &*handle_lock {
+            Some(_handle) => {
+                let _ = handle_lock.take().unwrap().join().unwrap();
+                unsafe {
+                    self.device_manager
+                        .device
+                        .queue_wait_idle(self.command_manager.present.clone().unwrap().queue)
+                }
+                .unwrap();
+            }
+            None => {}
+        };
+
+        *handle_lock = None;
+
+        self.presentation
+            .swapchain
+            .recreate(Some(vk::Extent2D { width, height }))?;
+        self.get_viewport().as_vulkan().unwrap().update_resources(
+            self.presentation.swapchain.extent(),
+            self.presentation
+                .swapchain
+                .swapchain_image_views
+                .read()
+                .unwrap()
+                .clone(),
+        )
     }
 
     pub fn render_and_present(self: Arc<Self>, objects: &[Arc<Object>]) -> CrystalResult<()> {
@@ -251,8 +283,7 @@ impl VulkanEntry {
         drop(handle_lock);
 
         if swapchain_out_of_date {
-            self.presentation.swapchain.recreate()?;
-            *self.future.lock().unwrap() = None;
+            self.presentation.swapchain.recreate(None)?;
         }
 
         if suboptimal {
@@ -270,7 +301,7 @@ impl VulkanEntry {
         match now.acquire_next_image(&self.presentation) {
             Ok((idx, _)) => *self.presentation.image_index.lock().unwrap() = idx,
             Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
-                self.presentation.swapchain.recreate()?;
+                self.presentation.swapchain.recreate(None)?;
                 render_target.update_resources(
                     self.presentation.swapchain.extent(),
                     self.presentation
@@ -400,12 +431,14 @@ impl VulkanEntry {
 
     pub fn create_layout(
         &self,
+        texture_num: usize,
         sampler_num: usize,
         uniform_num: usize,
         storage_num: usize,
     ) -> CrystalResult<Arc<dyn Layout>> {
         Ok(layout::VulkanLayout::new(
             self.device_manager.clone(),
+            texture_num,
             sampler_num,
             uniform_num,
             storage_num,

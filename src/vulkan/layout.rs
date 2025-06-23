@@ -380,6 +380,7 @@ impl traits::Layout for VulkanLayout {
 impl VulkanLayout {
     pub(crate) fn new(
         device_manager: Arc<DeviceManager>,
+        texture_num: usize,
         sampler_num: usize,
         uniform_num: usize,
         storage_num: usize,
@@ -390,19 +391,19 @@ impl VulkanLayout {
 
         let pool_sizes = [
             vk::DescriptorPoolSize::default()
-                .descriptor_count(buffer_count)
+                .descriptor_count(buffer_count * uniform_num as u32)
                 .ty(vk::DescriptorType::UNIFORM_BUFFER),
             vk::DescriptorPoolSize::default()
-                .descriptor_count(buffer_count)
+                .descriptor_count(buffer_count * storage_num as u32)
                 .ty(vk::DescriptorType::STORAGE_BUFFER),
             vk::DescriptorPoolSize::default()
-                .descriptor_count(buffer_count)
+                .descriptor_count((sampler_num * texture_num) as u32)
                 .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER),
         ];
 
         let pool_info = vk::DescriptorPoolCreateInfo::default()
             .pool_sizes(&pool_sizes)
-            .max_sets(buffer_count * (uniform_num + storage_num) as u32 + sampler_num as u32)
+            .max_sets(buffer_count * (uniform_num + storage_num + sampler_num) as u32)
             .flags(vk::DescriptorPoolCreateFlags::UPDATE_AFTER_BIND);
 
         let descriptor_pool = match unsafe {
@@ -422,7 +423,7 @@ impl VulkanLayout {
                 vk::DescriptorSetLayoutBinding::default()
                     .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
                     .stage_flags(vk::ShaderStageFlags::ALL_GRAPHICS)
-                    .descriptor_count(uniform_num as u32)
+                    .descriptor_count(1 as u32)
                     .binding(idx as u32)
             })
             .collect();
@@ -432,17 +433,17 @@ impl VulkanLayout {
                 vk::DescriptorSetLayoutBinding::default()
                     .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
                     .stage_flags(vk::ShaderStageFlags::ALL_GRAPHICS)
-                    .descriptor_count(storage_num as u32)
+                    .descriptor_count(1 as u32)
                     .binding(idx as u32)
             })
             .collect();
 
-        let sampler_bindings: Vec<_> = (0..sampler_num)
+        let sampler_bindings: Vec<_> = (0..texture_num)
             .map(|idx| {
                 vk::DescriptorSetLayoutBinding::default()
                     .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                     .stage_flags(vk::ShaderStageFlags::FRAGMENT)
-                    .descriptor_count(sampler_num as u32)
+                    .descriptor_count(1 as u32)
                     .binding(idx as u32)
             })
             .collect();

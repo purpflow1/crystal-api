@@ -313,7 +313,7 @@ pub struct CommandEntry {
     device_manager: Arc<DeviceManager>,
     command_pool: vk::CommandPool,
     command_buffers: Vec<Arc<CommandBufferManager>>,
-    queue: vk::Queue,
+    pub queue: vk::Queue,
     queue_family_index: u32,
     pub double_buffering: bool,
 }

@@ -23,6 +23,7 @@ pub struct PresentSurface {
     pub surface: ash::khr::surface::Instance,
     pub surface_khr: vk::SurfaceKHR,
     pub vsync: bool,
+    framebuffer_extent: Option<vk::Extent2D>,
 }
 
 impl Drop for PresentSurface {
@@ -77,8 +78,10 @@ impl SwapchainInfo {
             if swap_chain_support_details.capabilities.current_extent.width != u32::MAX {
                 swap_chain_support_details.capabilities.current_extent
             } else {
-                log!("unknown surface extent");
-                return Err(CrystalError::SwapChainIsNotSupported);
+                log!("unknown surface extent: getting framebuffer extent instead");
+                surface
+                    .framebuffer_extent
+                    .expect("framebuffer extent not passed!")
             };
 
         let image_count = {
@@ -343,9 +346,16 @@ impl Swapchain {
         }))
     }
 
-    pub fn recreate(&self) -> CrystalResult<()> {
+    pub fn recreate(&self, extent: Option<vk::Extent2D>) -> CrystalResult<()> {
         self.destroy();
-        self.swapchain_info.update_extent()?;
+
+        match extent {
+            None => {
+                self.swapchain_info.update_extent()?;
+            }
+            Some(extent) => *self.swapchain_info.extent.write().unwrap() = extent,
+        }
+
         let (swapchain, swapchain_khr, swapchain_image_views) =
             Swapchain::from_info(self.device_manager.clone(), self.swapchain_info.clone())?;
 
@@ -373,6 +383,7 @@ impl Presentation {
         instance: &ash::Instance,
         window: &T,
         vsync: bool,
+        framebuffer_extent: Option<vk::Extent2D>,
     ) -> Arc<PresentSurface> {
         let surface = ash::khr::surface::Instance::new(entry, instance);
         let surface_khr = unsafe {
@@ -390,6 +401,7 @@ impl Presentation {
             surface,
             surface_khr,
             vsync,
+            framebuffer_extent,
         })
     }
 

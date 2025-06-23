@@ -148,7 +148,7 @@ impl ApplicationHandler for Context {
 
         let test_sampler = graphics.create_sampler(&test_texture_image, 1.0).unwrap();
 
-        let layout_pbr = graphics.create_layout(32, 32, 32).unwrap();
+        let layout_pbr = graphics.create_layout(2, 3, 1, 3).unwrap();
 
         self.scene
             .light
@@ -271,17 +271,22 @@ impl ApplicationHandler for Context {
                 event,
                 is_synthetic,
             } => {}
-            WindowEvent::RedrawRequested => {
-                let window = self.window.as_ref().unwrap();
-                let extent = window.inner_size();
-
+            WindowEvent::Resized(size) => {
                 self.scene.camera.proj = glam::Mat4::perspective_lh(
                     PI / 4.,
-                    extent.width as f32 / extent.height as f32,
+                    size.width as f32 / size.height as f32,
                     0.1,
                     100.,
                 );
 
+                self.graphics
+                    .as_ref()
+                    .unwrap()
+                    .recreate_resources(size.width, size.height)
+                    .unwrap();
+            }
+            WindowEvent::RedrawRequested => {
+                let window = self.window.as_ref().unwrap();
                 window.request_redraw();
             }
             _ => {}
@@ -291,7 +296,7 @@ impl ApplicationHandler for Context {
 
 fn main() -> CrystalResult<()> {
     let settings = GraphicsApiInitSettings::default()
-        .double_buffering(false)
+        .double_buffering(true)
         .vsync(false)
         .msaa_samples(8)
         .width(1000)
