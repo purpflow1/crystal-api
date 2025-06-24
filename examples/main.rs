@@ -72,7 +72,6 @@ impl Context {
         Ok(Self {
             window: None,
             graphics: None,
-
             layout_pbr: None,
 
             settings,
@@ -291,6 +290,10 @@ impl ApplicationHandler for Context {
             }
             _ => {}
         }
+    }
+
+    fn exiting(&mut self, _event_loop: &winit::event_loop::ActiveEventLoop) {
+        self.graphics = None;
     }
 }
 
