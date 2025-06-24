@@ -47,8 +47,28 @@ pub struct VulkanEntry {
 impl Drop for VulkanEntry {
     fn drop(&mut self) {
         let mut handle_lock = self.thread_handle.lock().unwrap();
-        if let Some(_handle) = &*handle_lock {
-            let _ = handle_lock.take().unwrap().join().unwrap();
+
+        let mut swapchain_out_of_date = false;
+
+        let now = match &*handle_lock {
+            Some(_handle) => match handle_lock.take().unwrap().join().unwrap() {
+                Ok(n) => n.wait().unwrap(),
+                Err((vk::Result::ERROR_OUT_OF_DATE_KHR, sync)) => {
+                    swapchain_out_of_date = true;
+                    GpuFuture::now_with_sync(self.device_manager.clone(), sync)
+                }
+                Err((vk::Result::SUBOPTIMAL_KHR, sync)) => {
+                    GpuFuture::now_with_sync(self.device_manager.clone(), sync)
+                }
+                Err((e, _)) => {
+                    panic!("failed to present queue: {}", e);
+                }
+            },
+            None => GpuFuture::now(self.device_manager.clone()),
+        };
+
+        if !swapchain_out_of_date {
+            now.acquire_next_image(&self.presentation).unwrap();
         }
     }
 }
@@ -489,5 +509,9 @@ impl VulkanEntry {
 
     pub fn get_viewport(&self) -> Arc<dyn traits::RenderTarget> {
         self.render_targets[&0].clone()
+    }
+
+    pub fn get_raw_device_handle(&self) -> u64 {
+        self.device_manager.device.handle().as_raw()
     }
 }

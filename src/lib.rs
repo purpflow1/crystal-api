@@ -6,6 +6,7 @@ mod gpu_data;
 pub mod images;
 pub mod mesh;
 pub mod object;
+// pub mod renderdoc;
 pub mod settings;
 mod shader;
 mod traits;

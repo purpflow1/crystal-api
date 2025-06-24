@@ -254,6 +254,7 @@ impl Swapchain {
                         .device
                         .destroy_image_view(image_view, None)
                 });
+
             self.swapchain
                 .read()
                 .unwrap()
@@ -333,7 +334,7 @@ impl Swapchain {
         device_manager: Arc<DeviceManager>,
         surface: Arc<PresentSurface>,
     ) -> CrystalResult<Arc<Self>> {
-        let swapchain_create_info = SwapchainInfo::new(device_manager.clone(), surface.clone())?;
+        let swapchain_create_info = SwapchainInfo::new(device_manager.clone(), surface)?;
         let (swapchain, swapchain_khr, swapchain_image_views) =
             Self::from_info(device_manager.clone(), swapchain_create_info.clone())?;
 
@@ -369,7 +370,6 @@ impl Swapchain {
 
 pub struct Presentation {
     device_manager: Arc<DeviceManager>,
-    pub surface: Arc<PresentSurface>,
     pub swapchain: Arc<Swapchain>,
 
     pub image_index: Mutex<u32>,
@@ -414,7 +414,6 @@ impl Presentation {
 
         Ok(Arc::new(Presentation {
             device_manager,
-            surface,
             swapchain,
 
             msaa_samples,
