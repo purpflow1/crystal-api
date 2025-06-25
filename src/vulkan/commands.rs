@@ -11,8 +11,6 @@ use crate::{
     vulkan::{devices::DeviceManager, presentation::Presentation},
 };
 
-use super::images::Image;
-
 pub struct GpuSync {
     device_manager: Arc<DeviceManager>,
 
@@ -147,7 +145,8 @@ impl GpuSync {
 
 pub struct GpuFuture {
     device_manager: Arc<DeviceManager>,
-    command_buffer: Arc<RwLock<CommandBufferManager>>,
+    command_buffers: Arc<RwLock<Vec<CommandBufferManager>>>,
+    queue: Mutex<vk::Queue>,
     sync: Arc<Mutex<GpuSync>>,
 }
 
@@ -161,10 +160,9 @@ impl GpuFuture {
     ) -> Box<Self> {
         Box::new(Self {
             device_manager: device_manager.clone(),
-            command_buffer: Arc::new(RwLock::new(CommandBufferManager {
-                handler: vk::CommandBuffer::null(),
-            })),
+            command_buffers: Arc::new(RwLock::new(vec![])),
             sync,
+            queue: Mutex::new(vk::Queue::null()),
         })
     }
 
@@ -174,19 +172,22 @@ impl GpuFuture {
             Arc::new(CommandBufferManager {
                 handler: vk::CommandBuffer::null(),
             }),
+            vk::Queue::null(),
         )
     }
 
     fn from_command_entry(
         device_manager: Arc<DeviceManager>,
         buffer: Arc<CommandBufferManager>,
+        queue: vk::Queue,
     ) -> Box<Self> {
         let buffer = (*buffer).clone();
 
         Box::new(Self {
             device_manager: device_manager.clone(),
-            command_buffer: Arc::new(RwLock::new(buffer)),
+            command_buffers: Arc::new(RwLock::new(vec![buffer])),
             sync: Arc::new(Mutex::new(GpuSync::new(device_manager).unwrap())),
+            queue: Mutex::new(queue),
         })
     }
 
@@ -194,8 +195,17 @@ impl GpuFuture {
         self.sync.lock().unwrap().n_pass
     }
 
+    /// Transfers other's buffers to self and queue also
     pub fn join(self: Box<Self>, other: Box<Self>) -> Box<Self> {
-        *self.command_buffer.write().unwrap() = other.command_buffer.read().unwrap().clone();
+        let mut self_lock = self.command_buffers.write().unwrap();
+        let other_lock = other.command_buffers.read().unwrap();
+        other_lock.iter().for_each(|oth| {
+            if !oth.handler.is_null() {
+                self_lock.push(oth.clone())
+            }
+        });
+        drop(self_lock);
+        *self.queue.lock().unwrap() = *other.queue.lock().unwrap();
         self
     }
 
@@ -231,9 +241,8 @@ impl GpuFuture {
         result
     }
 
-    pub fn then_swapchain_present(
+    pub fn then_swapchain_present_and_flush(
         self: Box<Self>,
-        command_entry: Arc<CommandEntry>,
         presentation: Arc<Presentation>,
     ) -> Result<Box<Self>, (vk::Result, Arc<Mutex<GpuSync>>)> {
         let swapchain = presentation.swapchain.clone();
@@ -246,10 +255,15 @@ impl GpuFuture {
 
         let swaphchains = [*swapchain.swapchain_khr.read().unwrap()];
         let indices = [*presentation.image_index.lock().unwrap()];
-        let command_buffer = self.command_buffer.clone();
+        let command_buffers = self.command_buffers.clone();
+        let mut command_buffers_lock = command_buffers.write().unwrap();
         let device_manager = self.device_manager.clone();
 
-        let command_buffers = [command_buffer.read().unwrap().handler];
+        let command_buffers: Vec<vk::CommandBuffer> = command_buffers_lock
+            .iter()
+            .map(|cb| cb.handler())
+            .filter(|h| !h.is_null())
+            .collect();
 
         let submit_info = vk::SubmitInfo::default()
             .wait_semaphores(&image_semaphores)
@@ -262,21 +276,21 @@ impl GpuFuture {
             .swapchains(&swaphchains)
             .image_indices(&indices);
 
-        let command_entry = command_entry.clone();
+        let queue = self.queue.lock().unwrap();
 
         let result;
 
         unsafe {
             device_manager
                 .device
-                .queue_submit(command_entry.queue, &[submit_info], fence)
+                .queue_submit(*queue, &[submit_info], fence)
                 .unwrap();
 
             result = swapchain
                 .swapchain
                 .write()
                 .unwrap()
-                .queue_present(command_entry.queue, &present_info);
+                .queue_present(*queue, &present_info);
         };
 
         if result.is_ok() {
@@ -285,7 +299,48 @@ impl GpuFuture {
             return Err((result.err().unwrap(), self.sync.clone()));
         }
 
+        command_buffers_lock.clear();
+
         drop(sync);
+        drop(queue);
+
+        Ok(self)
+    }
+
+    pub fn flush(self: Box<Self>) -> CrystalResult<Box<Self>> {
+        let mut command_buffer_lock = self.command_buffers.write().unwrap();
+        let command_buffers: Vec<vk::CommandBuffer> = (*command_buffer_lock)
+            .iter()
+            .map(|buffer| buffer.handler())
+            .collect();
+        let submit_info = vk::SubmitInfo::default().command_buffers(&command_buffers);
+
+        let queue = self.queue.lock().unwrap();
+
+        match unsafe {
+            self.device_manager
+                .device
+                .queue_submit(*queue, &[submit_info], vk::Fence::null())
+        } {
+            Ok(()) => (),
+            Err(e) => {
+                log!("cannot submit queue: {}", e);
+                return Err(CrystalError::CommandManagerError);
+            }
+        }
+
+        match unsafe { self.device_manager.device.queue_wait_idle(*queue) } {
+            Ok(()) => (),
+            Err(e) => {
+                log!("cannot wait idle queue: {}", e);
+                return Err(CrystalError::CommandManagerError);
+            }
+        };
+
+        command_buffer_lock.clear();
+
+        drop(command_buffer_lock);
+        drop(queue);
 
         Ok(self)
     }
@@ -398,7 +453,10 @@ impl CommandEntry {
         })
     }
 
-    fn begin_single_time_buffer(&self) -> CrystalResult<vk::CommandBuffer> {
+    pub fn record_single_time_buffer<P>(&self, predicate: P) -> CrystalResult<Box<GpuFuture>>
+    where
+        P: Fn(&vk::CommandBuffer, Arc<ash::Device>),
+    {
         let alloc_info = vk::CommandBufferAllocateInfo::default()
             .level(vk::CommandBufferLevel::PRIMARY)
             .command_pool(self.command_pool)
@@ -431,10 +489,8 @@ impl CommandEntry {
             }
         }
 
-        Ok(command_buffer)
-    }
+        predicate(&command_buffer, self.device_manager.device.clone());
 
-    fn end_single_time_buffer(&self, command_buffer: vk::CommandBuffer) -> CrystalResult<()> {
         match unsafe {
             self.device_manager
                 .device
@@ -448,271 +504,15 @@ impl CommandEntry {
         }
 
         let commands_buffers = [command_buffer];
-        let submit_info = vk::SubmitInfo::default().command_buffers(&commands_buffers);
 
-        let queue = unsafe {
-            self.device_manager
-                .device
-                .get_device_queue(self.queue_family_index, 0)
-        };
+        let command_buffer_manager =
+            CommandBufferManager::from_handlers(commands_buffers)[0].clone();
 
-        match unsafe {
-            self.device_manager
-                .device
-                .queue_submit(queue, &[submit_info], vk::Fence::null())
-        } {
-            Ok(()) => (),
-            Err(e) => {
-                log!("cannot submit queue: {}", e);
-                return Err(CrystalError::CommandManagerError);
-            }
-        }
-
-        match unsafe { self.device_manager.device.queue_wait_idle(queue) } {
-            Ok(()) => (),
-            Err(e) => {
-                log!("cannot wait idle queue: {}", e);
-                return Err(CrystalError::CommandManagerError);
-            }
-        }
-
-        Ok(())
-    }
-
-    pub(crate) fn generate_mipmaps(&self, image: Arc<Image>) -> CrystalResult<()> {
-        let command_buffer = self.begin_single_time_buffer()?;
-
-        let mut barrier = vk::ImageMemoryBarrier::default()
-            .image(image.image)
-            .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-            .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-            .subresource_range(
-                vk::ImageSubresourceRange::default()
-                    .aspect_mask(vk::ImageAspectFlags::COLOR)
-                    .base_array_layer(0)
-                    .layer_count(1)
-                    .level_count(1),
-            );
-
-        let mut mip_width = image.extent.width;
-        let mut mip_heigth = image.extent.height;
-
-        for mip_level in 1..image.mip_levels {
-            barrier.subresource_range = barrier.subresource_range.base_mip_level(mip_level - 1);
-            barrier = barrier.old_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL);
-            barrier = barrier.new_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL);
-            barrier = barrier.src_access_mask(vk::AccessFlags::TRANSFER_WRITE);
-            barrier = barrier.dst_access_mask(vk::AccessFlags::TRANSFER_READ);
-
-            unsafe {
-                self.device_manager.device.cmd_pipeline_barrier(
-                    command_buffer,
-                    vk::PipelineStageFlags::TRANSFER,
-                    vk::PipelineStageFlags::TRANSFER,
-                    vk::DependencyFlags::empty(),
-                    &[],
-                    &[],
-                    &[barrier],
-                );
-            }
-
-            let blit = vk::ImageBlit::default()
-                .src_offsets([
-                    vk::Offset3D::default().x(0).y(0).z(0),
-                    vk::Offset3D::default()
-                        .x(mip_width as i32)
-                        .y(mip_heigth as i32)
-                        .z(1),
-                ])
-                .dst_offsets([
-                    vk::Offset3D::default().x(0).y(0).z(0),
-                    vk::Offset3D::default()
-                        .x(if mip_width > 1 {
-                            mip_width as i32 / 2
-                        } else {
-                            1
-                        })
-                        .y(if mip_heigth > 1 {
-                            mip_heigth as i32 / 2
-                        } else {
-                            1
-                        })
-                        .z(1),
-                ])
-                .src_subresource(
-                    vk::ImageSubresourceLayers::default()
-                        .aspect_mask(vk::ImageAspectFlags::COLOR)
-                        .mip_level(mip_level - 1)
-                        .base_array_layer(0)
-                        .layer_count(1),
-                )
-                .dst_subresource(
-                    vk::ImageSubresourceLayers::default()
-                        .aspect_mask(vk::ImageAspectFlags::COLOR)
-                        .mip_level(mip_level)
-                        .base_array_layer(0)
-                        .layer_count(1),
-                );
-
-            unsafe {
-                self.device_manager.device.cmd_blit_image(
-                    command_buffer,
-                    image.image,
-                    vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-                    image.image,
-                    vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                    &[blit],
-                    vk::Filter::LINEAR,
-                );
-            }
-
-            barrier = barrier.old_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL);
-            barrier = barrier.new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
-            barrier = barrier.src_access_mask(vk::AccessFlags::TRANSFER_READ);
-            barrier = barrier.dst_access_mask(vk::AccessFlags::SHADER_READ);
-
-            unsafe {
-                self.device_manager.device.cmd_pipeline_barrier(
-                    command_buffer,
-                    vk::PipelineStageFlags::TRANSFER,
-                    vk::PipelineStageFlags::FRAGMENT_SHADER,
-                    vk::DependencyFlags::empty(),
-                    &[],
-                    &[],
-                    &[barrier],
-                );
-            }
-
-            if mip_width > 1 {
-                mip_width /= 2
-            }
-
-            if mip_heigth > 1 {
-                mip_heigth /= 2
-            }
-        }
-
-        barrier.subresource_range = barrier
-            .subresource_range
-            .base_mip_level(image.mip_levels - 1);
-        barrier = barrier.old_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL);
-        barrier = barrier.new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
-        barrier = barrier.src_access_mask(vk::AccessFlags::TRANSFER_WRITE);
-        barrier = barrier.dst_access_mask(vk::AccessFlags::SHADER_READ);
-
-        unsafe {
-            self.device_manager.device.cmd_pipeline_barrier(
-                command_buffer,
-                vk::PipelineStageFlags::TRANSFER,
-                vk::PipelineStageFlags::FRAGMENT_SHADER,
-                vk::DependencyFlags::empty(),
-                &[],
-                &[],
-                &[barrier],
-            );
-        }
-
-        self.end_single_time_buffer(command_buffer)
-    }
-
-    pub(crate) fn transition_image_layout(
-        &self,
-        image: Arc<Image>,
-        new_layout: vk::ImageLayout,
-    ) -> CrystalResult<()> {
-        let command_buffer = self.begin_single_time_buffer()?;
-
-        let layout = *image.layout.read().unwrap();
-
-        let mut barrier = vk::ImageMemoryBarrier::default()
-            .old_layout(layout)
-            .new_layout(new_layout)
-            .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-            .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-            .image(image.image)
-            .subresource_range(
-                vk::ImageSubresourceRange::default()
-                    .aspect_mask(vk::ImageAspectFlags::COLOR)
-                    .base_mip_level(0)
-                    .level_count(image.mip_levels)
-                    .base_array_layer(0)
-                    .layer_count(1),
-            );
-
-        let mut src_stage = vk::PipelineStageFlags::TOP_OF_PIPE;
-        let mut dst_stage = vk::PipelineStageFlags::TRANSFER;
-
-        if layout == vk::ImageLayout::UNDEFINED
-            && new_layout == vk::ImageLayout::TRANSFER_DST_OPTIMAL
-        {
-            barrier = barrier
-                .src_access_mask(vk::AccessFlags::empty())
-                .dst_access_mask(vk::AccessFlags::TRANSFER_WRITE);
-        } else if layout == vk::ImageLayout::TRANSFER_DST_OPTIMAL
-            && new_layout == vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL
-        {
-            barrier = barrier
-                .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
-                .dst_access_mask(vk::AccessFlags::SHADER_READ);
-
-            src_stage = vk::PipelineStageFlags::TRANSFER;
-            dst_stage = vk::PipelineStageFlags::FRAGMENT_SHADER;
-        } else {
-            panic!(
-                "fatal: unsupported layout transition: {:?} -> {:?}",
-                image.layout, new_layout
-            );
-        }
-
-        *image.layout.write().unwrap() = new_layout;
-
-        unsafe {
-            self.device_manager.device.cmd_pipeline_barrier(
-                command_buffer,
-                src_stage,
-                dst_stage,
-                vk::DependencyFlags::empty(),
-                &[],
-                &[],
-                &[barrier],
-            )
-        };
-
-        self.end_single_time_buffer(command_buffer)
-    }
-
-    pub fn copy_buffer_to_image(
-        &self,
-        image_manager: Arc<Image>,
-        buffer: &vk::Buffer,
-    ) -> CrystalResult<()> {
-        let command_buffer = self.begin_single_time_buffer()?;
-
-        let region = vk::BufferImageCopy::default()
-            .buffer_offset(0)
-            .buffer_row_length(0)
-            .buffer_image_height(0)
-            .image_subresource(
-                vk::ImageSubresourceLayers::default()
-                    .aspect_mask(vk::ImageAspectFlags::COLOR)
-                    .mip_level(0)
-                    .base_array_layer(0)
-                    .layer_count(1),
-            )
-            .image_offset(vk::Offset3D::default())
-            .image_extent(image_manager.extent);
-
-        unsafe {
-            self.device_manager.device.cmd_copy_buffer_to_image(
-                command_buffer,
-                *buffer,
-                image_manager.image,
-                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                &[region],
-            );
-        }
-
-        self.end_single_time_buffer(command_buffer)
+        Ok(GpuFuture::from_command_entry(
+            self.device_manager.clone(),
+            command_buffer_manager,
+            self.queue,
+        ))
     }
 
     pub fn record_command_buffer<P>(
@@ -772,6 +572,7 @@ impl CommandEntry {
         Ok(GpuFuture::from_command_entry(
             self.device_manager.clone(),
             self.command_buffers[n_pass].clone(),
+            self.queue,
         ))
     }
 }

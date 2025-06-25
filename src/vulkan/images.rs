@@ -9,7 +9,11 @@ use crate::{
     traits,
 };
 
-use super::{commands::CommandManager, devices::DeviceManager, memory::BufferManager};
+use super::{
+    commands::{CommandEntry, CommandManager, GpuFuture},
+    devices::DeviceManager,
+    memory::BufferManager,
+};
 
 pub struct Image {
     pub device_manager: Arc<DeviceManager>,
@@ -233,14 +237,247 @@ impl VulkanTexture {
     pub fn prepare_texture_image(&self, command_manager: Arc<CommandManager>) -> CrystalResult<()> {
         let command_entry = command_manager.graphics.as_ref().unwrap();
 
-        command_entry
-            .transition_image_layout(self.image.clone(), vk::ImageLayout::TRANSFER_DST_OPTIMAL)?;
-        command_entry
-            .copy_buffer_to_image(self.image.clone(), &self.staging_buffer_manager.buffer)?;
-        command_entry.generate_mipmaps(self.image.clone())?;
-        /*command_entry
-        .transition_image_layout(&mut self.image, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)?;*/
+        let future = self.transition_image_layout(
+            command_entry.clone(),
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+        )?;
+        let future = future.join(self.stage_image(command_entry.clone())?);
+        let future = future.join(self.generate_mipmaps(command_entry.clone())?);
+
+        future.flush()?;
 
         Ok(())
+    }
+
+    pub(crate) fn generate_mipmaps(
+        &self,
+        command_entry: Arc<CommandEntry>,
+    ) -> CrystalResult<Box<GpuFuture>> {
+        command_entry.record_single_time_buffer(|command_buffer, device| {
+            let mut barrier = vk::ImageMemoryBarrier::default()
+                .image(self.image.image)
+                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .subresource_range(
+                    vk::ImageSubresourceRange::default()
+                        .aspect_mask(vk::ImageAspectFlags::COLOR)
+                        .base_array_layer(0)
+                        .layer_count(1)
+                        .level_count(1),
+                );
+
+            let mut mip_width = self.image.extent.width;
+            let mut mip_heigth = self.image.extent.height;
+
+            for mip_level in 1..self.image.mip_levels {
+                barrier.subresource_range = barrier.subresource_range.base_mip_level(mip_level - 1);
+                barrier = barrier.old_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL);
+                barrier = barrier.new_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL);
+                barrier = barrier.src_access_mask(vk::AccessFlags::TRANSFER_WRITE);
+                barrier = barrier.dst_access_mask(vk::AccessFlags::TRANSFER_READ);
+
+                unsafe {
+                    device.cmd_pipeline_barrier(
+                        *command_buffer,
+                        vk::PipelineStageFlags::TRANSFER,
+                        vk::PipelineStageFlags::TRANSFER,
+                        vk::DependencyFlags::empty(),
+                        &[],
+                        &[],
+                        &[barrier],
+                    );
+                }
+
+                let blit = vk::ImageBlit::default()
+                    .src_offsets([
+                        vk::Offset3D::default().x(0).y(0).z(0),
+                        vk::Offset3D::default()
+                            .x(mip_width as i32)
+                            .y(mip_heigth as i32)
+                            .z(1),
+                    ])
+                    .dst_offsets([
+                        vk::Offset3D::default().x(0).y(0).z(0),
+                        vk::Offset3D::default()
+                            .x(if mip_width > 1 {
+                                mip_width as i32 / 2
+                            } else {
+                                1
+                            })
+                            .y(if mip_heigth > 1 {
+                                mip_heigth as i32 / 2
+                            } else {
+                                1
+                            })
+                            .z(1),
+                    ])
+                    .src_subresource(
+                        vk::ImageSubresourceLayers::default()
+                            .aspect_mask(vk::ImageAspectFlags::COLOR)
+                            .mip_level(mip_level - 1)
+                            .base_array_layer(0)
+                            .layer_count(1),
+                    )
+                    .dst_subresource(
+                        vk::ImageSubresourceLayers::default()
+                            .aspect_mask(vk::ImageAspectFlags::COLOR)
+                            .mip_level(mip_level)
+                            .base_array_layer(0)
+                            .layer_count(1),
+                    );
+
+                unsafe {
+                    device.cmd_blit_image(
+                        *command_buffer,
+                        self.image.image,
+                        vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+                        self.image.image,
+                        vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                        &[blit],
+                        vk::Filter::LINEAR,
+                    );
+                }
+
+                barrier = barrier.old_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL);
+                barrier = barrier.new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
+                barrier = barrier.src_access_mask(vk::AccessFlags::TRANSFER_READ);
+                barrier = barrier.dst_access_mask(vk::AccessFlags::SHADER_READ);
+
+                unsafe {
+                    device.cmd_pipeline_barrier(
+                        *command_buffer,
+                        vk::PipelineStageFlags::TRANSFER,
+                        vk::PipelineStageFlags::FRAGMENT_SHADER,
+                        vk::DependencyFlags::empty(),
+                        &[],
+                        &[],
+                        &[barrier],
+                    );
+                }
+
+                if mip_width > 1 {
+                    mip_width /= 2
+                }
+
+                if mip_heigth > 1 {
+                    mip_heigth /= 2
+                }
+            }
+
+            barrier.subresource_range = barrier
+                .subresource_range
+                .base_mip_level(self.image.mip_levels - 1);
+            barrier = barrier.old_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL);
+            barrier = barrier.new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
+            barrier = barrier.src_access_mask(vk::AccessFlags::TRANSFER_WRITE);
+            barrier = barrier.dst_access_mask(vk::AccessFlags::SHADER_READ);
+
+            unsafe {
+                device.cmd_pipeline_barrier(
+                    *command_buffer,
+                    vk::PipelineStageFlags::TRANSFER,
+                    vk::PipelineStageFlags::FRAGMENT_SHADER,
+                    vk::DependencyFlags::empty(),
+                    &[],
+                    &[],
+                    &[barrier],
+                );
+            }
+        })
+    }
+
+    pub(crate) fn stage_image(
+        &self,
+        command_entry: Arc<CommandEntry>,
+    ) -> CrystalResult<Box<GpuFuture>> {
+        command_entry.record_single_time_buffer(|command_buffer, device| {
+            let region = vk::BufferImageCopy::default()
+                .buffer_offset(0)
+                .buffer_row_length(0)
+                .buffer_image_height(0)
+                .image_subresource(
+                    vk::ImageSubresourceLayers::default()
+                        .aspect_mask(vk::ImageAspectFlags::COLOR)
+                        .mip_level(0)
+                        .base_array_layer(0)
+                        .layer_count(1),
+                )
+                .image_offset(vk::Offset3D::default())
+                .image_extent(self.image.extent);
+
+            unsafe {
+                device.cmd_copy_buffer_to_image(
+                    *command_buffer,
+                    self.staging_buffer_manager.buffer,
+                    self.image.image,
+                    vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                    &[region],
+                );
+            }
+        })
+    }
+
+    pub(crate) fn transition_image_layout(
+        &self,
+        command_entry: Arc<CommandEntry>,
+        new_layout: vk::ImageLayout,
+    ) -> CrystalResult<Box<GpuFuture>> {
+        command_entry.record_single_time_buffer(|command_buffer, device| {
+            let layout = *self.image.layout.read().unwrap();
+
+            let mut barrier = vk::ImageMemoryBarrier::default()
+                .old_layout(layout)
+                .new_layout(new_layout)
+                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .image(self.image.image)
+                .subresource_range(
+                    vk::ImageSubresourceRange::default()
+                        .aspect_mask(vk::ImageAspectFlags::COLOR)
+                        .base_mip_level(0)
+                        .level_count(self.image.mip_levels)
+                        .base_array_layer(0)
+                        .layer_count(1),
+                );
+
+            let mut src_stage = vk::PipelineStageFlags::TOP_OF_PIPE;
+            let mut dst_stage = vk::PipelineStageFlags::TRANSFER;
+
+            if layout == vk::ImageLayout::UNDEFINED
+                && new_layout == vk::ImageLayout::TRANSFER_DST_OPTIMAL
+            {
+                barrier = barrier
+                    .src_access_mask(vk::AccessFlags::empty())
+                    .dst_access_mask(vk::AccessFlags::TRANSFER_WRITE);
+            } else if layout == vk::ImageLayout::TRANSFER_DST_OPTIMAL
+                && new_layout == vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL
+            {
+                barrier = barrier
+                    .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
+                    .dst_access_mask(vk::AccessFlags::SHADER_READ);
+
+                src_stage = vk::PipelineStageFlags::TRANSFER;
+                dst_stage = vk::PipelineStageFlags::FRAGMENT_SHADER;
+            } else {
+                panic!(
+                    "fatal: unsupported layout transition: {:?} -> {:?}",
+                    self.image.layout, new_layout
+                );
+            }
+
+            *self.image.layout.write().unwrap() = new_layout;
+
+            unsafe {
+                device.cmd_pipeline_barrier(
+                    *command_buffer,
+                    src_stage,
+                    dst_stage,
+                    vk::DependencyFlags::empty(),
+                    &[],
+                    &[],
+                    &[barrier],
+                )
+            };
+        })
     }
 }

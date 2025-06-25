@@ -437,11 +437,10 @@ impl VulkanEntry {
                 })?,
         );
 
-        let present = self.command_manager.present.clone().unwrap();
         let presentation = self.presentation.clone();
 
         let handle =
-            std::thread::spawn(move || gpu_future.then_swapchain_present(present, presentation));
+            std::thread::spawn(move || gpu_future.then_swapchain_present_and_flush(presentation));
 
         let mut handle_lock = self.thread_handle.lock().unwrap();
         *handle_lock = Some(handle);

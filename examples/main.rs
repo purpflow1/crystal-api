@@ -301,7 +301,7 @@ fn main() -> CrystalResult<()> {
     let settings = GraphicsApiInitSettings::default()
         .double_buffering(true)
         .vsync(false)
-        .msaa_samples(8)
+        .msaa_samples(4)
         .width(1000)
         .height(700);
 
