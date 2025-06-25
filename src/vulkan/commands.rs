@@ -286,6 +286,8 @@ impl GpuFuture {
                 .queue_submit(*queue, &[submit_info], fence)
                 .unwrap();
 
+            command_buffers_lock.clear();
+
             result = swapchain
                 .swapchain
                 .write()
@@ -298,8 +300,6 @@ impl GpuFuture {
         } else {
             return Err((result.err().unwrap(), self.sync.clone()));
         }
-
-        command_buffers_lock.clear();
 
         drop(sync);
         drop(queue);
@@ -401,11 +401,10 @@ impl CommandEntry {
     fn new(
         device_manager: Arc<DeviceManager>,
         queue_family_index: u32,
-        flags: vk::CommandPoolCreateFlags,
         double_buffering: bool,
     ) -> CrystalResult<Self> {
         let create_info = vk::CommandPoolCreateInfo::default()
-            .flags(flags)
+            .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER)
             .queue_family_index(queue_family_index);
 
         let command_pool = match unsafe {
@@ -579,8 +578,11 @@ impl CommandEntry {
 
 pub struct CommandManager {
     pub device_manager: Arc<DeviceManager>,
+
     pub graphics: Option<Arc<CommandEntry>>,
     pub present: Option<Arc<CommandEntry>>,
+    pub transfer: Option<Arc<CommandEntry>>,
+    pub compute: Option<Arc<CommandEntry>>,
 }
 
 impl CommandManager {
@@ -592,7 +594,6 @@ impl CommandManager {
             Some(idx) => Some(Arc::new(CommandEntry::new(
                 device_manager.clone(),
                 idx,
-                vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER,
                 double_buffering,
             )?)),
             None => None,
@@ -602,7 +603,24 @@ impl CommandManager {
             Some(idx) => Some(Arc::new(CommandEntry::new(
                 device_manager.clone(),
                 idx,
-                vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER,
+                double_buffering,
+            )?)),
+            None => None,
+        };
+
+        let transfer = match device_manager.queue_families_indices.transfer_index {
+            Some(idx) => Some(Arc::new(CommandEntry::new(
+                device_manager.clone(),
+                idx,
+                double_buffering,
+            )?)),
+            None => None,
+        };
+
+        let compute = match device_manager.queue_families_indices.compute_index {
+            Some(idx) => Some(Arc::new(CommandEntry::new(
+                device_manager.clone(),
+                idx,
                 double_buffering,
             )?)),
             None => None,
@@ -612,6 +630,8 @@ impl CommandManager {
             device_manager,
             graphics,
             present,
+            transfer,
+            compute,
         }))
     }
 }
