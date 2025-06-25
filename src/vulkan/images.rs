@@ -235,7 +235,7 @@ impl VulkanTexture {
     }
 
     pub fn prepare_texture_image(&self, command_manager: Arc<CommandManager>) -> CrystalResult<()> {
-        let command_entry = command_manager.graphics.as_ref().unwrap();
+        let command_entry = command_manager.transfer.as_ref().unwrap();
 
         let future = self.transition_image_layout(
             command_entry.clone(),
