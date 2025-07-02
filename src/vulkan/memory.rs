@@ -12,12 +12,19 @@ use crate::{
 
 use super::devices::DeviceManager;
 
+#[derive(Clone)]
+pub struct BufferInfo {
+    pub size: u64,
+    pub usage: vk::BufferUsageFlags,
+    pub properties: vk::MemoryPropertyFlags,
+}
+
 pub struct BufferManager {
     device_manager: Arc<DeviceManager>,
     pub buffer: vk::Buffer,
     device_memory: vk::DeviceMemory,
     pub mapped_memory: RwLock<Option<*mut c_void>>,
-    size: u64,
+    info: BufferInfo,
 }
 
 unsafe impl Sync for BufferManager {}
@@ -26,13 +33,10 @@ unsafe impl Send for BufferManager {}
 impl Drop for BufferManager {
     fn drop(&mut self) {
         unsafe {
-            if let Some(_) = *self.mapped_memory.read().unwrap() {
-                self.device_manager.device.unmap_memory(self.device_memory);
-            }
+            self.device_manager.device.destroy_buffer(self.buffer, None);
             self.device_manager
                 .device
                 .free_memory(self.device_memory, None);
-            self.device_manager.device.destroy_buffer(self.buffer, None);
         }
     }
 }
@@ -40,13 +44,11 @@ impl Drop for BufferManager {
 impl BufferManager {
     pub(crate) fn new(
         device_manager: Arc<DeviceManager>,
-        size: u64,
-        usage: vk::BufferUsageFlags,
-        properties: vk::MemoryPropertyFlags,
+        info: BufferInfo,
     ) -> CrystalResult<Arc<Self>> {
         let create_info = vk::BufferCreateInfo::default()
-            .size(size)
-            .usage(usage)
+            .size(info.size)
+            .usage(info.usage)
             .sharing_mode(vk::SharingMode::EXCLUSIVE);
 
         let buffer = match unsafe { device_manager.device.create_buffer(&create_info, None) } {
@@ -61,7 +63,7 @@ impl BufferManager {
             unsafe { device_manager.device.get_buffer_memory_requirements(buffer) };
 
         let memory_type_index = device_manager
-            .find_memory_type_index(properties, memory_requirements.memory_type_bits)?;
+            .find_memory_type_index(info.properties, memory_requirements.memory_type_bits)?;
 
         let memory_allocate_info = vk::MemoryAllocateInfo::default()
             .allocation_size(memory_requirements.size)
@@ -96,7 +98,7 @@ impl BufferManager {
             buffer,
             device_memory,
             mapped_memory: RwLock::new(None),
-            size,
+            info,
         }))
     }
 
@@ -125,66 +127,43 @@ impl BufferManager {
         Ok(mapped_memory.unwrap() as *mut u8)
     }
 
+    pub fn unmap_memory(&self) -> CrystalResult<()> {
+        let mut mapped = self.mapped_memory.write().unwrap();
+        if mapped.is_some() {
+            unsafe { self.device_manager.device.unmap_memory(self.device_memory) };
+            *mapped = None;
+            Ok(())
+        } else {
+            Err(CrystalError::MemoryError)
+        }
+    }
+
     pub fn write<T: Copy>(&self, data: &[T], offset: usize) -> CrystalResult<()> {
         let size = data.len() * size_of::<T>();
 
         assert!(
-            size + offset <= self.size as usize,
+            size + offset <= self.info.size as usize,
             "fatal: copying outside of buffer size: {} > {}",
             size + offset,
-            self.size
+            self.info.size
+        );
+
+        let lock = self.mapped_memory.read().unwrap();
+
+        let mapped_memory = lock.unwrap_or(std::ptr::null_mut() as *mut c_void);
+
+        assert!(
+            !mapped_memory.is_null(),
+            "fatal: trying to write to unmapped buffer"
         );
 
         unsafe {
-            let ptr = self
-                .mapped_memory
-                .read()
-                .unwrap()
-                .unwrap()
-                .byte_add(offset * size_of::<T>());
+            let ptr = mapped_memory.byte_add(offset * size_of::<T>());
             ptr.copy_from(
                 data.as_ptr() as *const std::ffi::c_void,
                 data.len() * size_of::<T>(),
             );
         }
-
-        Ok(())
-    }
-
-    pub fn single_time_write<T: Copy>(&self, data: &[T], offset: u64) -> CrystalResult<()> {
-        let len_to_copy = (data.len() * size_of::<T>()) as u64;
-
-        if len_to_copy + offset as u64 > self.size {
-            panic!(
-                "fatal: copying outside of buffer size: {} > {}",
-                len_to_copy + offset,
-                self.size
-            );
-        }
-
-        let ptr = match unsafe {
-            self.device_manager.device.map_memory(
-                self.device_memory,
-                offset,
-                len_to_copy,
-                vk::MemoryMapFlags::empty(),
-            )
-        } {
-            Ok(ptr) => ptr,
-            Err(e) => {
-                log!("cannot map memory: {}", e);
-                return Err(CrystalError::MemoryError);
-            }
-        };
-
-        unsafe {
-            ptr.copy_from(
-                data.as_ptr() as *const std::ffi::c_void,
-                data.len() * size_of::<T>(),
-            );
-        }
-
-        unsafe { self.device_manager.device.unmap_memory(self.device_memory) };
 
         Ok(())
     }

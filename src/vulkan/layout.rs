@@ -18,7 +18,10 @@ use crate::{
     vulkan::VulkanTexture,
 };
 
-use super::{devices::DeviceManager, memory::BufferManager};
+use super::{
+    devices::DeviceManager,
+    memory::{BufferInfo, BufferManager},
+};
 
 struct LayoutDynamicData {
     device_manager: Arc<DeviceManager>,
@@ -226,12 +229,14 @@ impl LayoutDynamicData {
         let mut buffers = vec![];
 
         for buffer_idx in 0..if self.double_buffering { 2 } else { 1 } {
-            let buffer_manager = BufferManager::new(
-                self.device_manager.clone(),
+            let buffer_info = BufferInfo {
                 size,
-                buffer_usage,
-                vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-            )?;
+                usage: buffer_usage,
+                properties: vk::MemoryPropertyFlags::HOST_VISIBLE
+                    | vk::MemoryPropertyFlags::HOST_COHERENT,
+            };
+
+            let buffer_manager = BufferManager::new(self.device_manager.clone(), buffer_info)?;
 
             let ptr = buffer_manager.map_memory(size, 0)?;
             buffers.push(buffer_manager.clone());

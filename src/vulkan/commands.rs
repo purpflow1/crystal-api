@@ -1,6 +1,6 @@
 use std::{
     collections::BTreeMap,
-    sync::{Arc, Mutex, RwLock},
+    sync::{Arc, Mutex},
 };
 
 use ash::{
@@ -129,7 +129,7 @@ impl GpuSync {
 
 pub struct GpuFuture {
     device_manager: Arc<DeviceManager>,
-    command_buffers: Arc<RwLock<Vec<CommandBufferManager>>>,
+    command_buffers: Mutex<Vec<Arc<CommandBuffer>>>,
     queue: Arc<Queue>,
     sync: Arc<Mutex<GpuSync>>,
 }
@@ -166,14 +166,12 @@ unsafe impl Sync for GpuFuture {}
 impl GpuFuture {
     fn from_command_entry(
         device_manager: Arc<DeviceManager>,
-        buffer: Arc<CommandBufferManager>,
+        buffers: Vec<Arc<CommandBuffer>>,
         queue: Arc<Queue>,
     ) -> Box<Self> {
-        let buffer = (*buffer).clone();
-
         Box::new(Self {
             device_manager: device_manager.clone(),
-            command_buffers: Arc::new(RwLock::new(vec![buffer])),
+            command_buffers: Mutex::new(buffers),
             sync: Arc::new(Mutex::new(GpuSync::new(device_manager).unwrap())),
             queue,
         })
@@ -185,13 +183,11 @@ impl GpuFuture {
 
     /// Transfers other's buffers to self
     pub fn join(self: Box<Self>, other: Box<Self>) -> Box<Self> {
-        let mut self_lock = self.command_buffers.write().unwrap();
-        let other_lock = other.command_buffers.read().unwrap();
-        other_lock.iter().for_each(|oth| {
-            if !oth.handler.is_null() {
-                self_lock.push(oth.clone())
-            }
-        });
+        let mut self_lock = self.command_buffers.lock().unwrap();
+        let other_lock = other.command_buffers.lock().unwrap();
+        other_lock
+            .iter()
+            .for_each(|oth| self_lock.push(oth.clone()));
         drop(self_lock);
         drop(other_lock);
 
@@ -244,12 +240,11 @@ impl GpuFuture {
 
         let swaphchains = [*swapchain.swapchain_khr.read().unwrap()];
         let indices = [*presentation.image_index.lock().unwrap()];
-        let command_buffers = self.command_buffers.clone();
-        let mut command_buffers_lock = command_buffers.write().unwrap();
+        let mut command_buffers_lock = self.command_buffers.lock().unwrap();
 
         let command_buffers: Vec<vk::CommandBuffer> = command_buffers_lock
             .iter()
-            .map(|cb| cb.handler())
+            .map(|cb| cb.handler)
             .filter(|h| !h.is_null())
             .collect();
 
@@ -270,6 +265,7 @@ impl GpuFuture {
 
         unsafe {
             command_buffers_lock.clear();
+            drop(command_buffers_lock);
 
             result = swapchain
                 .swapchain
@@ -292,10 +288,10 @@ impl GpuFuture {
     }
 
     pub fn flush(self: Box<Self>) -> CrystalResult<Box<Self>> {
-        let mut command_buffer_lock = self.command_buffers.write().unwrap();
+        let mut command_buffer_lock = self.command_buffers.lock().unwrap();
         let command_buffers: Vec<vk::CommandBuffer> = (*command_buffer_lock)
             .iter()
-            .map(|buffer| buffer.handler())
+            .map(|buffer| buffer.handler)
             .collect();
         let submit_info = vk::SubmitInfo::default().command_buffers(&command_buffers);
 
@@ -303,6 +299,7 @@ impl GpuFuture {
             .submit(&[submit_info], vk::Fence::null())
             .unwrap();
 
+        drop(command_buffers);
         command_buffer_lock.clear();
         drop(command_buffer_lock);
 
@@ -310,78 +307,91 @@ impl GpuFuture {
     }
 }
 
-#[derive(Clone)]
-pub struct CommandBufferManager {
+pub struct CommandBuffer {
+    pool: Arc<CommandPool>,
     handler: vk::CommandBuffer,
 }
 
-impl CommandBufferManager {
-    fn handler(&self) -> vk::CommandBuffer {
-        self.handler
-    }
-
-    fn from_handlers(handlers: impl IntoIterator<Item = vk::CommandBuffer>) -> Vec<Arc<Self>> {
-        handlers
-            .into_iter()
-            .map(|handler| Arc::new(Self { handler }))
-            .collect()
-    }
-}
-
-pub struct CommandEntry {
-    device_manager: Arc<DeviceManager>,
-    command_pool: vk::CommandPool,
-    command_buffers: Vec<Arc<CommandBufferManager>>,
-    queue: Arc<Queue>,
-    pub double_buffering: bool,
-}
-
-impl Drop for CommandEntry {
+impl Drop for CommandBuffer {
     fn drop(&mut self) {
         unsafe {
-            self.queue.wait_idle().unwrap();
-
-            self.device_manager.device.free_command_buffers(
-                self.command_pool,
-                &self
-                    .command_buffers
-                    .iter()
-                    .map(|c| c.handler)
-                    .collect::<Vec<vk::CommandBuffer>>(),
-            );
-
-            self.device_manager
+            self.pool.queue.wait_idle().unwrap();
+            self.pool
+                .device_manager
                 .device
-                .destroy_command_pool(self.command_pool, None);
+                .free_command_buffers(self.pool.handler, &[self.handler]);
         }
     }
 }
 
-impl CommandEntry {
-    pub fn now_with_sync(&self, sync: Arc<Mutex<GpuSync>>) -> Box<GpuFuture> {
-        Box::new(GpuFuture {
-            device_manager: self.device_manager.clone(),
-            command_buffers: Arc::new(RwLock::new(vec![])),
-            sync,
-            queue: self.queue.clone(),
-        })
-    }
-
-    pub fn now(&self) -> Box<GpuFuture> {
-        GpuFuture::from_command_entry(
-            self.device_manager.clone(),
-            Arc::new(CommandBufferManager {
-                handler: vk::CommandBuffer::null(),
-            }),
-            self.queue.clone(),
-        )
+impl CommandBuffer {
+    fn from_handlers(
+        pool: Arc<CommandPool>,
+        handlers: Vec<vk::CommandBuffer>,
+    ) -> CrystalResult<Vec<Arc<Self>>> {
+        Ok(handlers
+            .iter()
+            .map(|handler| {
+                Arc::new(Self {
+                    pool: pool.clone(),
+                    handler: *handler,
+                })
+            })
+            .collect())
     }
 
     fn new(
-        device_manager: Arc<DeviceManager>,
-        queue: Arc<Queue>,
-        double_buffering: bool,
-    ) -> CrystalResult<Self> {
+        pool: Arc<CommandPool>,
+        buffer_count: u32,
+        level: vk::CommandBufferLevel,
+    ) -> CrystalResult<Vec<Arc<Self>>> {
+        let allocate_info = vk::CommandBufferAllocateInfo::default()
+            .command_pool(pool.handler)
+            .level(level)
+            .command_buffer_count(buffer_count);
+
+        let command_buffers = match unsafe {
+            pool.device_manager
+                .device
+                .allocate_command_buffers(&allocate_info)
+        } {
+            Ok(command_buffers) => command_buffers
+                .iter()
+                .map(|command_buffer| {
+                    Arc::new(Self {
+                        pool: pool.clone(),
+                        handler: *command_buffer,
+                    })
+                })
+                .collect(),
+            Err(e) => {
+                log!("cannot allocate command buffers: {}", e);
+                return Err(CrystalError::CannotCreateCommandManager);
+            }
+        };
+
+        Ok(command_buffers)
+    }
+}
+
+struct CommandPool {
+    device_manager: Arc<DeviceManager>,
+    queue: Arc<Queue>,
+    handler: vk::CommandPool,
+}
+
+impl Drop for CommandPool {
+    fn drop(&mut self) {
+        unsafe {
+            self.device_manager
+                .device
+                .destroy_command_pool(self.handler, None);
+        }
+    }
+}
+
+impl CommandPool {
+    fn new(device_manager: Arc<DeviceManager>, queue: Arc<Queue>) -> CrystalResult<Arc<Self>> {
         let create_info = vk::CommandPoolCreateInfo::default()
             .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER)
             .queue_family_index(queue.family_index);
@@ -398,22 +408,48 @@ impl CommandEntry {
             }
         };
 
-        let allocate_info = vk::CommandBufferAllocateInfo::default()
-            .command_pool(command_pool)
-            .level(vk::CommandBufferLevel::PRIMARY)
-            .command_buffer_count(if double_buffering { 2 } else { 1 });
+        Ok(Arc::new(Self {
+            queue,
+            device_manager: device_manager.clone(),
+            handler: command_pool,
+        }))
+    }
+}
 
-        let command_buffers = match unsafe {
-            device_manager
-                .device
-                .allocate_command_buffers(&allocate_info)
-        } {
-            Ok(command_buffers) => CommandBufferManager::from_handlers(command_buffers),
-            Err(e) => {
-                log!("cannot allocate command buffers: {}", e);
-                return Err(CrystalError::CannotCreateCommandManager);
-            }
-        };
+pub struct CommandEntry {
+    device_manager: Arc<DeviceManager>,
+    command_pool: Arc<CommandPool>,
+    command_buffers: Vec<Arc<CommandBuffer>>,
+    queue: Arc<Queue>,
+    pub double_buffering: bool,
+}
+
+impl CommandEntry {
+    pub fn now_with_sync(&self, sync: Arc<Mutex<GpuSync>>) -> Box<GpuFuture> {
+        Box::new(GpuFuture {
+            device_manager: self.device_manager.clone(),
+            command_buffers: Mutex::new(vec![]),
+            sync,
+            queue: self.queue.clone(),
+        })
+    }
+
+    pub fn now(&self) -> Box<GpuFuture> {
+        GpuFuture::from_command_entry(self.device_manager.clone(), vec![], self.queue.clone())
+    }
+
+    fn new(
+        device_manager: Arc<DeviceManager>,
+        queue: Arc<Queue>,
+        double_buffering: bool,
+    ) -> CrystalResult<Self> {
+        let command_pool = CommandPool::new(device_manager.clone(), queue.clone())?;
+
+        let command_buffers = CommandBuffer::new(
+            command_pool.clone(),
+            if double_buffering { 2 } else { 1 },
+            vk::CommandBufferLevel::PRIMARY,
+        )?;
 
         Ok(Self {
             device_manager,
@@ -434,7 +470,7 @@ impl CommandEntry {
     {
         let alloc_info = vk::CommandBufferAllocateInfo::default()
             .level(vk::CommandBufferLevel::PRIMARY)
-            .command_pool(self.command_pool)
+            .command_pool(self.command_pool.handler)
             .command_buffer_count(1);
 
         let command_buffer = match unsafe {
@@ -478,14 +514,14 @@ impl CommandEntry {
             }
         }
 
-        let commands_buffers = [command_buffer];
+        let commands_buffers = vec![command_buffer];
 
-        let command_buffer_manager =
-            CommandBufferManager::from_handlers(commands_buffers)[0].clone();
+        let command_buffer_managers =
+            CommandBuffer::from_handlers(self.command_pool.clone(), commands_buffers)?;
 
         Ok(GpuFuture::from_command_entry(
             self.device_manager.clone(),
-            command_buffer_manager,
+            command_buffer_managers,
             self.queue.clone(),
         ))
     }
@@ -546,7 +582,7 @@ impl CommandEntry {
 
         Ok(GpuFuture::from_command_entry(
             self.device_manager.clone(),
-            self.command_buffers[n_pass].clone(),
+            vec![self.command_buffers[n_pass].clone()],
             self.queue.clone(),
         ))
     }

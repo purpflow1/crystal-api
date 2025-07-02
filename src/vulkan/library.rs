@@ -14,7 +14,7 @@ use super::{
     devices::DeviceManager,
     images::VulkanTexture,
     layout,
-    memory::BufferManager,
+    memory::{BufferInfo, BufferManager},
     presentation::Presentation,
     rendering::VulkanRenderTarget,
     validation::get_supported_validation_layers,
@@ -297,8 +297,10 @@ impl VulkanEntry {
             )?;
         }
 
+        let current_image_index;
+
         match now.acquire_next_image(&self.presentation) {
-            Ok((idx, _)) => *self.presentation.image_index.lock().unwrap() = idx,
+            Ok((idx, _)) => current_image_index = idx,
             Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
                 self.presentation.swapchain.recreate(None)?;
                 render_target.update_resources(
@@ -317,6 +319,8 @@ impl VulkanEntry {
                 return Err(CrystalError::RenderingError);
             }
         };
+
+        *self.presentation.image_index.lock().unwrap() = current_image_index;
 
         let n_pass = now.n_pass();
 
@@ -341,8 +345,7 @@ impl VulkanEntry {
                 let render_pass_begin = vk::RenderPassBeginInfo::default()
                     .render_pass(render_target.render_pass)
                     .framebuffer(
-                        *render_target.framebuffers
-                            [*self.presentation.image_index.lock().unwrap() as usize]
+                        *render_target.framebuffers[current_image_index as usize]
                             .read()
                             .unwrap(),
                     )
@@ -526,39 +529,12 @@ impl VulkanEntry {
             swapchain_memory_usage += mem.size;
         }
 
-        let entries = [
-            (
-                "budget",
-                budget_props.heap_budget[0] as f32 / 1024f32 / 1024f32,
-            ),
-            (
-                "heap",
-                budget_props.heap_usage[0] as f32 / 1024f32 / 1024f32,
-            ),
-            (
-                "swapchain",
-                swapchain_memory_usage as f32 / 1024f32 / 1024f32,
-            ),
-        ];
-
-        let mut max_len = entries[0].0.len();
-
-        entries.iter().for_each(|(name, _)| {
-            if max_len < name.len() {
-                max_len = name.len()
-            }
-        });
-
-        let formatted: String = entries
-            .iter()
-            .map(|entry| {
-                format!(
-                    "{} {:.1} MB\n",
-                    format!("{}:{}", entry.0, " ".repeat(max_len - entry.0.len())),
-                    entry.1
-                )
-            })
-            .collect();
+        let formatted: String = format!(
+            "GPU mem usage: {:.1} MB\n\
+             swapchain:     {:.1} MB",
+            budget_props.heap_usage[0] as f32 / 1024f32 / 1024f32,
+            swapchain_memory_usage as f32 / 1024f32 / 1024f32,
+        );
 
         formatted
     }
@@ -569,15 +545,17 @@ impl VulkanEntry {
         coords: (u32, u32),
         size: (u32, u32),
     ) -> CrystalResult<()> {
-        let staging_buffer = BufferManager::new(
-            self.device_manager.clone(),
-            buffer.len() as u64,
-            vk::BufferUsageFlags::TRANSFER_SRC,
-            vk::MemoryPropertyFlags::HOST_COHERENT | vk::MemoryPropertyFlags::HOST_VISIBLE,
-        )
-        .unwrap();
+        let buffer_info = BufferInfo {
+            size: buffer.len() as u64,
+            usage: vk::BufferUsageFlags::TRANSFER_SRC,
+            properties: vk::MemoryPropertyFlags::HOST_VISIBLE
+                | vk::MemoryPropertyFlags::HOST_COHERENT,
+        };
 
-        staging_buffer.single_time_write(&buffer, 0).unwrap();
+        let staging_buffer = BufferManager::new(self.device_manager.clone(), buffer_info).unwrap();
+
+        staging_buffer.map_memory(buffer.len() as u64, 0).unwrap();
+        staging_buffer.write(&buffer, 0).unwrap();
 
         let swapchain_images = unsafe {
             self.presentation
@@ -598,6 +576,8 @@ impl VulkanEntry {
             .get(&CommandType::Transfer)
             .clone()
             .unwrap();
+
+        command_entry.wait().unwrap();
 
         let future = command_entry
             .record_single_time_buffer(|command_buffer, device| {
@@ -686,8 +666,6 @@ impl VulkanEntry {
             .unwrap();
 
         future.flush().unwrap();
-
-        command_entry.wait().unwrap();
 
         Ok(())
     }

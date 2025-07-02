@@ -12,7 +12,7 @@ use crate::{
 use super::{
     commands::{CommandEntry, CommandManager, CommandType, GpuFuture},
     devices::DeviceManager,
-    memory::BufferManager,
+    memory::{BufferInfo, BufferManager},
 };
 
 pub struct Image {
@@ -176,14 +176,18 @@ impl VulkanTexture {
     ) -> CrystalResult<Arc<Self>> {
         let image_size = (image.height * image.width * image.channels) as u64;
 
-        let buffer_manager = BufferManager::new(
-            device_manager.clone(),
-            image_size,
-            vk::BufferUsageFlags::TRANSFER_SRC,
-            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-        )?;
+        let buffer_info = BufferInfo {
+            size: image_size,
+            usage: vk::BufferUsageFlags::TRANSFER_SRC,
+            properties: vk::MemoryPropertyFlags::HOST_VISIBLE
+                | vk::MemoryPropertyFlags::HOST_COHERENT,
+        };
 
-        buffer_manager.single_time_write(&image.pixels, 0)?;
+        let buffer_manager = BufferManager::new(device_manager.clone(), buffer_info)?;
+
+        buffer_manager.map_memory(image_size, 0).unwrap();
+        buffer_manager.write(&image.pixels, 0)?;
+        buffer_manager.unmap_memory().unwrap();
 
         let format = match image.channels {
             1 => vk::Format::R8_SRGB,

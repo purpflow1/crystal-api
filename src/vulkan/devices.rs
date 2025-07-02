@@ -108,7 +108,6 @@ impl Queue {
     }
 }
 
-#[derive(Clone)]
 pub struct DeviceManager {
     pub entry: Arc<ash::Entry>,
     pub instance: Arc<ash::Instance>,
@@ -195,7 +194,7 @@ impl DeviceManager {
         Ok(Arc::new(Self {
             entry,
             instance,
-            device: logical_device,
+            device: logical_device.clone(),
             physical_device,
             memory_properties,
             device_properties,

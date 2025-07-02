@@ -1,4 +1,5 @@
 use crystal_api::{errors::CrystalResult, object::Object, vulkan::VulkanEntry, *};
+use sysinfo::{Pid, PidExt, ProcessExt, System, SystemExt};
 
 use std::{
     f32::consts::PI,
@@ -62,6 +63,8 @@ struct Context {
     scene: Scene,
 
     state: State,
+
+    system: System,
 }
 
 impl Context {
@@ -73,6 +76,7 @@ impl Context {
             window: None,
             graphics: None,
             layout_pbr: None,
+            system: System::new_all(),
 
             settings,
             scene: Scene {
@@ -138,13 +142,11 @@ impl ApplicationHandler for Context {
 
         let default_texture_image =
             Image2D::new(Path::new("resources/textures/default.png")).unwrap();
-
         let default_sampler = graphics
             .create_sampler(&default_texture_image, 1.0)
             .unwrap();
 
         let test_texture_image = Image2D::new(Path::new("resources/textures/test.png")).unwrap();
-
         let test_sampler = graphics.create_sampler(&test_texture_image, 1.0).unwrap();
 
         let layout_pbr = graphics.create_layout(2, 3, 1, 3).unwrap();
@@ -218,9 +220,18 @@ impl ApplicationHandler for Context {
             self.state.current_frame += 1;
 
             if self.state.delta_time_sum.as_secs_f64() >= 1. {
+                let pid = Pid::from_u32(std::process::id());
+
+                self.system.refresh_process(pid);
+
+                let process = self.system.process(pid).unwrap();
+
                 println!("[DEBUG]");
                 println!("FPS: {}", self.state.current_frame);
                 println!("{}", self.graphics.as_ref().unwrap().update_debug_text());
+                println!("RAM: {:.1} MB", process.memory() as f32 / 1024.);
+                println!("CPU: {:.1}%", process.cpu_usage());
+                println!();
 
                 self.state.delta_time_sum = Duration::ZERO;
                 self.state.current_frame = 0;
@@ -252,13 +263,13 @@ impl ApplicationHandler for Context {
         self.graphics
             .clone()
             .unwrap()
-            .write_buffer_to_screen(vec![0u8; (100 * 100 * 4) as usize], (0, 0), (100, 100))
+            .render_and_present(&self.scene.objects_pbr)
             .unwrap();
 
         self.graphics
             .clone()
             .unwrap()
-            .render_and_present(&self.scene.objects_pbr)
+            .write_buffer_to_screen(vec![0u8; (100 * 100 * 4) as usize], (0, 0), (100, 100))
             .unwrap();
     }
 
