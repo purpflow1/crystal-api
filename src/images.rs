@@ -1,5 +1,4 @@
-use image::ImageReader;
-use std::path::Path;
+use std::{fs::File, path::Path};
 
 use crate::errors::CrystalResult;
 
@@ -12,17 +11,17 @@ pub struct Image2D {
 
 impl Image2D {
     pub fn new(path: &Path) -> CrystalResult<Self> {
-        let img = ImageReader::open(path)
-            .unwrap()
-            .decode()
-            .unwrap()
-            .into_rgba8();
+        let file = File::open(path).unwrap();
+        let decoder = png::Decoder::new(file);
+        let mut reader = decoder.read_info().unwrap();
+        let mut pixels = vec![0; reader.output_buffer_size()];
+        let info = reader.next_frame(&mut pixels).unwrap();
 
         Ok(Self {
-            width: img.width(),
-            height: img.height(),
-            channels: 4,
-            pixels: img.into_vec(),
+            width: info.width,
+            height: info.height,
+            channels: info.bit_depth as u32,
+            pixels,
         })
     }
 }
