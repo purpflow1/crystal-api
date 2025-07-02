@@ -16,6 +16,7 @@ pub enum CrystalError {
     CommandManagerError,
     RenderingError,
     SyncError,
+    GpuIsNotSupported,
 
     ShaderError,
     MemoryError,

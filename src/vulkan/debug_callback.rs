@@ -55,8 +55,7 @@ pub fn create_debug_utils_messanger(
         .message_severity(
             DebugUtilsMessageSeverityFlagsEXT::ERROR
                 | DebugUtilsMessageSeverityFlagsEXT::WARNING
-                | DebugUtilsMessageSeverityFlagsEXT::VERBOSE
-                | DebugUtilsMessageSeverityFlagsEXT::INFO,
+                | DebugUtilsMessageSeverityFlagsEXT::VERBOSE, // | DebugUtilsMessageSeverityFlagsEXT::INFO,
         )
         .message_type(
             DebugUtilsMessageTypeFlagsEXT::GENERAL

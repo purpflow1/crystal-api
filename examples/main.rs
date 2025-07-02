@@ -127,7 +127,7 @@ impl ApplicationHandler for Context {
         };
 
         let graphics = VulkanEntry::with_presentation(&self.settings, &window)
-            .expect("cannot create vulkan entry");
+            .expect("cannot create vulkan entry"); // TODO not panic
 
         let shaders_pbr = [
             Shader::open("shaders/desc.vert.spv", ShaderStage::Vertex).unwrap(),
@@ -218,15 +218,16 @@ impl ApplicationHandler for Context {
             self.state.current_frame += 1;
 
             if self.state.delta_time_sum.as_secs_f64() >= 1. {
+                println!("[DEBUG]");
                 println!("FPS: {}", self.state.current_frame);
+                println!("{}", self.graphics.as_ref().unwrap().update_debug_text());
+
                 self.state.delta_time_sum = Duration::ZERO;
                 self.state.current_frame = 0;
             }
         }
 
         self.state.now = Some(std::time::Instant::now());
-
-        let graphics = self.graphics.clone().unwrap();
 
         let transforms = [
             glam::Mat4::from_scale_rotation_translation(
@@ -248,7 +249,15 @@ impl ApplicationHandler for Context {
         self.scene.uniform.clone_from_slice(&[ubo]);
         self.scene.transforms.clone_from_slice(&transforms);
 
-        graphics
+        self.graphics
+            .clone()
+            .unwrap()
+            .write_buffer_to_screen(vec![0u8; (100 * 100 * 4) as usize], (0, 0), (100, 100))
+            .unwrap();
+
+        self.graphics
+            .clone()
+            .unwrap()
             .render_and_present(&self.scene.objects_pbr)
             .unwrap();
     }
@@ -285,6 +294,8 @@ impl ApplicationHandler for Context {
                     .unwrap();
             }
             WindowEvent::RedrawRequested => {
+                // self.draw_text(self.graphics.clone().unwrap().update_debug_text());
+
                 let window = self.window.as_ref().unwrap();
                 window.request_redraw();
             }

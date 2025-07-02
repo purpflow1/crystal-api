@@ -10,7 +10,7 @@ use crate::{
 };
 
 use super::{
-    commands::{CommandEntry, CommandManager, GpuFuture},
+    commands::{CommandEntry, CommandManager, CommandType, GpuFuture},
     devices::DeviceManager,
     memory::BufferManager,
 };
@@ -235,7 +235,11 @@ impl VulkanTexture {
     }
 
     pub fn prepare_texture_image(&self, command_manager: Arc<CommandManager>) -> CrystalResult<()> {
-        let command_entry = command_manager.transfer.as_ref().unwrap();
+        let command_entry = command_manager
+            .command_entries
+            .get(&CommandType::Transfer)
+            .clone()
+            .unwrap();
 
         let future = self.transition_image_layout(
             command_entry.clone(),

@@ -1,4 +1,7 @@
-use std::sync::{Arc, Mutex, RwLock};
+use std::{
+    collections::BTreeMap,
+    sync::{Arc, Mutex, RwLock},
+};
 
 use ash::{
     prelude::VkResult,
@@ -11,6 +14,8 @@ use crate::{
     vulkan::{devices::DeviceManager, presentation::Presentation},
 };
 
+use super::devices::Queue;
+
 pub struct GpuSync {
     device_manager: Arc<DeviceManager>,
 
@@ -19,27 +24,6 @@ pub struct GpuSync {
     in_flight_fences: Vec<vk::Fence>,
 
     pub n_pass: usize,
-}
-
-impl Drop for GpuSync {
-    fn drop(&mut self) {
-        unsafe {
-            self.device_manager.device.device_wait_idle().unwrap();
-
-            self.image_available_semaphores
-                .iter()
-                .chain(self.render_finished_semaphores.iter())
-                .for_each(|&semaphore| {
-                    self.device_manager
-                        .device
-                        .destroy_semaphore(semaphore, None)
-                });
-
-            self.in_flight_fences
-                .iter()
-                .for_each(|&fence| self.device_manager.device.destroy_fence(fence, None));
-        }
-    }
 }
 
 impl GpuSync {
@@ -146,40 +130,44 @@ impl GpuSync {
 pub struct GpuFuture {
     device_manager: Arc<DeviceManager>,
     command_buffers: Arc<RwLock<Vec<CommandBufferManager>>>,
-    queue: Mutex<vk::Queue>,
+    queue: Arc<Queue>,
     sync: Arc<Mutex<GpuSync>>,
+}
+
+impl Drop for GpuFuture {
+    fn drop(&mut self) {
+        if Arc::strong_count(&self.sync) != 1 {
+            return;
+        }
+        let lock = self.sync.lock().unwrap();
+
+        unsafe {
+            self.queue.wait_idle().unwrap();
+
+            lock.image_available_semaphores
+                .iter()
+                .chain(lock.render_finished_semaphores.iter())
+                .for_each(|&semaphore| {
+                    self.device_manager
+                        .device
+                        .destroy_semaphore(semaphore, None)
+                });
+
+            lock.in_flight_fences
+                .iter()
+                .for_each(|&fence| self.device_manager.device.destroy_fence(fence, None));
+        }
+    }
 }
 
 unsafe impl Send for GpuFuture {}
 unsafe impl Sync for GpuFuture {}
 
 impl GpuFuture {
-    pub fn now_with_sync(
-        device_manager: Arc<DeviceManager>,
-        sync: Arc<Mutex<GpuSync>>,
-    ) -> Box<Self> {
-        Box::new(Self {
-            device_manager: device_manager.clone(),
-            command_buffers: Arc::new(RwLock::new(vec![])),
-            sync,
-            queue: Mutex::new(vk::Queue::null()),
-        })
-    }
-
-    pub fn now(device_manager: Arc<DeviceManager>) -> Box<Self> {
-        Self::from_command_entry(
-            device_manager,
-            Arc::new(CommandBufferManager {
-                handler: vk::CommandBuffer::null(),
-            }),
-            vk::Queue::null(),
-        )
-    }
-
     fn from_command_entry(
         device_manager: Arc<DeviceManager>,
         buffer: Arc<CommandBufferManager>,
-        queue: vk::Queue,
+        queue: Arc<Queue>,
     ) -> Box<Self> {
         let buffer = (*buffer).clone();
 
@@ -187,7 +175,7 @@ impl GpuFuture {
             device_manager: device_manager.clone(),
             command_buffers: Arc::new(RwLock::new(vec![buffer])),
             sync: Arc::new(Mutex::new(GpuSync::new(device_manager).unwrap())),
-            queue: Mutex::new(queue),
+            queue,
         })
     }
 
@@ -195,7 +183,7 @@ impl GpuFuture {
         self.sync.lock().unwrap().n_pass
     }
 
-    /// Transfers other's buffers to self and queue also
+    /// Transfers other's buffers to self
     pub fn join(self: Box<Self>, other: Box<Self>) -> Box<Self> {
         let mut self_lock = self.command_buffers.write().unwrap();
         let other_lock = other.command_buffers.read().unwrap();
@@ -205,7 +193,8 @@ impl GpuFuture {
             }
         });
         drop(self_lock);
-        *self.queue.lock().unwrap() = *other.queue.lock().unwrap();
+        drop(other_lock);
+
         self
     }
 
@@ -257,7 +246,6 @@ impl GpuFuture {
         let indices = [*presentation.image_index.lock().unwrap()];
         let command_buffers = self.command_buffers.clone();
         let mut command_buffers_lock = command_buffers.write().unwrap();
-        let device_manager = self.device_manager.clone();
 
         let command_buffers: Vec<vk::CommandBuffer> = command_buffers_lock
             .iter()
@@ -276,24 +264,21 @@ impl GpuFuture {
             .swapchains(&swaphchains)
             .image_indices(&indices);
 
-        let queue = self.queue.lock().unwrap();
-
         let result;
 
-        unsafe {
-            device_manager
-                .device
-                .queue_submit(*queue, &[submit_info], fence)
-                .unwrap();
+        let queue_lock = self.queue.submit_still_lock(&[submit_info], fence).unwrap();
 
+        unsafe {
             command_buffers_lock.clear();
 
             result = swapchain
                 .swapchain
                 .write()
                 .unwrap()
-                .queue_present(*queue, &present_info);
+                .queue_present(*queue_lock, &present_info);
         };
+
+        drop(queue_lock);
 
         if result.is_ok() {
             sync.next_pass();
@@ -302,7 +287,6 @@ impl GpuFuture {
         }
 
         drop(sync);
-        drop(queue);
 
         Ok(self)
     }
@@ -315,32 +299,12 @@ impl GpuFuture {
             .collect();
         let submit_info = vk::SubmitInfo::default().command_buffers(&command_buffers);
 
-        let queue = self.queue.lock().unwrap();
-
-        match unsafe {
-            self.device_manager
-                .device
-                .queue_submit(*queue, &[submit_info], vk::Fence::null())
-        } {
-            Ok(()) => (),
-            Err(e) => {
-                log!("cannot submit queue: {}", e);
-                return Err(CrystalError::CommandManagerError);
-            }
-        }
-
-        match unsafe { self.device_manager.device.queue_wait_idle(*queue) } {
-            Ok(()) => (),
-            Err(e) => {
-                log!("cannot wait idle queue: {}", e);
-                return Err(CrystalError::CommandManagerError);
-            }
-        };
+        self.queue
+            .submit(&[submit_info], vk::Fence::null())
+            .unwrap();
 
         command_buffer_lock.clear();
-
         drop(command_buffer_lock);
-        drop(queue);
 
         Ok(self)
     }
@@ -368,18 +332,14 @@ pub struct CommandEntry {
     device_manager: Arc<DeviceManager>,
     command_pool: vk::CommandPool,
     command_buffers: Vec<Arc<CommandBufferManager>>,
-    pub queue: vk::Queue,
-    queue_family_index: u32,
+    queue: Arc<Queue>,
     pub double_buffering: bool,
 }
 
 impl Drop for CommandEntry {
     fn drop(&mut self) {
         unsafe {
-            self.device_manager
-                .device
-                .queue_wait_idle(self.queue)
-                .unwrap();
+            self.queue.wait_idle().unwrap();
 
             self.device_manager.device.free_command_buffers(
                 self.command_pool,
@@ -398,14 +358,33 @@ impl Drop for CommandEntry {
 }
 
 impl CommandEntry {
+    pub fn now_with_sync(&self, sync: Arc<Mutex<GpuSync>>) -> Box<GpuFuture> {
+        Box::new(GpuFuture {
+            device_manager: self.device_manager.clone(),
+            command_buffers: Arc::new(RwLock::new(vec![])),
+            sync,
+            queue: self.queue.clone(),
+        })
+    }
+
+    pub fn now(&self) -> Box<GpuFuture> {
+        GpuFuture::from_command_entry(
+            self.device_manager.clone(),
+            Arc::new(CommandBufferManager {
+                handler: vk::CommandBuffer::null(),
+            }),
+            self.queue.clone(),
+        )
+    }
+
     fn new(
         device_manager: Arc<DeviceManager>,
-        queue_family_index: u32,
+        queue: Arc<Queue>,
         double_buffering: bool,
     ) -> CrystalResult<Self> {
         let create_info = vk::CommandPoolCreateInfo::default()
             .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER)
-            .queue_family_index(queue_family_index);
+            .queue_family_index(queue.family_index);
 
         let command_pool = match unsafe {
             device_manager
@@ -436,20 +415,17 @@ impl CommandEntry {
             }
         };
 
-        let queue = unsafe {
-            device_manager
-                .device
-                .get_device_queue(queue_family_index, 0)
-        };
-
         Ok(Self {
             device_manager,
             command_pool,
             command_buffers,
             queue,
-            queue_family_index,
             double_buffering,
         })
+    }
+
+    pub fn wait(&self) -> CrystalResult<()> {
+        self.queue.wait_idle()
     }
 
     pub fn record_single_time_buffer<P>(&self, predicate: P) -> CrystalResult<Box<GpuFuture>>
@@ -510,7 +486,7 @@ impl CommandEntry {
         Ok(GpuFuture::from_command_entry(
             self.device_manager.clone(),
             command_buffer_manager,
-            self.queue,
+            self.queue.clone(),
         ))
     }
 
@@ -571,18 +547,22 @@ impl CommandEntry {
         Ok(GpuFuture::from_command_entry(
             self.device_manager.clone(),
             self.command_buffers[n_pass].clone(),
-            self.queue,
+            self.queue.clone(),
         ))
     }
+}
+
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+pub enum CommandType {
+    Graphics,
+    Transfer,
+    Compute,
 }
 
 pub struct CommandManager {
     pub device_manager: Arc<DeviceManager>,
 
-    pub graphics: Option<Arc<CommandEntry>>,
-    pub present: Option<Arc<CommandEntry>>,
-    pub transfer: Option<Arc<CommandEntry>>,
-    pub compute: Option<Arc<CommandEntry>>,
+    pub command_entries: BTreeMap<CommandType, Arc<CommandEntry>>,
 }
 
 impl CommandManager {
@@ -590,48 +570,56 @@ impl CommandManager {
         device_manager: Arc<DeviceManager>,
         double_buffering: bool,
     ) -> CrystalResult<Arc<Self>> {
-        let graphics = match device_manager.queue_families_indices.graphics_index {
-            Some(idx) => Some(Arc::new(CommandEntry::new(
-                device_manager.clone(),
-                idx,
-                double_buffering,
-            )?)),
-            None => None,
-        };
+        let mut command_entries = BTreeMap::<CommandType, Arc<CommandEntry>>::new();
 
-        let present = match device_manager.queue_families_indices.present_index {
-            Some(idx) => Some(Arc::new(CommandEntry::new(
-                device_manager.clone(),
-                idx,
-                double_buffering,
-            )?)),
-            None => None,
-        };
+        if let Some(queue) = device_manager
+            .queues
+            .iter()
+            .find(|queue| queue.flags.intersects(vk::QueueFlags::GRAPHICS))
+        {
+            command_entries.insert(
+                CommandType::Graphics,
+                Arc::new(CommandEntry::new(
+                    device_manager.clone(),
+                    queue.clone(),
+                    double_buffering,
+                )?),
+            );
+        }
 
-        let transfer = match device_manager.queue_families_indices.transfer_index {
-            Some(idx) => Some(Arc::new(CommandEntry::new(
-                device_manager.clone(),
-                idx,
-                double_buffering,
-            )?)),
-            None => None,
-        };
+        if let Some(queue) = device_manager
+            .queues
+            .iter()
+            .find(|queue| queue.flags.intersects(vk::QueueFlags::TRANSFER))
+        {
+            command_entries.insert(
+                CommandType::Transfer,
+                Arc::new(CommandEntry::new(
+                    device_manager.clone(),
+                    queue.clone(),
+                    double_buffering,
+                )?),
+            );
+        }
 
-        let compute = match device_manager.queue_families_indices.compute_index {
-            Some(idx) => Some(Arc::new(CommandEntry::new(
-                device_manager.clone(),
-                idx,
-                double_buffering,
-            )?)),
-            None => None,
-        };
+        if let Some(queue) = device_manager
+            .queues
+            .iter()
+            .find(|queue| queue.flags.intersects(vk::QueueFlags::COMPUTE))
+        {
+            command_entries.insert(
+                CommandType::Compute,
+                Arc::new(CommandEntry::new(
+                    device_manager.clone(),
+                    queue.clone(),
+                    double_buffering,
+                )?),
+            );
+        }
 
         Ok(Arc::new(Self {
             device_manager,
-            graphics,
-            present,
-            transfer,
-            compute,
+            command_entries,
         }))
     }
 }

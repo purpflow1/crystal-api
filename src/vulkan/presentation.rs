@@ -54,10 +54,17 @@ impl SwapchainInfo {
     ) -> CrystalResult<Arc<Self>> {
         let queue_family_indices = [
             device_manager
-                .queue_families_indices
-                .graphics_index
-                .unwrap(),
-            device_manager.queue_families_indices.present_index.unwrap(),
+                .queues
+                .iter()
+                .find(|queue| queue.flags.intersects(vk::QueueFlags::GRAPHICS))
+                .expect("No graphics queue!")
+                .family_index,
+            device_manager
+                .queues
+                .iter()
+                .find(|queue| queue.present_support)
+                .expect("No queue with present support!")
+                .family_index,
         ];
 
         let swap_chain_support_details =
@@ -207,7 +214,7 @@ impl SwapchainInfo {
             .image_color_space(self.surface_format.color_space)
             .image_extent(*self.extent.read().unwrap())
             .image_array_layers(1)
-            .image_usage(vk::ImageUsageFlags::COLOR_ATTACHMENT)
+            .image_usage(vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::TRANSFER_DST)
             .pre_transform(self.support_details.capabilities.current_transform)
             .composite_alpha(vk::CompositeAlphaFlagsKHR::OPAQUE)
             .image_sharing_mode(vk::SharingMode::EXCLUSIVE)
@@ -243,7 +250,7 @@ impl Drop for Swapchain {
 impl Swapchain {
     fn destroy(&self) {
         unsafe {
-            self.device_manager.device.device_wait_idle().unwrap();
+            self.device_manager.wait_idle().unwrap();
 
             self.swapchain_image_views
                 .read()

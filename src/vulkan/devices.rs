@@ -1,4 +1,7 @@
-use std::{ffi::CStr, sync::Arc};
+use std::{
+    ffi::CStr,
+    sync::{Arc, Mutex, MutexGuard},
+};
 
 use ash::{Instance, vk};
 
@@ -8,6 +11,103 @@ use crate::{
     vulkan::presentation::PresentSurface,
 };
 
+#[derive(Clone, Default)]
+pub struct PhysicalDeviceExtensions {
+    compression: bool,
+}
+
+impl std::fmt::Debug for PhysicalDeviceExtensions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_fmt(format_args!(
+            "[device extensions]\ncompression = {}",
+            self.compression
+        ))
+    }
+}
+
+pub struct Queue {
+    device: Arc<ash::Device>,
+    pub flags: vk::QueueFlags,
+    pub present_support: bool,
+    pub family_index: u32,
+    handle: Mutex<vk::Queue>,
+}
+
+impl std::fmt::Debug for Queue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_fmt(format_args!(
+            "Queue:\n\
+            family  = {}\n\
+            flags   = {:?}\n\
+            present = {}",
+            self.family_index, self.flags, self.present_support
+        ))
+    }
+}
+
+impl Queue {
+    fn new(
+        device: Arc<ash::Device>,
+        queue_families: &[(vk::QueueFlags, QueueFamilyInfo)],
+    ) -> Vec<Arc<Queue>> {
+        queue_families
+            .iter()
+            .map(|(flags, info)| {
+                (0..info.queue_count)
+                    .map(|idx| {
+                        Arc::new(Queue {
+                            device: device.clone(),
+                            flags: *flags,
+                            handle: Mutex::new(unsafe {
+                                device.get_device_queue(info.family, idx)
+                            }),
+                            present_support: info.present_support,
+                            family_index: info.family,
+                        })
+                    })
+                    .collect::<Vec<Arc<Queue>>>()
+            })
+            .collect::<Vec<Vec<Arc<Queue>>>>()
+            .concat()
+    }
+
+    pub fn wait_idle(&self) -> CrystalResult<()> {
+        match unsafe { self.device.queue_wait_idle(*self.handle.lock().unwrap()) } {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                log!("queue wait idle error: {:?}", e);
+                Err(CrystalError::SyncError)
+            }
+        }
+    }
+
+    pub fn submit(&self, submits: &[vk::SubmitInfo<'_>], fence: vk::Fence) -> CrystalResult<()> {
+        let lock = self.handle.lock().unwrap();
+
+        if let Err(e) = unsafe { self.device.queue_submit(*lock, submits, fence) } {
+            log!("queue submit error: {:?}", e);
+            return Err(CrystalError::SyncError);
+        }
+
+        Ok(())
+    }
+
+    pub fn submit_still_lock(
+        &self,
+        submits: &[vk::SubmitInfo<'_>],
+        fence: vk::Fence,
+    ) -> CrystalResult<MutexGuard<vk::Queue>> {
+        let lock = self.handle.lock().unwrap();
+
+        if let Err(e) = unsafe { self.device.queue_submit(*lock, submits, fence) } {
+            log!("queue submit error: {:?}", e);
+            return Err(CrystalError::SyncError);
+        }
+
+        Ok(lock)
+    }
+}
+
 #[derive(Clone)]
 pub struct DeviceManager {
     pub entry: Arc<ash::Entry>,
@@ -16,7 +116,8 @@ pub struct DeviceManager {
     pub physical_device: vk::PhysicalDevice,
     pub memory_properties: vk::PhysicalDeviceMemoryProperties,
     pub device_properties: vk::PhysicalDeviceProperties,
-    pub queue_families_indices: QueueFamiliesIndices,
+    pub queues: Vec<Arc<Queue>>,
+    pub extensions: PhysicalDeviceExtensions,
 }
 
 impl Drop for DeviceManager {
@@ -29,6 +130,23 @@ impl Drop for DeviceManager {
 }
 
 impl DeviceManager {
+    pub fn wait_idle(&self) -> CrystalResult<()> {
+        let locks: Vec<MutexGuard<vk::Queue>> = self
+            .queues
+            .iter()
+            .map(|queue| queue.handle.lock().unwrap())
+            .collect();
+
+        if let Err(e) = unsafe { self.device.device_wait_idle() } {
+            log!("cannot device wait idle: {:?}", e);
+            return Err(CrystalError::SyncError);
+        }
+
+        drop(locks);
+
+        Ok(())
+    }
+
     pub fn find_memory_type_index(
         &self,
         flags: vk::MemoryPropertyFlags,
@@ -45,57 +163,70 @@ impl DeviceManager {
         log!("cannot find suitable memory type");
         Err(CrystalError::MemoryError)
     }
-}
 
-#[derive(Clone, Copy, Default)]
-pub struct QueueFamiliesIndices {
-    pub graphics_index: Option<u32>,
-    pub present_index: Option<u32>,
-    pub compute_index: Option<u32>,
-    pub transfer_index: Option<u32>,
-}
+    pub fn new(
+        entry: Arc<ash::Entry>,
+        instance: Arc<Instance>,
+        surface: Option<Arc<PresentSurface>>,
+        extensions: &[*const i8],
+    ) -> CrystalResult<Arc<Self>> {
+        let (physical_device, physical_device_extensions) =
+            pick_physical_device(&instance, &extensions)?;
 
-impl QueueFamiliesIndices {
-    pub fn get_unique_queue_families(&self) -> Vec<u32> {
-        let mut unique_queue_families = vec![];
+        let memory_properties =
+            unsafe { instance.get_physical_device_memory_properties(physical_device) };
 
-        match self.graphics_index {
-            Some(ind) => unique_queue_families.push(ind),
-            None => (),
+        let device_properties = unsafe { instance.get_physical_device_properties(physical_device) };
+
+        let queue_families = find_queue_families(instance.clone(), surface, physical_device);
+
+        if queue_families.len() == 0 {
+            return Err(CrystalError::GpuIsNotSupported);
         }
-        match self.present_index {
-            Some(ind) => {
-                if unique_queue_families.iter().find(|&&x| x == ind).is_none() {
-                    unique_queue_families.push(ind)
-                }
-            }
-            None => (),
-        }
-        match self.compute_index {
-            Some(ind) => {
-                if unique_queue_families.iter().find(|&&x| x == ind).is_none() {
-                    unique_queue_families.push(ind)
-                }
-            }
-            None => (),
-        }
-        match self.transfer_index {
-            Some(ind) => {
-                if unique_queue_families.iter().find(|&&x| x == ind).is_none() {
-                    unique_queue_families.push(ind)
-                }
-            }
-            None => (),
-        }
-        unique_queue_families
+
+        let (logical_device, queues) = create_logical_device(
+            instance.clone(),
+            physical_device,
+            &queue_families,
+            &extensions,
+            vk::PhysicalDeviceFeatures::default().sampler_anisotropy(true),
+        )?;
+
+        Ok(Arc::new(Self {
+            entry,
+            instance,
+            device: logical_device,
+            physical_device,
+            memory_properties,
+            device_properties,
+            queues,
+            extensions: physical_device_extensions,
+        }))
     }
 }
 
-pub fn pick_physical_device(
+struct QueueFamilyInfo {
+    family: u32,
+    queue_count: u32,
+    present_support: bool,
+}
+
+impl std::fmt::Debug for QueueFamilyInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_fmt(format_args!(
+            "QueueFamilyInfo:\n\
+            family      = {}\n\
+            queue_count = {}\n\
+            present     = {}",
+            self.family, self.queue_count, self.present_support
+        ))
+    }
+}
+
+fn pick_physical_device(
     instance: &Instance,
-    surface: Option<Arc<PresentSurface>>,
     extensions: &[*const i8],
-) -> CrystalResult<(vk::PhysicalDevice, QueueFamiliesIndices)> {
+) -> CrystalResult<(vk::PhysicalDevice, PhysicalDeviceExtensions)> {
     let devices = match unsafe { instance.enumerate_physical_devices() } {
         Ok(devices) => devices,
         Err(e) => {
@@ -104,29 +235,58 @@ pub fn pick_physical_device(
         }
     };
 
+    let extensions: Vec<&str> = extensions
+        .iter()
+        .map(|ext| unsafe { CStr::from_ptr(*ext) }.to_str().unwrap())
+        .collect();
+
     let mut picked_device = None;
     let mut picked_device_type = None;
     let mut device_name = "";
+    let mut device_supported_extensions = vec![];
+    #[allow(unused)]
+    let mut extension_props = vec![];
 
     'devloop: for device in devices {
         let props = unsafe { instance.get_physical_device_properties(device) };
+        device_name = unsafe { CStr::from_ptr(props.device_name.as_ptr()) }
+            .to_str()
+            .unwrap();
+        let (api_version_maj, api_version_min, api_version_pat) = (
+            vk::api_version_major(props.api_version),
+            vk::api_version_minor(props.api_version),
+            vk::api_version_patch(props.api_version),
+        );
 
-        let extension_props =
-            match unsafe { instance.enumerate_device_extension_properties(device) } {
-                Ok(props) => props,
-                Err(e) => {
-                    log!("cannot enumerate device extension properties: {}", e);
-                    continue;
-                }
-            };
+        extension_props = match unsafe { instance.enumerate_device_extension_properties(device) } {
+            Ok(props) => props,
+            Err(e) => {
+                log!("cannot enumerate device extension properties: {}", e);
+                continue;
+            }
+        };
 
-        for &req_ext in extensions {
-            let req_ext = unsafe { CStr::from_ptr(req_ext) }.to_str().unwrap();
-            if extension_props
+        device_supported_extensions = extension_props
+            .iter()
+            .map(|ext| ext.extension_name_as_c_str().unwrap().to_str().unwrap())
+            .collect();
+
+        for req_ext in &extensions {
+            if device_supported_extensions
                 .iter()
-                .find(|ext| ext.extension_name_as_c_str().unwrap().to_str().unwrap() == req_ext)
+                .find(|&ext| *ext == *req_ext)
                 .is_none()
             {
+                let version_name = format!(
+                    "{}.{}.{}",
+                    api_version_maj, api_version_min, api_version_pat
+                );
+                log!(
+                    "{} with Vulkan API version {} does not have support for {}",
+                    device_name,
+                    version_name,
+                    req_ext
+                );
                 continue 'devloop;
             }
         }
@@ -134,18 +294,11 @@ pub fn pick_physical_device(
         match props.device_type {
             vk::PhysicalDeviceType::DISCRETE_GPU => {
                 picked_device = Some(device);
-                device_name = unsafe { CStr::from_ptr(props.device_name.as_ptr()) }
-                    .to_str()
-                    .unwrap();
-
                 break;
             }
             vk::PhysicalDeviceType::INTEGRATED_GPU => {
                 picked_device_type = Some(props.device_type);
                 picked_device = Some(device);
-                device_name = unsafe { CStr::from_ptr(props.device_name.as_ptr()) }
-                    .to_str()
-                    .unwrap();
             }
             _ => match picked_device_type {
                 None => picked_device = Some(device),
@@ -165,39 +318,39 @@ pub fn pick_physical_device(
         }
     };
 
-    let queue_families_indices = find_queue_families(instance, surface, device);
+    let mut supported_extensions = PhysicalDeviceExtensions::default();
+    supported_extensions.compression = true;
 
-    Ok((device, queue_families_indices))
+    let compression_extensions = [
+        vk::EXT_IMAGE_COMPRESSION_CONTROL_NAME.as_ptr(),
+        vk::EXT_IMAGE_COMPRESSION_CONTROL_SWAPCHAIN_NAME.as_ptr(),
+    ];
+
+    compression_extensions.iter().for_each(|ext| {
+        let ext_name = unsafe { CStr::from_ptr(*ext) }.to_str().unwrap();
+        if device_supported_extensions
+            .iter()
+            .find(|&dev_ext| *dev_ext == ext_name)
+            .is_none()
+            && supported_extensions.compression
+        {
+            supported_extensions.compression = false;
+        }
+    });
+
+    Ok((device, supported_extensions))
 }
 
 fn find_queue_families(
-    instance: &Instance,
+    instance: Arc<Instance>,
     surface: Option<Arc<PresentSurface>>,
     device: vk::PhysicalDevice,
-) -> QueueFamiliesIndices {
-    let mut queue_families = QueueFamiliesIndices::default();
+) -> Vec<(vk::QueueFlags, QueueFamilyInfo)> {
+    let mut queue_families = Vec::<(vk::QueueFlags, QueueFamilyInfo)>::new();
 
     let props = unsafe { instance.get_physical_device_queue_family_properties(device) };
     for (index, family) in props.iter().filter(|f| f.queue_count > 0).enumerate() {
         let index = index as u32;
-
-        if family.queue_flags.contains(vk::QueueFlags::GRAPHICS)
-            && queue_families.graphics_index.is_none()
-        {
-            queue_families.graphics_index = Some(index);
-        }
-
-        if family.queue_flags.contains(vk::QueueFlags::COMPUTE)
-            && queue_families.compute_index.is_none()
-        {
-            queue_families.compute_index = Some(index);
-        }
-
-        if family.queue_flags.contains(vk::QueueFlags::TRANSFER)
-            && queue_families.transfer_index.is_none()
-        {
-            queue_families.transfer_index = Some(index);
-        }
 
         let present_support = unsafe {
             match surface.clone() {
@@ -209,29 +362,48 @@ fn find_queue_families(
             }
         };
 
-        if present_support && queue_families.present_index.is_none() {
-            queue_families.present_index = Some(index);
+        let mut to_push = false;
+
+        queue_families.iter_mut().for_each(|(flags, info)| {
+            if (*info).family == index {
+                *flags |= family.queue_flags;
+                info.present_support = present_support
+            } else if !flags.intersects(family.queue_flags) {
+                to_push = true;
+            }
+        });
+
+        if to_push || queue_families.is_empty() {
+            queue_families.push((
+                family.queue_flags,
+                QueueFamilyInfo {
+                    family: index,
+                    queue_count: family.queue_count,
+                    present_support,
+                },
+            ));
         }
     }
 
     queue_families
 }
 
-pub fn create_logical_device(
-    instance: &Instance,
+fn create_logical_device(
+    instance: Arc<Instance>,
     physical_device: vk::PhysicalDevice,
-    queue_families_indices: &QueueFamiliesIndices,
+    queue_families: &[(vk::QueueFlags, QueueFamilyInfo)],
     extensions: &[*const i8],
     features: vk::PhysicalDeviceFeatures,
-) -> CrystalResult<ash::Device> {
+) -> CrystalResult<(Arc<ash::Device>, Vec<Arc<Queue>>)> {
     let mut queues_create_infos = vec![];
-    let unique_queue_families = queue_families_indices.get_unique_queue_families();
 
-    for idx in unique_queue_families {
+    let priorities = vec![1.; 256];
+
+    for (_, info) in queue_families {
         queues_create_infos.push(
             vk::DeviceQueueCreateInfo::default()
-                .queue_family_index(idx)
-                .queue_priorities(&[1.]),
+                .queue_family_index(info.family)
+                .queue_priorities(&priorities[0..info.queue_count as usize]),
         )
     }
 
@@ -240,11 +412,16 @@ pub fn create_logical_device(
         .enabled_features(&features)
         .enabled_extension_names(extensions);
 
-    match unsafe { instance.create_device(physical_device, &device_create_info, None) } {
+    let device = match unsafe { instance.create_device(physical_device, &device_create_info, None) }
+    {
         Err(e) => {
             log!("cannot create logical device: {}", e);
-            Err(CrystalError::CannotInitDevice)
+            return Err(CrystalError::CannotInitDevice);
         }
-        Ok(device) => Ok(device),
-    }
+        Ok(device) => Arc::new(device),
+    };
+
+    let queues = Queue::new(device.clone(), queue_families);
+
+    Ok((device, queues))
 }
