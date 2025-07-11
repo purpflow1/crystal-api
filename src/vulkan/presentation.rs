@@ -1,4 +1,4 @@
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, RwLock};
 
 use ash::{
     Entry,
@@ -22,7 +22,6 @@ pub struct SwapChainSupportDetails {
 pub struct PresentSurface {
     pub surface: ash::khr::surface::Instance,
     pub surface_khr: vk::SurfaceKHR,
-    pub vsync: bool,
     framebuffer_extent: Option<vk::Extent2D>,
 }
 
@@ -44,7 +43,7 @@ pub struct SwapchainInfo {
     present_mode: vk::PresentModeKHR,
     support_details: SwapChainSupportDetails,
 
-    image_count: u32,
+    pub image_count: u32,
 }
 
 impl SwapchainInfo {
@@ -108,15 +107,8 @@ impl SwapchainInfo {
         {
             Some(&mode) => mode,
             None => {
-                log!("no MAILBOX support!");
-
-                if surface.vsync {
-                    log!("choosing FIFO");
-                    vk::PresentModeKHR::FIFO
-                } else {
-                    log!("choosing IMMEDIATE");
-                    vk::PresentModeKHR::IMMEDIATE
-                }
+                log!("no mailbox support, choosing immediate mode");
+                vk::PresentModeKHR::IMMEDIATE
             }
         };
 
@@ -379,8 +371,6 @@ pub struct Presentation {
     device_manager: Arc<DeviceManager>,
     pub swapchain: Arc<Swapchain>,
 
-    pub image_index: Mutex<u32>,
-
     pub msaa_samples: u8,
 }
 
@@ -389,7 +379,6 @@ impl Presentation {
         entry: &Entry,
         instance: &ash::Instance,
         window: &T,
-        vsync: bool,
         framebuffer_extent: Option<vk::Extent2D>,
     ) -> Arc<PresentSurface> {
         let surface = ash::khr::surface::Instance::new(entry, instance);
@@ -407,7 +396,6 @@ impl Presentation {
         Arc::new(PresentSurface {
             surface,
             surface_khr,
-            vsync,
             framebuffer_extent,
         })
     }
@@ -424,8 +412,6 @@ impl Presentation {
             swapchain,
 
             msaa_samples,
-
-            image_index: Mutex::new(0),
         }))
     }
 }

@@ -9,11 +9,12 @@ mod memory;
 mod memory_obj;
 mod presentation;
 mod rendering;
+mod sync;
 mod validation;
 
 pub(crate) use images::VulkanTexture;
 pub(crate) use layout::VulkanLayout;
+pub(crate) use layout::VulkanPipeline;
 pub use library::VulkanEntry;
 pub(crate) use memory_obj::VulkanObjectMemoryManager;
-pub(crate) use rendering::VulkanPipeline;
 pub(crate) use rendering::VulkanRenderTarget;

@@ -5,6 +5,7 @@ use crate::{
     errors::{CrystalError, CrystalResult},
 };
 
+#[derive(Debug)]
 pub enum ShaderStage {
     Vertex,
     Fragment,

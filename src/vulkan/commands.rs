@@ -1,6 +1,7 @@
 use std::{
     collections::BTreeMap,
     sync::{Arc, Mutex},
+    u64,
 };
 
 use ash::{
@@ -14,171 +15,22 @@ use crate::{
     vulkan::{devices::DeviceManager, presentation::Presentation},
 };
 
-use super::devices::Queue;
-
-pub struct GpuSync {
-    device_manager: Arc<DeviceManager>,
-
-    image_available_semaphores: Vec<vk::Semaphore>,
-    render_finished_semaphores: Vec<vk::Semaphore>,
-    in_flight_fences: Vec<vk::Fence>,
-
-    pub n_pass: usize,
-}
-
-impl GpuSync {
-    fn new(device_manager: Arc<DeviceManager>) -> CrystalResult<Self> {
-        let mut image_available_semaphores = vec![];
-        let mut render_finished_semaphores = vec![];
-        let mut in_flight_fences = vec![];
-
-        for _ in 0..2 {
-            let (semaphore_create_info, fence_create_info) = Default::default();
-
-            for i in 0..2 {
-                let semaphore = match unsafe {
-                    device_manager
-                        .device
-                        .create_semaphore(&semaphore_create_info, None)
-                } {
-                    Ok(semaphore) => semaphore,
-                    Err(e) => {
-                        log!("cannot create semaphore: {}", e);
-                        return Err(CrystalError::SyncError);
-                    }
-                };
-
-                if i == 0 {
-                    render_finished_semaphores.push(semaphore);
-                } else {
-                    image_available_semaphores.push(semaphore);
-                }
-            }
-
-            let in_flight_fence =
-                match unsafe { device_manager.device.create_fence(&fence_create_info, None) } {
-                    Ok(fence) => fence,
-                    Err(e) => {
-                        log!("cannot create fence: {}", e);
-                        return Err(CrystalError::SwapChainIsNotSupported);
-                    }
-                };
-
-            in_flight_fences.push(in_flight_fence);
-        }
-        Ok(Self {
-            device_manager,
-            image_available_semaphores,
-            render_finished_semaphores,
-            in_flight_fences,
-            n_pass: 0,
-        })
-    }
-
-    fn wait_for_last_fence(&self) -> VkResult<()> {
-        let (fence, _, _) = self.get_last_resources();
-        unsafe {
-            self.device_manager
-                .device
-                .clone()
-                .wait_for_fences(&[fence], true, u64::MAX)
-        }
-    }
-
-    fn wait_for_fence(&self) -> VkResult<()> {
-        let (fence, _, _) = self.get_resources();
-        unsafe {
-            self.device_manager
-                .device
-                .clone()
-                .wait_for_fences(&[fence], true, u64::MAX)
-        }
-    }
-
-    fn get_resources(&self) -> (vk::Fence, vk::Semaphore, vk::Semaphore) {
-        (
-            self.in_flight_fences[self.n_pass],
-            self.image_available_semaphores[self.n_pass],
-            self.render_finished_semaphores[self.n_pass],
-        )
-    }
-
-    fn get_last_resources(&self) -> (vk::Fence, vk::Semaphore, vk::Semaphore) {
-        let n_pass = (self.n_pass + 1) % 2;
-        (
-            self.in_flight_fences[n_pass],
-            self.image_available_semaphores[n_pass],
-            self.render_finished_semaphores[n_pass],
-        )
-    }
-
-    fn reset_fence(&self) -> VkResult<()> {
-        let fence = self.in_flight_fences[self.n_pass];
-
-        if !fence.is_null() {
-            unsafe { self.device_manager.device.clone().reset_fences(&[fence]) }
-        } else {
-            Ok(())
-        }
-    }
-
-    fn next_pass(&mut self) {
-        self.n_pass = (self.n_pass + 1) % 2;
-    }
-}
+use super::{devices::Queue, sync::GpuSync};
 
 pub struct GpuFuture {
-    device_manager: Arc<DeviceManager>,
-    command_buffers: Mutex<Vec<Arc<CommandBuffer>>>,
-    queue: Arc<Queue>,
     sync: Arc<Mutex<GpuSync>>,
-}
-
-impl Drop for GpuFuture {
-    fn drop(&mut self) {
-        if Arc::strong_count(&self.sync) != 1 {
-            return;
-        }
-        let lock = self.sync.lock().unwrap();
-
-        unsafe {
-            self.queue.wait_idle().unwrap();
-
-            lock.image_available_semaphores
-                .iter()
-                .chain(lock.render_finished_semaphores.iter())
-                .for_each(|&semaphore| {
-                    self.device_manager
-                        .device
-                        .destroy_semaphore(semaphore, None)
-                });
-
-            lock.in_flight_fences
-                .iter()
-                .for_each(|&fence| self.device_manager.device.destroy_fence(fence, None));
-        }
-    }
+    command_buffers: Mutex<Vec<Arc<CommandBuffer>>>,
 }
 
 unsafe impl Send for GpuFuture {}
 unsafe impl Sync for GpuFuture {}
 
 impl GpuFuture {
-    fn from_command_entry(
-        device_manager: Arc<DeviceManager>,
-        buffers: Vec<Arc<CommandBuffer>>,
-        queue: Arc<Queue>,
-    ) -> Box<Self> {
+    fn buffers(sync: Arc<Mutex<GpuSync>>, buffers: Vec<Arc<CommandBuffer>>) -> Box<Self> {
         Box::new(Self {
-            device_manager: device_manager.clone(),
+            sync,
             command_buffers: Mutex::new(buffers),
-            sync: Arc::new(Mutex::new(GpuSync::new(device_manager).unwrap())),
-            queue,
         })
-    }
-
-    pub fn n_pass(self: &Self) -> usize {
-        self.sync.lock().unwrap().n_pass
     }
 
     /// Transfers other's buffers to self
@@ -194,21 +46,13 @@ impl GpuFuture {
         self
     }
 
-    pub fn wait(self: Box<Self>) -> VkResult<Box<Self>> {
-        self.sync.lock().unwrap().wait_for_last_fence()?;
+    pub fn acquire_next_image(&self, presentation: &Presentation) -> VkResult<()> {
+        let mut sync = self.sync.lock().unwrap();
 
-        Ok(self)
-    }
+        sync.flip();
 
-    pub fn acquire_next_image(&self, presentation: &Presentation) -> VkResult<(u32, bool)> {
-        let sync = self.sync.lock().unwrap();
-
-        let (_, image_available_semaphore, _) = sync.get_resources();
-
-        let result;
-
-        unsafe {
-            result = presentation
+        let (image_index, suboptimal) = unsafe {
+            presentation
                 .swapchain
                 .swapchain
                 .write()
@@ -216,30 +60,62 @@ impl GpuFuture {
                 .acquire_next_image(
                     *presentation.swapchain.swapchain_khr.read().unwrap(),
                     u64::MAX,
-                    image_available_semaphore,
+                    sync.semaphore_image(),
                     vk::Fence::null(),
-                );
+                )?
+        };
+
+        sync.image_index = image_index;
+
+        if suboptimal {
+            sync.unflip();
+            return Err(vk::Result::SUBOPTIMAL_KHR);
         }
 
-        sync.reset_fence().unwrap();
+        Ok(())
+    }
 
-        result
+    pub fn flush(self: Box<Self>, queue: Arc<Queue>) -> CrystalResult<Box<Self>> {
+        let mut command_buffer_lock = self.command_buffers.lock().unwrap();
+        let sync_lock = self.sync.lock().unwrap();
+
+        let command_buffers: Vec<vk::CommandBuffer> = (*command_buffer_lock)
+            .iter()
+            .map(|buffer| buffer.handler)
+            .collect();
+
+        let submit_info = vk::SubmitInfo::default().command_buffers(&command_buffers);
+
+        let fence = if sync_lock.is_sync() {
+            sync_lock.fence_transfer()
+        } else {
+            vk::Fence::null()
+        };
+
+        queue.submit(&[submit_info], fence).unwrap();
+
+        drop(command_buffers);
+        command_buffer_lock.clear();
+        drop(command_buffer_lock);
+        drop(sync_lock);
+
+        Ok(self)
     }
 
     pub fn then_swapchain_present_and_flush(
         self: Box<Self>,
+        queue: Arc<Queue>,
         presentation: Arc<Presentation>,
     ) -> Result<Box<Self>, (vk::Result, Arc<Mutex<GpuSync>>)> {
         let swapchain = presentation.swapchain.clone();
 
-        let mut sync = self.sync.lock().unwrap();
-        let (fence, image_available_semaphore, render_finished_semaphore) = sync.get_resources();
+        let sync = self.sync.lock().unwrap();
 
-        let image_semaphores = [image_available_semaphore];
-        let render_semaphores = [render_finished_semaphore];
+        let wait_semaphores = [sync.semaphore_image()]; // TODO add compute semaphore
+        let render_semaphores = [sync.semaphore_render()];
 
         let swaphchains = [*swapchain.swapchain_khr.read().unwrap()];
-        let indices = [*presentation.image_index.lock().unwrap()];
+        let indices = [sync.image_index];
         let mut command_buffers_lock = self.command_buffers.lock().unwrap();
 
         let command_buffers: Vec<vk::CommandBuffer> = command_buffers_lock
@@ -249,7 +125,7 @@ impl GpuFuture {
             .collect();
 
         let submit_info = vk::SubmitInfo::default()
-            .wait_semaphores(&image_semaphores)
+            .wait_semaphores(&wait_semaphores)
             .signal_semaphores(&render_semaphores)
             .wait_dst_stage_mask(&[vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT])
             .command_buffers(&command_buffers);
@@ -261,7 +137,9 @@ impl GpuFuture {
 
         let result;
 
-        let queue_lock = self.queue.submit_still_lock(&[submit_info], fence).unwrap();
+        let queue_lock = queue
+            .submit_still_lock(&[submit_info], sync.fence_render())
+            .unwrap();
 
         unsafe {
             command_buffers_lock.clear();
@@ -276,32 +154,13 @@ impl GpuFuture {
 
         drop(queue_lock);
 
-        if result.is_ok() {
-            sync.next_pass();
-        } else {
-            return Err((result.err().unwrap(), self.sync.clone()));
+        sync.wait_render().unwrap();
+
+        if let Err(e) = result {
+            return Err((e, self.sync.clone()));
         }
 
         drop(sync);
-
-        Ok(self)
-    }
-
-    pub fn flush(self: Box<Self>) -> CrystalResult<Box<Self>> {
-        let mut command_buffer_lock = self.command_buffers.lock().unwrap();
-        let command_buffers: Vec<vk::CommandBuffer> = (*command_buffer_lock)
-            .iter()
-            .map(|buffer| buffer.handler)
-            .collect();
-        let submit_info = vk::SubmitInfo::default().command_buffers(&command_buffers);
-
-        self.queue
-            .submit(&[submit_info], vk::Fence::null())
-            .unwrap();
-
-        drop(command_buffers);
-        command_buffer_lock.clear();
-        drop(command_buffer_lock);
 
         Ok(self)
     }
@@ -420,34 +279,24 @@ pub struct CommandEntry {
     device_manager: Arc<DeviceManager>,
     command_pool: Arc<CommandPool>,
     command_buffers: Vec<Arc<CommandBuffer>>,
-    queue: Arc<Queue>,
-    pub double_buffering: bool,
+    pub queue: Arc<Queue>,
 }
 
 impl CommandEntry {
-    pub fn now_with_sync(&self, sync: Arc<Mutex<GpuSync>>) -> Box<GpuFuture> {
-        Box::new(GpuFuture {
-            device_manager: self.device_manager.clone(),
-            command_buffers: Mutex::new(vec![]),
-            sync,
-            queue: self.queue.clone(),
-        })
-    }
-
-    pub fn now(&self) -> Box<GpuFuture> {
-        GpuFuture::from_command_entry(self.device_manager.clone(), vec![], self.queue.clone())
+    pub fn now(&self, sync: Arc<Mutex<GpuSync>>) -> Box<GpuFuture> {
+        GpuFuture::buffers(sync, vec![])
     }
 
     fn new(
         device_manager: Arc<DeviceManager>,
         queue: Arc<Queue>,
-        double_buffering: bool,
+        buffer_count: u32,
     ) -> CrystalResult<Self> {
         let command_pool = CommandPool::new(device_manager.clone(), queue.clone())?;
 
         let command_buffers = CommandBuffer::new(
             command_pool.clone(),
-            if double_buffering { 2 } else { 1 },
+            buffer_count,
             vk::CommandBufferLevel::PRIMARY,
         )?;
 
@@ -456,7 +305,6 @@ impl CommandEntry {
             command_pool,
             command_buffers,
             queue,
-            double_buffering,
         })
     }
 
@@ -519,27 +367,27 @@ impl CommandEntry {
         let command_buffer_managers =
             CommandBuffer::from_handlers(self.command_pool.clone(), commands_buffers)?;
 
-        Ok(GpuFuture::from_command_entry(
-            self.device_manager.clone(),
+        Ok(GpuFuture::buffers(
+            GpuSync::no_sync(self.device_manager.clone()),
             command_buffer_managers,
-            self.queue.clone(),
         ))
     }
 
     pub fn record_command_buffer<P>(
         &self,
-        n_pass: usize,
+        sync: Arc<Mutex<GpuSync>>,
         predicate: P,
     ) -> CrystalResult<Box<GpuFuture>>
     where
-        P: Fn(&vk::CommandBuffer, Arc<ash::Device>),
+        P: Fn(&vk::CommandBuffer, Arc<ash::Device>, usize),
     {
-        let n_pass = if self.double_buffering { n_pass } else { 0 };
+        let lock = sync.lock().unwrap();
+        let n_pass = lock.image_index as usize;
 
         match unsafe {
             self.device_manager.device.reset_command_buffer(
                 self.command_buffers[n_pass].handler,
-                vk::CommandBufferResetFlags::empty(),
+                vk::CommandBufferResetFlags::RELEASE_RESOURCES,
             )
         } {
             Ok(()) => {}
@@ -566,6 +414,7 @@ impl CommandEntry {
         predicate(
             &self.command_buffers[n_pass].handler,
             self.device_manager.device.clone(),
+            n_pass,
         );
 
         match unsafe {
@@ -580,10 +429,11 @@ impl CommandEntry {
             }
         };
 
-        Ok(GpuFuture::from_command_entry(
-            self.device_manager.clone(),
+        drop(lock);
+
+        Ok(GpuFuture::buffers(
+            sync.clone(),
             vec![self.command_buffers[n_pass].clone()],
-            self.queue.clone(),
         ))
     }
 }
@@ -604,7 +454,7 @@ pub struct CommandManager {
 impl CommandManager {
     pub(crate) fn new(
         device_manager: Arc<DeviceManager>,
-        double_buffering: bool,
+        buffer_count: u32,
     ) -> CrystalResult<Arc<Self>> {
         let mut command_entries = BTreeMap::<CommandType, Arc<CommandEntry>>::new();
 
@@ -618,7 +468,7 @@ impl CommandManager {
                 Arc::new(CommandEntry::new(
                     device_manager.clone(),
                     queue.clone(),
-                    double_buffering,
+                    buffer_count,
                 )?),
             );
         }
@@ -633,7 +483,7 @@ impl CommandManager {
                 Arc::new(CommandEntry::new(
                     device_manager.clone(),
                     queue.clone(),
-                    double_buffering,
+                    buffer_count,
                 )?),
             );
         }
@@ -648,7 +498,7 @@ impl CommandManager {
                 Arc::new(CommandEntry::new(
                     device_manager.clone(),
                     queue.clone(),
-                    double_buffering,
+                    buffer_count,
                 )?),
             );
         }

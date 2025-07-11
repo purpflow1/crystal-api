@@ -6,13 +6,6 @@ use crate::{
 };
 
 pub trait RenderTarget: Sync + Send {
-    fn create_graphics_pipeline(
-        &self,
-        layout: Arc<dyn Layout>,
-        shaders: &[Shader],
-        attributes: &[Attribute],
-    ) -> CrystalResult<Arc<dyn Pipeline>>;
-
     fn as_vulkan(self: Arc<Self>) -> Option<Arc<vulkan::VulkanRenderTarget>> {
         None
     }
@@ -22,6 +15,20 @@ pub trait Layout: Sync + Send {
     fn as_vulkan(self: Arc<Self>) -> Option<Arc<vulkan::VulkanLayout>> {
         None
     }
+
+    fn flush_buffer_tasks(self: Arc<Self>) -> CrystalResult<usize>;
+
+    fn create_graphics_pipeline(
+        self: Arc<Self>,
+        render_target: Arc<dyn RenderTarget>,
+        shaders: &[Shader],
+        attributes: &[Attribute],
+    ) -> CrystalResult<Arc<dyn Pipeline>>;
+
+    fn create_compute_pipeline(
+        self: Arc<Self>,
+        shader: &Shader,
+    ) -> CrystalResult<Arc<dyn Pipeline>>;
 
     fn add_buffer(
         &self,

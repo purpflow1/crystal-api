@@ -65,7 +65,7 @@ impl DepthResources {
             height,
             samples,
             depth_format,
-            vk::ImageTiling::OPTIMAL,
+            tiling,
             vk::ImageAspectFlags::DEPTH,
             vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
             vk::MemoryPropertyFlags::DEVICE_LOCAL,

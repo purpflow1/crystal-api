@@ -1,5 +1,4 @@
 use std::{
-    ffi::CString,
     iter::zip,
     sync::{Arc, RwLock},
 };
@@ -7,13 +6,9 @@ use std::{
 use ash::vk;
 
 use crate::{
-    ShaderStage,
     debug::log,
     errors::{CrystalError, CrystalResult},
-    mesh::{Attribute, VertexTexture},
-    shader::Shader,
     traits,
-    vulkan::VulkanLayout,
 };
 
 use super::{
@@ -47,264 +42,9 @@ impl Drop for VulkanRenderTarget {
     }
 }
 
-#[derive(Clone)]
-struct ShaderStageInfo {
-    device_manager: Arc<DeviceManager>,
-    module: vk::ShaderModule,
-    stage: vk::ShaderStageFlags,
-    entry_point: CString,
-}
-
-impl Drop for ShaderStageInfo {
-    fn drop(&mut self) {
-        unsafe {
-            self.device_manager
-                .device
-                .destroy_shader_module(self.module, None);
-        }
-    }
-}
-
-impl ShaderStageInfo {
-    pub fn as_vk<'a>(&self) -> vk::PipelineShaderStageCreateInfo<'a> {
-        vk::PipelineShaderStageCreateInfo {
-            stage: self.stage,
-            module: self.module,
-            p_name: self.entry_point.as_ptr(),
-            ..Default::default()
-        }
-    }
-}
-
-pub struct VulkanPipeline {
-    device_manager: Arc<DeviceManager>,
-    pub(crate) layout: Arc<VulkanLayout>,
-    pub handle: vk::Pipeline,
-    stages: Vec<Arc<ShaderStageInfo>>,
-}
-
-impl Drop for VulkanPipeline {
-    fn drop(&mut self) {
-        unsafe {
-            self.device_manager
-                .device
-                .destroy_pipeline(self.handle, None);
-        }
-    }
-}
-
-impl VulkanPipeline {
-    fn stages_as_vk<'a>(
-        stages: impl IntoIterator<Item = Arc<ShaderStageInfo>>,
-    ) -> Vec<vk::PipelineShaderStageCreateInfo<'a>> {
-        stages.into_iter().map(|stage| stage.as_vk()).collect()
-    }
-
-    pub fn from_render_pass(
-        device_manager: Arc<DeviceManager>,
-        layout: Arc<dyn traits::Layout>,
-        shaders: &[Shader],
-        attributes: &[Attribute],
-        extent: vk::Extent2D,
-        msaa_samples: vk::SampleCountFlags,
-        render_pass: vk::RenderPass,
-    ) -> CrystalResult<Arc<Self>> {
-        if shaders.is_empty() {
-            log!("no shaders specified");
-            return Err(CrystalError::ShaderError);
-        }
-
-        let mut stages = Vec::new();
-
-        let entry_point = CString::new("main").unwrap();
-
-        for shader in shaders {
-            let stage = match shader.stage {
-                ShaderStage::Vertex => vk::ShaderStageFlags::VERTEX,
-                ShaderStage::Fragment => vk::ShaderStageFlags::FRAGMENT,
-                ShaderStage::Geometry => vk::ShaderStageFlags::GEOMETRY,
-                _ => unimplemented!(),
-            };
-
-            let shader_module_create_info =
-                vk::ShaderModuleCreateInfo::default().code(&shader.code);
-
-            let module = match unsafe {
-                device_manager
-                    .device
-                    .create_shader_module(&shader_module_create_info, None)
-            } {
-                Ok(module) => module,
-                Err(e) => {
-                    log!("cannot create shader module: {}", e);
-                    return Err(CrystalError::ShaderError);
-                }
-            };
-
-            let shader_stage_info = ShaderStageInfo {
-                device_manager: device_manager.clone(),
-                module,
-                stage,
-                entry_point: entry_point.clone(),
-            };
-
-            stages.push(Arc::new(shader_stage_info));
-        }
-
-        let binding_descriptions = &[vk::VertexInputBindingDescription::default()
-            .binding(0)
-            .stride(size_of::<VertexTexture>() as u32)
-            .input_rate(vk::VertexInputRate::VERTEX)];
-
-        let mut attribute_descriptions = vec![];
-
-        for (location, attribute) in zip(0..attributes.len() as u32, attributes) {
-            let attribute_description = vk::VertexInputAttributeDescription::default()
-                .binding(0)
-                .location(location)
-                .format(match attribute.size {
-                    4 => vk::Format::R32_SFLOAT,
-                    8 => vk::Format::R32G32_SFLOAT,
-                    12 => vk::Format::R32G32B32_SFLOAT,
-                    16 => vk::Format::R32G32B32A32_SFLOAT,
-                    _ => vk::Format::R32G32B32_SFLOAT,
-                })
-                .offset(attribute.offset as u32);
-            attribute_descriptions.push(attribute_description);
-        }
-
-        let vertex_input_info = vk::PipelineVertexInputStateCreateInfo::default()
-            .vertex_binding_descriptions(binding_descriptions)
-            .vertex_attribute_descriptions(&attribute_descriptions);
-
-        let input_assembly = vk::PipelineInputAssemblyStateCreateInfo::default()
-            .topology(vk::PrimitiveTopology::TRIANGLE_LIST)
-            .primitive_restart_enable(false);
-
-        let viewport = vk::Viewport::default()
-            .x(0.)
-            .y(0.)
-            .width(extent.width as f32)
-            .height(extent.height as f32)
-            .min_depth(0.)
-            .max_depth(1.);
-
-        let scissor = vk::Rect2D::default().extent(extent);
-
-        let dynamic_states = &[vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
-
-        let dynamic_state =
-            vk::PipelineDynamicStateCreateInfo::default().dynamic_states(dynamic_states);
-
-        let viewports = &[viewport];
-        let scissors = &[scissor];
-
-        let viewport_state = vk::PipelineViewportStateCreateInfo::default()
-            .viewports(viewports)
-            .scissors(scissors);
-
-        let rasterizer = vk::PipelineRasterizationStateCreateInfo::default()
-            .depth_clamp_enable(false)
-            .rasterizer_discard_enable(false)
-            .polygon_mode(vk::PolygonMode::FILL)
-            .line_width(1.)
-            .cull_mode(vk::CullModeFlags::BACK)
-            .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
-            .depth_bias_enable(false);
-
-        let multisampling = vk::PipelineMultisampleStateCreateInfo::default()
-            .sample_shading_enable(false)
-            .rasterization_samples(msaa_samples);
-
-        let color_blend_attachment = vk::PipelineColorBlendAttachmentState::default()
-            .color_write_mask(vk::ColorComponentFlags::RGBA)
-            .blend_enable(true)
-            .src_color_blend_factor(vk::BlendFactor::SRC_ALPHA)
-            .dst_color_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
-            .color_blend_op(vk::BlendOp::ADD)
-            .src_alpha_blend_factor(vk::BlendFactor::ONE)
-            .dst_alpha_blend_factor(vk::BlendFactor::ZERO)
-            .alpha_blend_op(vk::BlendOp::ADD);
-
-        let attachments = &[color_blend_attachment];
-
-        let color_blending = vk::PipelineColorBlendStateCreateInfo::default()
-            .logic_op_enable(false)
-            .attachments(attachments);
-
-        let depth_stencil_state = vk::PipelineDepthStencilStateCreateInfo::default()
-            .depth_test_enable(true)
-            .depth_write_enable(true)
-            .depth_compare_op(vk::CompareOp::LESS)
-            .depth_bounds_test_enable(false);
-
-        let layout = match layout.as_vulkan() {
-            Some(layout) => layout,
-            None => panic!("fatal: wrong layout type, expected vulkan"),
-        };
-
-        let stages_vk = Self::stages_as_vk(stages.clone());
-
-        let pipeline_create_info = vk::GraphicsPipelineCreateInfo::default()
-            .stages(&stages_vk)
-            .vertex_input_state(&vertex_input_info)
-            .input_assembly_state(&input_assembly)
-            .viewport_state(&viewport_state)
-            .rasterization_state(&rasterizer)
-            .multisample_state(&multisampling)
-            .color_blend_state(&color_blending)
-            .dynamic_state(&dynamic_state)
-            .depth_stencil_state(&depth_stencil_state)
-            .layout(layout.pipeline_layout)
-            .render_pass(render_pass);
-
-        match unsafe {
-            device_manager.device.create_graphics_pipelines(
-                vk::PipelineCache::null(),
-                &[pipeline_create_info],
-                None,
-            )
-        } {
-            Ok(pipeline) => Ok(Arc::new(Self {
-                device_manager,
-                layout,
-                handle: pipeline[0],
-                stages,
-            })),
-            Err(es) => {
-                log!("cannot create graphics pipeline: {}", es.1);
-                Err(CrystalError::CannotCreateRenderPass)
-            }
-        }
-    }
-}
-
-impl traits::Pipeline for VulkanPipeline {
-    fn as_vulkan(self: Arc<Self>) -> Option<Arc<VulkanPipeline>> {
-        Some(self)
-    }
-}
-
 impl traits::RenderTarget for VulkanRenderTarget {
     fn as_vulkan(self: Arc<Self>) -> Option<Arc<super::VulkanRenderTarget>> {
         Some(self)
-    }
-
-    fn create_graphics_pipeline(
-        &self,
-        layout: Arc<dyn traits::Layout>,
-        shaders: &[Shader],
-        attributes: &[Attribute],
-    ) -> CrystalResult<Arc<dyn traits::Pipeline>> {
-        Ok(VulkanPipeline::from_render_pass(
-            self.device_manager.clone(),
-            layout.as_vulkan().unwrap(),
-            shaders,
-            attributes,
-            *self.extent.try_read().unwrap(),
-            self.msaa_samples,
-            self.render_pass,
-        )?)
     }
 }
 
@@ -481,11 +221,7 @@ impl VulkanRenderTarget {
             .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
             .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
             .initial_layout(vk::ImageLayout::UNDEFINED)
-            .final_layout(if samples != vk::SampleCountFlags::TYPE_1 {
-                vk::ImageLayout::PRESENT_SRC_KHR
-            } else {
-                vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL
-            });
+            .final_layout(vk::ImageLayout::PRESENT_SRC_KHR);
 
         let mut attachments = vec![color_attachment, depth_attachment];
 
@@ -527,21 +263,27 @@ impl VulkanRenderTarget {
         let dependency = vk::SubpassDependency::default()
             .src_subpass(vk::SUBPASS_EXTERNAL)
             .dst_subpass(0)
-            .src_stage_mask(
-                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
-                    | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS,
-            )
-            .src_access_mask(vk::AccessFlags::empty())
+            .src_stage_mask(vk::PipelineStageFlags::TOP_OF_PIPE)
             .dst_stage_mask(
                 vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
                     | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS,
             )
+            .src_access_mask(vk::AccessFlags::empty())
             .dst_access_mask(
                 vk::AccessFlags::COLOR_ATTACHMENT_WRITE
+                    | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_READ
                     | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
             );
 
-        let dependencies = &[dependency];
+        let end_dependency = vk::SubpassDependency::default()
+            .src_subpass(0)
+            .dst_subpass(vk::SUBPASS_EXTERNAL)
+            .src_stage_mask(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT)
+            .dst_stage_mask(vk::PipelineStageFlags::BOTTOM_OF_PIPE)
+            .src_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE)
+            .dst_access_mask(vk::AccessFlags::empty());
+
+        let dependencies = &[dependency, end_dependency];
 
         let render_pass_create_info = vk::RenderPassCreateInfo::default()
             .attachments(&attachments)

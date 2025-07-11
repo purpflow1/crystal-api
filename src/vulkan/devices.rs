@@ -26,7 +26,7 @@ impl std::fmt::Debug for PhysicalDeviceExtensions {
 }
 
 pub struct Queue {
-    device: Arc<ash::Device>,
+    pub device: Arc<ash::Device>,
     pub flags: vk::QueueFlags,
     pub present_support: bool,
     pub family_index: u32,

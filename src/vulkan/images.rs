@@ -54,9 +54,8 @@ impl Image {
         generate_mips: bool,
         anisotropy_texels: f32,
     ) -> CrystalResult<Arc<Self>> {
-        let layout = vk::ImageLayout::UNDEFINED;
-
         let extent = vk::Extent3D::default().width(width).height(height).depth(1);
+        let layout = vk::ImageLayout::UNDEFINED;
 
         let mip_levels = if generate_mips {
             (height as f32).max(width as f32).log2().floor() as u32
@@ -252,7 +251,7 @@ impl VulkanTexture {
         let future = future.join(self.stage_image(command_entry.clone())?);
         let future = future.join(self.generate_mipmaps(command_entry.clone())?);
 
-        future.flush()?;
+        future.flush(command_entry.queue.clone())?;
 
         Ok(())
     }

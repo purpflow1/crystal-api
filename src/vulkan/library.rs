@@ -9,7 +9,7 @@ use ash::vk::{self, Handle};
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
 use super::{
-    commands::{CommandEntry, CommandManager, CommandType},
+    commands::{CommandManager, CommandType},
     debug_callback::{DebugUtilsMessanger, create_debug_utils_messanger},
     devices::DeviceManager,
     images::VulkanTexture,
@@ -17,20 +17,18 @@ use super::{
     memory::{BufferInfo, BufferManager},
     presentation::Presentation,
     rendering::VulkanRenderTarget,
+    sync::GpuSync,
     validation::get_supported_validation_layers,
 };
 
 use crate::{
-    GpuSampler, GraphicsApiInitSettings,
+    GpuSampler, GraphicsApiInitSettings, Pipeline,
     debug::log,
     errors::{CrystalError, CrystalResult},
     images::Image2D,
     object::Object,
     traits::{self, Layout},
-    vulkan::{
-        VulkanObjectMemoryManager,
-        commands::{GpuFuture, GpuSync},
-    },
+    vulkan::VulkanObjectMemoryManager,
 };
 
 pub struct VulkanEntry {
@@ -39,23 +37,25 @@ pub struct VulkanEntry {
     _debug_utils_messanger: Option<DebugUtilsMessanger>,
 
     presentation: Arc<Presentation>,
-    thread_handle:
-        Mutex<Option<JoinHandle<Result<Box<GpuFuture>, (vk::Result, Arc<Mutex<GpuSync>>)>>>>,
+
+    render_thread_handle: Mutex<Option<JoinHandle<Result<(), (vk::Result, Arc<Mutex<GpuSync>>)>>>>,
+    render_sync: Arc<Mutex<GpuSync>>,
 
     pub render_targets: BTreeMap<u16, Arc<VulkanRenderTarget>>,
 }
 
 impl Drop for VulkanEntry {
     fn drop(&mut self) {
-        let graphics = self
-            .command_manager
-            .command_entries
-            .get(&CommandType::Graphics)
-            .unwrap();
-
-        let (now, swapchain_out_of_date, _) = self.wait_for_thread(graphics.clone());
+        let (swapchain_out_of_date, _) = self.wait_for_thread();
 
         if !swapchain_out_of_date {
+            let graphics = self
+                .command_manager
+                .command_entries
+                .get(&CommandType::Graphics)
+                .unwrap();
+
+            let now = graphics.now(self.render_sync.clone());
             now.acquire_next_image(&self.presentation).unwrap();
         }
     }
@@ -152,7 +152,6 @@ impl VulkanEntry {
             &entry,
             &instance,
             window,
-            settings.vsync,
             Some(vk::Extent2D {
                 width: settings.width,
                 height: settings.height,
@@ -160,13 +159,15 @@ impl VulkanEntry {
         );
 
         let device_manager =
-            DeviceManager::new(entry, instance, Some(surface.clone()), &device_extensions).unwrap(); // TODO just return
-
-        let command_manager =
-            CommandManager::new(device_manager.clone(), settings.double_buffering)?;
+            DeviceManager::new(entry, instance, Some(surface.clone()), &device_extensions)?;
 
         let presentation =
             Presentation::new(device_manager.clone(), surface, settings.msaa_samples)?;
+
+        let command_manager = CommandManager::new(
+            device_manager.clone(),
+            presentation.swapchain.swapchain_info.image_count,
+        )?;
 
         let viewport_render_target = VulkanRenderTarget::new(
             device_manager.clone(),
@@ -188,8 +189,13 @@ impl VulkanEntry {
 
         render_targets.insert(0, viewport_render_target);
 
+        let render_sync = GpuSync::new(
+            device_manager.clone(),
+            presentation.swapchain.swapchain_info.image_count,
+        )?;
+
         Ok(Arc::new(Self {
-            device_manager,
+            device_manager: device_manager.clone(),
             command_manager,
 
             #[cfg(debug_assertions)]
@@ -198,14 +204,16 @@ impl VulkanEntry {
             _debug_utils_messanger: None,
 
             presentation,
-            thread_handle: Mutex::new(None),
+
+            render_thread_handle: Mutex::new(None),
+            render_sync,
 
             render_targets,
         }))
     }
 
     pub fn recreate_resources(&self, width: u32, height: u32) -> CrystalResult<()> {
-        let mut handle_lock = self.thread_handle.lock().unwrap();
+        let mut handle_lock = self.render_thread_handle.lock().unwrap();
         match &*handle_lock {
             Some(_handle) => {
                 let _ = handle_lock.take().unwrap().join().unwrap();
@@ -235,31 +243,73 @@ impl VulkanEntry {
         )
     }
 
-    fn wait_for_thread(&self, command_entry: Arc<CommandEntry>) -> (Box<GpuFuture>, bool, bool) {
+    fn wait_for_thread(&self) -> (bool, bool) {
         let mut swapchain_out_of_date = false;
         let mut suboptimal = false;
 
-        let mut handle_lock = self.thread_handle.lock().unwrap();
-        let now = match &*handle_lock {
+        let mut handle_lock = self.render_thread_handle.lock().unwrap();
+
+        match &*handle_lock {
             Some(_handle) => match handle_lock.take().unwrap().join().unwrap() {
-                Ok(n) => n.wait().unwrap(),
-                Err((vk::Result::ERROR_OUT_OF_DATE_KHR, sync)) => {
+                Ok(()) => {}
+                Err((vk::Result::ERROR_OUT_OF_DATE_KHR, _)) => {
                     swapchain_out_of_date = true;
                     suboptimal = true;
-                    command_entry.now_with_sync(sync)
                 }
-                Err((vk::Result::SUBOPTIMAL_KHR, sync)) => {
+                Err((vk::Result::SUBOPTIMAL_KHR, _)) => {
                     suboptimal = true;
-                    command_entry.now_with_sync(sync)
                 }
                 Err((e, _)) => {
                     panic!("failed to present queue: {}", e);
                 }
             },
-            None => command_entry.now(),
+            None => {}
         };
 
-        (now, swapchain_out_of_date, suboptimal)
+        (swapchain_out_of_date, suboptimal)
+    }
+
+    pub fn dispatch(
+        self: Arc<Self>,
+        pipeline: Arc<dyn Pipeline>,
+        groups: [u32; 3],
+    ) -> CrystalResult<()> {
+        let compute = self
+            .command_manager
+            .command_entries
+            .get(&CommandType::Compute)
+            .unwrap()
+            .clone();
+
+        let vk_pipeline = pipeline.as_vulkan().unwrap();
+
+        let now = compute.now(self.render_sync.clone());
+
+        let future = now.join(
+            compute
+                .record_single_time_buffer(|command_buffer, device| unsafe {
+                    device.cmd_bind_pipeline(
+                        *command_buffer,
+                        vk::PipelineBindPoint::COMPUTE,
+                        vk_pipeline.handle,
+                    );
+                    device.cmd_bind_descriptor_sets(
+                        *command_buffer,
+                        vk::PipelineBindPoint::COMPUTE,
+                        vk_pipeline.layout.pipeline_layout,
+                        0,
+                        &vk_pipeline.layout.get_descriptor_sets(),
+                        &[],
+                    );
+                    device.cmd_dispatch(*command_buffer, groups[0], groups[1], groups[2]);
+                })
+                .unwrap(),
+        );
+
+        future.flush(compute.queue.clone()).unwrap();
+        self.render_sync.lock().unwrap().wait_transfer().unwrap();
+
+        Ok(())
     }
 
     pub fn render_and_present(self: Arc<Self>, objects: &[Arc<Object>]) -> CrystalResult<()> {
@@ -270,7 +320,9 @@ impl VulkanEntry {
             .unwrap()
             .clone();
 
-        let (now, swapchain_out_of_date, suboptimal) = self.wait_for_thread(graphics.clone());
+        let now = graphics.now(self.render_sync.clone());
+
+        let (swapchain_out_of_date, suboptimal) = self.wait_for_thread();
 
         #[cfg(debug_assertions)]
         self.update_debug_text();
@@ -297,10 +349,7 @@ impl VulkanEntry {
             )?;
         }
 
-        let current_image_index;
-
         match now.acquire_next_image(&self.presentation) {
-            Ok((idx, _)) => current_image_index = idx,
             Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
                 self.presentation.swapchain.recreate(None)?;
                 render_target.update_resources(
@@ -312,17 +361,14 @@ impl VulkanEntry {
                         .unwrap()
                         .clone(),
                 )?;
-                return Ok(());
+                // return Ok(());
             }
             Err(e) => {
-                log!("failed aquire next image: {}", e);
+                log!("failed aquire next image: {:?}", e);
                 return Err(CrystalError::RenderingError);
             }
+            _ => (),
         };
-
-        *self.presentation.image_index.lock().unwrap() = current_image_index;
-
-        let n_pass = now.n_pass();
 
         let color = 0.2f32;
         let mut clear_color = vk::ClearColorValue::default();
@@ -340,15 +386,11 @@ impl VulkanEntry {
         let clear_values = &[clear_value_color, clear_value_stencil];
 
         let gpu_future = now.join(graphics.clone().record_command_buffer(
-            n_pass,
-            |command_buffer, device| {
+            self.render_sync.clone(),
+            |command_buffer, device, n_pass| {
                 let render_pass_begin = vk::RenderPassBeginInfo::default()
                     .render_pass(render_target.render_pass)
-                    .framebuffer(
-                        *render_target.framebuffers[current_image_index as usize]
-                            .read()
-                            .unwrap(),
-                    )
+                    .framebuffer(*render_target.framebuffers[n_pass].read().unwrap())
                     .render_area(vk::Rect2D {
                         offset: vk::Offset2D::default().x(0).y(0),
                         extent: vk::Extent2D {
@@ -360,7 +402,7 @@ impl VulkanEntry {
                                 .extent()
                                 .height
                                 .min(self.presentation.swapchain.extent().height),
-                        }, // render_target.extent,
+                        },
                     })
                     .clear_values(clear_values);
 
@@ -418,10 +460,16 @@ impl VulkanEntry {
 
         let presentation = self.presentation.clone();
 
-        let handle =
-            std::thread::spawn(move || gpu_future.then_swapchain_present_and_flush(presentation));
+        let handle = std::thread::Builder::new()
+            .name("swapchain present and flush".to_string())
+            .spawn(move || {
+                gpu_future
+                    .then_swapchain_present_and_flush(graphics.queue.clone(), presentation)?;
+                Ok(())
+            })
+            .unwrap();
 
-        let mut handle_lock = self.thread_handle.lock().unwrap();
+        let mut handle_lock = self.render_thread_handle.lock().unwrap();
         *handle_lock = Some(handle);
 
         Ok(())
@@ -429,6 +477,7 @@ impl VulkanEntry {
 
     pub fn create_layout(
         &self,
+        double_buffering: bool,
         texture_num: usize,
         sampler_num: usize,
         uniform_num: usize,
@@ -440,12 +489,7 @@ impl VulkanEntry {
             sampler_num,
             uniform_num,
             storage_num,
-            self.command_manager
-                .command_entries
-                .get(&CommandType::Graphics)
-                .clone()
-                .unwrap()
-                .double_buffering,
+            double_buffering,
         )?)
     }
 
@@ -490,10 +534,6 @@ impl VulkanEntry {
         self.render_targets[&0].clone()
     }
 
-    pub fn get_raw_device_handle(&self) -> u64 {
-        self.device_manager.device.handle().as_raw()
-    }
-
     pub fn update_debug_text(&self) -> String {
         let mut budget_props = vk::PhysicalDeviceMemoryBudgetPropertiesEXT::default();
         let mut mem_props =
@@ -530,8 +570,8 @@ impl VulkanEntry {
         }
 
         let formatted: String = format!(
-            "GPU mem usage: {:.1} MB\n\
-             swapchain:     {:.1} MB",
+            "GPU mem:   {:.1} MB\n\
+             swapchain: {:.1} MB",
             budget_props.heap_usage[0] as f32 / 1024f32 / 1024f32,
             swapchain_memory_usage as f32 / 1024f32 / 1024f32,
         );
@@ -568,7 +608,7 @@ impl VulkanEntry {
         .unwrap();
 
         let swapchain_image =
-            swapchain_images[*self.presentation.image_index.lock().unwrap() as usize];
+            swapchain_images[self.render_sync.lock().unwrap().image_index as usize];
 
         let command_entry = self
             .command_manager
@@ -576,8 +616,6 @@ impl VulkanEntry {
             .get(&CommandType::Transfer)
             .clone()
             .unwrap();
-
-        command_entry.wait().unwrap();
 
         let future = command_entry
             .record_single_time_buffer(|command_buffer, device| {
@@ -665,7 +703,7 @@ impl VulkanEntry {
             })
             .unwrap();
 
-        future.flush().unwrap();
+        future.flush(command_entry.queue.clone()).unwrap();
 
         Ok(())
     }

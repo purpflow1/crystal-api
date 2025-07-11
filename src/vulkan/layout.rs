@@ -1,6 +1,8 @@
 use std::{
     collections::{BTreeMap, VecDeque},
+    ffi::CString,
     hash::Hash,
+    iter::zip,
     sync::{Arc, Mutex, MutexGuard, RwLock},
     thread::JoinHandle,
 };
@@ -9,16 +11,18 @@ use ash::vk::{self, Handle};
 use pollster::FutureExt;
 
 use crate::{
-    GpuSampler,
+    GpuSampler, RenderTarget, Shader, ShaderStage,
     debug::log,
     errors::{CrystalError, CrystalResult},
     gpu_data::{IntoGpuBuffer, IntoGpuTexture, PtrHandler},
+    mesh::{Attribute, VertexTexture},
     object::Object,
     traits,
     vulkan::VulkanTexture,
 };
 
 use super::{
+    VulkanRenderTarget,
     devices::DeviceManager,
     memory::{BufferInfo, BufferManager},
 };
@@ -37,7 +41,7 @@ struct LayoutDynamicData {
     buffer_managers_sets: BTreeMap<usize, (Vec<Arc<BufferManager>>, Arc<dyn IntoGpuBuffer>)>,
     samplers: BTreeMap<u32, vk::Sampler>,
 
-    thread_handle: Option<JoinHandle<()>>,
+    buffer_tasks_thread_handle: Option<JoinHandle<()>>,
 }
 
 unsafe impl Sync for LayoutDynamicData {}
@@ -54,9 +58,13 @@ impl Drop for LayoutDynamicData {
 }
 
 impl LayoutDynamicData {
-    fn update_data(&mut self) {
-        if let Some(_handle) = &self.thread_handle {
-            self.thread_handle.take().unwrap().join().unwrap();
+    fn update_data(&mut self) -> CrystalResult<usize> {
+        if let Some(_handle) = &self.buffer_tasks_thread_handle {
+            self.buffer_tasks_thread_handle
+                .take()
+                .unwrap()
+                .join()
+                .unwrap();
         }
 
         let indices_to_clean: Vec<usize> = self
@@ -82,33 +90,41 @@ impl LayoutDynamicData {
                 if ptr.is_null() {
                     true
                 } else {
+                    *ptr =
+                        (*buffers[self.n_pass].mapped_memory.read().unwrap()).unwrap() as *mut u8;
                     for task in gpu_buffer.query_tasks() {
-                        *ptr = (*buffers[self.n_pass].mapped_memory.read().unwrap()).unwrap()
-                            as *mut u8;
-
                         buffer_tasks.push_back((task, PtrHandler(RwLock::new(*ptr))));
                     }
+
                     false
                 }
             })
             .map(|(ind, _)| *ind)
             .collect();
 
+        let result = indices_to_clean.len() + buffer_tasks.len();
+
         for ind in indices_to_clean {
             self.buffer_managers_sets.remove(&ind);
         }
 
-        if self.double_buffering {
-            self.n_pass = (self.n_pass + 1) % 2;
-        };
-
         let handle = std::thread::spawn(move || {
             while let Some((task, ptr)) = buffer_tasks.pop_front() {
-                task.flush((*ptr.0.read().unwrap()) as *mut u8).block_on();
+                let ptr_lock = ptr.0.read().unwrap();
+                if !ptr_lock.is_null() {
+                    task.flush((*ptr_lock) as *mut u8).block_on();
+                }
             }
         });
 
-        self.thread_handle = Some(handle);
+        if self.double_buffering {
+            self.n_pass = (self.n_pass + 1) % 2;
+            self.buffer_tasks_thread_handle = Some(handle);
+        } else {
+            handle.join().unwrap()
+        }
+
+        Ok(result)
     }
 
     fn add_textures(
@@ -205,7 +221,7 @@ impl LayoutDynamicData {
     ) -> CrystalResult<()> {
         let size = data.size() as u64;
 
-        let (descriptor_type, buffer_usage) = if is_uniform {
+        let (descriptor_type, mut buffer_usage) = if is_uniform {
             (
                 vk::DescriptorType::UNIFORM_BUFFER,
                 vk::BufferUsageFlags::UNIFORM_BUFFER,
@@ -216,6 +232,10 @@ impl LayoutDynamicData {
                 vk::BufferUsageFlags::STORAGE_BUFFER,
             )
         };
+
+        if data.is_transfer() {
+            buffer_usage |= vk::BufferUsageFlags::TRANSFER_DST;
+        }
 
         let idx = (0..usize::MAX)
             .find(|idx| {
@@ -236,6 +256,7 @@ impl LayoutDynamicData {
                     | vk::MemoryPropertyFlags::HOST_COHERENT,
             };
 
+            // TODO Make abstracted GPU buffer for shared use in different shaders
             let buffer_manager = BufferManager::new(self.device_manager.clone(), buffer_info)?;
 
             let ptr = buffer_manager.map_memory(size, 0)?;
@@ -273,7 +294,7 @@ impl LayoutDynamicData {
 
         let tasks = data.query_tasks();
 
-        if buffers.len() > 1 {
+        if self.double_buffering {
             let ptr = (*buffers[1].mapped_memory.read().unwrap()).unwrap() as *mut u8;
 
             for task in tasks.clone() {
@@ -357,6 +378,11 @@ impl traits::Layout for VulkanLayout {
         Some(self)
     }
 
+    fn flush_buffer_tasks(self: Arc<Self>) -> CrystalResult<usize> {
+        let mut dynamic_data = self.dynamic_data.lock().unwrap();
+        dynamic_data.update_data()
+    }
+
     fn add_buffer(
         &self,
         binding: usize,
@@ -380,6 +406,32 @@ impl traits::Layout for VulkanLayout {
         });
         Ok(())
     }
+
+    fn create_graphics_pipeline(
+        self: Arc<Self>,
+        render_target: Arc<dyn RenderTarget>,
+        shaders: &[Shader],
+        attributes: &[Attribute],
+    ) -> CrystalResult<Arc<dyn traits::Pipeline>> {
+        Ok(VulkanPipeline::from_render_target(
+            self.device_manager.clone(),
+            self,
+            shaders,
+            attributes,
+            render_target.as_vulkan().unwrap(),
+        )?)
+    }
+
+    fn create_compute_pipeline(
+        self: Arc<Self>,
+        shader: &Shader,
+    ) -> CrystalResult<Arc<dyn traits::Pipeline>> {
+        Ok(VulkanPipeline::new_compute(
+            self.device_manager.clone(),
+            self,
+            shader,
+        )?)
+    }
 }
 
 impl VulkanLayout {
@@ -394,17 +446,31 @@ impl VulkanLayout {
     ) -> CrystalResult<Arc<Self>> {
         let buffer_count = if double_buffering { 2 } else { 1 };
 
-        let pool_sizes = [
-            vk::DescriptorPoolSize::default()
-                .descriptor_count(buffer_count * uniform_num as u32)
-                .ty(vk::DescriptorType::UNIFORM_BUFFER),
-            vk::DescriptorPoolSize::default()
-                .descriptor_count(buffer_count * storage_num as u32)
-                .ty(vk::DescriptorType::STORAGE_BUFFER),
-            vk::DescriptorPoolSize::default()
-                .descriptor_count((sampler_num * texture_num) as u32)
-                .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER),
-        ];
+        let mut pool_sizes = vec![];
+
+        if uniform_num > 0 {
+            pool_sizes.push(
+                vk::DescriptorPoolSize::default()
+                    .descriptor_count(buffer_count * uniform_num as u32)
+                    .ty(vk::DescriptorType::UNIFORM_BUFFER),
+            )
+        }
+
+        if storage_num > 0 {
+            pool_sizes.push(
+                vk::DescriptorPoolSize::default()
+                    .descriptor_count(buffer_count * storage_num as u32)
+                    .ty(vk::DescriptorType::STORAGE_BUFFER),
+            )
+        }
+
+        if sampler_num + texture_num > 0 {
+            pool_sizes.push(
+                vk::DescriptorPoolSize::default()
+                    .descriptor_count((sampler_num * texture_num) as u32)
+                    .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER),
+            )
+        }
 
         let pool_info = vk::DescriptorPoolCreateInfo::default()
             .pool_sizes(&pool_sizes)
@@ -427,7 +493,7 @@ impl VulkanLayout {
             .map(|idx| {
                 vk::DescriptorSetLayoutBinding::default()
                     .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-                    .stage_flags(vk::ShaderStageFlags::ALL_GRAPHICS)
+                    .stage_flags(vk::ShaderStageFlags::ALL)
                     .descriptor_count(1 as u32)
                     .binding(idx as u32)
             })
@@ -437,7 +503,7 @@ impl VulkanLayout {
             .map(|idx| {
                 vk::DescriptorSetLayoutBinding::default()
                     .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                    .stage_flags(vk::ShaderStageFlags::ALL_GRAPHICS)
+                    .stage_flags(vk::ShaderStageFlags::ALL)
                     .descriptor_count(1 as u32)
                     .binding(idx as u32)
             })
@@ -517,40 +583,52 @@ impl VulkanLayout {
             .descriptor_pool(descriptor_pool)
             .set_layouts(&sampler_layouts);
 
-        let uniform_descriptor_sets = match unsafe {
-            device_manager
-                .device
-                .allocate_descriptor_sets(&ubo_alloc_info)
-        } {
-            Ok(descriptor_sets) => descriptor_sets,
-            Err(e) => {
-                log!("cannot allocate uniform descriptor sets: {}", e);
-                return Err(CrystalError::DescriptorError);
+        let uniform_descriptor_sets = if uniform_num > 0 {
+            match unsafe {
+                device_manager
+                    .device
+                    .allocate_descriptor_sets(&ubo_alloc_info)
+            } {
+                Ok(descriptor_sets) => descriptor_sets,
+                Err(e) => {
+                    log!("cannot allocate uniform descriptor sets: {}", e);
+                    return Err(CrystalError::DescriptorError);
+                }
             }
+        } else {
+            vec![]
         };
 
-        let storage_descriptor_sets = match unsafe {
-            device_manager
-                .device
-                .allocate_descriptor_sets(&ssbo_alloc_info)
-        } {
-            Ok(descriptor_sets) => descriptor_sets,
-            Err(e) => {
-                log!("cannot allocate storage descriptor sets: {}", e);
-                return Err(CrystalError::DescriptorError);
+        let storage_descriptor_sets = if storage_num > 0 {
+            match unsafe {
+                device_manager
+                    .device
+                    .allocate_descriptor_sets(&ssbo_alloc_info)
+            } {
+                Ok(descriptor_sets) => descriptor_sets,
+                Err(e) => {
+                    log!("cannot allocate storage descriptor sets: {}", e);
+                    return Err(CrystalError::DescriptorError);
+                }
             }
+        } else {
+            vec![]
         };
 
-        let sampler_descriptor_sets = match unsafe {
-            device_manager
-                .device
-                .allocate_descriptor_sets(&sampler_alloc_info)
-        } {
-            Ok(descriptor_sets) => descriptor_sets,
-            Err(e) => {
-                log!("cannot allocate sampler descriptor sets: {}", e);
-                return Err(CrystalError::DescriptorError);
+        let sampler_descriptor_sets = if sampler_num > 0 {
+            match unsafe {
+                device_manager
+                    .device
+                    .allocate_descriptor_sets(&sampler_alloc_info)
+            } {
+                Ok(descriptor_sets) => descriptor_sets,
+                Err(e) => {
+                    log!("cannot allocate sampler descriptor sets: {}", e);
+                    return Err(CrystalError::DescriptorError);
+                }
             }
+        } else {
+            vec![]
         };
 
         let descriptor_set_layouts = vec![
@@ -597,9 +675,17 @@ impl VulkanLayout {
 
                 buffer_managers_sets: BTreeMap::new(),
                 samplers: BTreeMap::new(),
-                thread_handle: None,
+                buffer_tasks_thread_handle: None,
             }),
         }))
+    }
+
+    pub(crate) fn get_descriptor_sets(&self) -> Vec<vk::DescriptorSet> {
+        let dynamic_data = self.dynamic_data.lock().unwrap();
+        vec![
+            dynamic_data.uniform_descriptor_sets[dynamic_data.n_pass],
+            dynamic_data.storage_descriptor_sets[dynamic_data.n_pass],
+        ]
     }
 
     pub(crate) fn render(
@@ -607,10 +693,8 @@ impl VulkanLayout {
         objects: &[Arc<Object>],
         command_buffer: &vk::CommandBuffer,
     ) -> CrystalResult<()> {
-        let mut dynamic_data = self.dynamic_data.lock().unwrap();
+        let dynamic_data = self.dynamic_data.lock().unwrap();
         let device_manager = dynamic_data.device_manager.clone();
-
-        dynamic_data.update_data();
 
         unsafe {
             device_manager.device.cmd_bind_descriptor_sets(
@@ -743,5 +827,299 @@ impl VulkanLayout {
         dynamic_data.samplers.insert(mip_levels, sampler);
 
         Ok(sampler)
+    }
+}
+
+#[derive(Clone)]
+struct ShaderStageInfo {
+    device_manager: Arc<DeviceManager>,
+    module: vk::ShaderModule,
+    stage: vk::ShaderStageFlags,
+    entry_point: CString,
+}
+
+impl Drop for ShaderStageInfo {
+    fn drop(&mut self) {
+        unsafe {
+            self.device_manager
+                .device
+                .destroy_shader_module(self.module, None);
+        }
+    }
+}
+
+impl ShaderStageInfo {
+    pub fn as_vk<'a>(&self) -> vk::PipelineShaderStageCreateInfo<'a> {
+        vk::PipelineShaderStageCreateInfo {
+            stage: self.stage,
+            module: self.module,
+            p_name: self.entry_point.as_ptr(),
+            ..Default::default()
+        }
+    }
+}
+
+pub struct VulkanPipeline {
+    device_manager: Arc<DeviceManager>,
+    pub(crate) layout: Arc<VulkanLayout>,
+    pub handle: vk::Pipeline,
+    stages: Vec<Arc<ShaderStageInfo>>,
+}
+
+impl Drop for VulkanPipeline {
+    fn drop(&mut self) {
+        unsafe {
+            self.device_manager
+                .device
+                .destroy_pipeline(self.handle, None);
+        }
+    }
+}
+
+impl VulkanPipeline {
+    fn stages_as_vk<'a>(
+        stages: impl IntoIterator<Item = Arc<ShaderStageInfo>>,
+    ) -> Vec<vk::PipelineShaderStageCreateInfo<'a>> {
+        stages.into_iter().map(|stage| stage.as_vk()).collect()
+    }
+
+    pub fn new_compute(
+        device_manager: Arc<DeviceManager>,
+        layout: Arc<VulkanLayout>,
+        shader: &Shader,
+    ) -> CrystalResult<Arc<Self>> {
+        let stage = match shader.stage {
+            ShaderStage::Compute => vk::ShaderStageFlags::COMPUTE,
+            _ => {
+                log!(
+                    "wrong shader stage specified in compute pipeline: {:?}",
+                    shader.stage
+                );
+                return Err(CrystalError::ShaderError);
+            }
+        };
+
+        let shader_module_create_info = vk::ShaderModuleCreateInfo::default().code(&shader.code);
+
+        let module = match unsafe {
+            device_manager
+                .device
+                .create_shader_module(&shader_module_create_info, None)
+        } {
+            Ok(module) => module,
+            Err(e) => {
+                log!("cannot create shader module: {}", e);
+                return Err(CrystalError::ShaderError);
+            }
+        };
+
+        let shader_stage_info = Arc::new(ShaderStageInfo {
+            device_manager: device_manager.clone(),
+            module,
+            stage,
+            entry_point: CString::new("main").unwrap(),
+        });
+
+        let create_info = vk::ComputePipelineCreateInfo::default()
+            .layout(layout.pipeline_layout)
+            .stage(shader_stage_info.as_vk());
+
+        let pipeline = match unsafe {
+            device_manager.device.create_compute_pipelines(
+                vk::PipelineCache::null(),
+                &[create_info],
+                None,
+            )
+        } {
+            Ok(pipelines) => pipelines[0],
+            Err(e) => {
+                log!("cannot create compute pipeline: {:?}", e);
+                return Err(CrystalError::ShaderError);
+            }
+        };
+
+        Ok(Arc::new(Self {
+            device_manager,
+            layout,
+            handle: pipeline,
+            stages: vec![shader_stage_info],
+        }))
+    }
+
+    pub fn from_render_target(
+        device_manager: Arc<DeviceManager>,
+        layout: Arc<VulkanLayout>,
+        shaders: &[Shader],
+        attributes: &[Attribute],
+        render_target: Arc<VulkanRenderTarget>,
+    ) -> CrystalResult<Arc<Self>> {
+        if shaders.is_empty() {
+            log!("no shaders specified");
+            return Err(CrystalError::ShaderError);
+        }
+
+        let mut stages = Vec::new();
+
+        let entry_point = CString::new("main").unwrap();
+
+        for shader in shaders {
+            let stage = match shader.stage {
+                ShaderStage::Vertex => vk::ShaderStageFlags::VERTEX,
+                ShaderStage::Fragment => vk::ShaderStageFlags::FRAGMENT,
+                ShaderStage::Geometry => vk::ShaderStageFlags::GEOMETRY,
+                _ => unimplemented!(),
+            };
+
+            let shader_module_create_info =
+                vk::ShaderModuleCreateInfo::default().code(&shader.code);
+
+            let module = match unsafe {
+                device_manager
+                    .device
+                    .create_shader_module(&shader_module_create_info, None)
+            } {
+                Ok(module) => module,
+                Err(e) => {
+                    log!("cannot create shader module: {}", e);
+                    return Err(CrystalError::ShaderError);
+                }
+            };
+
+            let shader_stage_info = ShaderStageInfo {
+                device_manager: device_manager.clone(),
+                module,
+                stage,
+                entry_point: entry_point.clone(),
+            };
+
+            stages.push(Arc::new(shader_stage_info));
+        }
+
+        let binding_descriptions = &[vk::VertexInputBindingDescription::default()
+            .binding(0)
+            .stride(size_of::<VertexTexture>() as u32)
+            .input_rate(vk::VertexInputRate::VERTEX)];
+
+        let mut attribute_descriptions = vec![];
+
+        for (location, attribute) in zip(0..attributes.len() as u32, attributes) {
+            let attribute_description = vk::VertexInputAttributeDescription::default()
+                .binding(0)
+                .location(location)
+                .format(match attribute.size {
+                    4 => vk::Format::R32_SFLOAT,
+                    8 => vk::Format::R32G32_SFLOAT,
+                    12 => vk::Format::R32G32B32_SFLOAT,
+                    16 => vk::Format::R32G32B32A32_SFLOAT,
+                    _ => vk::Format::R32G32B32_SFLOAT,
+                })
+                .offset(attribute.offset as u32);
+            attribute_descriptions.push(attribute_description);
+        }
+
+        let vertex_input_info = vk::PipelineVertexInputStateCreateInfo::default()
+            .vertex_binding_descriptions(binding_descriptions)
+            .vertex_attribute_descriptions(&attribute_descriptions);
+
+        let input_assembly = vk::PipelineInputAssemblyStateCreateInfo::default()
+            .topology(vk::PrimitiveTopology::TRIANGLE_LIST)
+            .primitive_restart_enable(false);
+
+        let viewport = vk::Viewport::default()
+            .x(0.)
+            .y(0.)
+            .width(render_target.extent().width as f32)
+            .height(render_target.extent().height as f32)
+            .min_depth(0.)
+            .max_depth(1.);
+
+        let scissor = vk::Rect2D::default().extent(render_target.extent());
+
+        let dynamic_states = &[vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
+
+        let dynamic_state =
+            vk::PipelineDynamicStateCreateInfo::default().dynamic_states(dynamic_states);
+
+        let viewports = &[viewport];
+        let scissors = &[scissor];
+
+        let viewport_state = vk::PipelineViewportStateCreateInfo::default()
+            .viewports(viewports)
+            .scissors(scissors);
+
+        let rasterizer = vk::PipelineRasterizationStateCreateInfo::default()
+            .depth_clamp_enable(false)
+            .rasterizer_discard_enable(false)
+            .polygon_mode(vk::PolygonMode::FILL)
+            .line_width(1.)
+            .cull_mode(vk::CullModeFlags::BACK)
+            .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
+            .depth_bias_enable(false);
+
+        let multisampling = vk::PipelineMultisampleStateCreateInfo::default()
+            .sample_shading_enable(false)
+            .rasterization_samples(render_target.msaa_samples);
+
+        let color_blend_attachment = vk::PipelineColorBlendAttachmentState::default()
+            .color_write_mask(vk::ColorComponentFlags::RGBA)
+            .blend_enable(true)
+            .src_color_blend_factor(vk::BlendFactor::SRC_ALPHA)
+            .dst_color_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
+            .color_blend_op(vk::BlendOp::ADD)
+            .src_alpha_blend_factor(vk::BlendFactor::ONE)
+            .dst_alpha_blend_factor(vk::BlendFactor::ZERO)
+            .alpha_blend_op(vk::BlendOp::ADD);
+
+        let attachments = &[color_blend_attachment];
+
+        let color_blending = vk::PipelineColorBlendStateCreateInfo::default()
+            .logic_op_enable(false)
+            .attachments(attachments);
+
+        let depth_stencil_state = vk::PipelineDepthStencilStateCreateInfo::default()
+            .depth_test_enable(true)
+            .depth_write_enable(true)
+            .depth_compare_op(vk::CompareOp::LESS)
+            .depth_bounds_test_enable(false);
+
+        let stages_vk = Self::stages_as_vk(stages.clone());
+
+        let pipeline_create_info = vk::GraphicsPipelineCreateInfo::default()
+            .stages(&stages_vk)
+            .vertex_input_state(&vertex_input_info)
+            .input_assembly_state(&input_assembly)
+            .viewport_state(&viewport_state)
+            .rasterization_state(&rasterizer)
+            .multisample_state(&multisampling)
+            .color_blend_state(&color_blending)
+            .dynamic_state(&dynamic_state)
+            .depth_stencil_state(&depth_stencil_state)
+            .layout(layout.pipeline_layout)
+            .render_pass(render_target.render_pass);
+
+        match unsafe {
+            device_manager.device.create_graphics_pipelines(
+                vk::PipelineCache::null(),
+                &[pipeline_create_info],
+                None,
+            )
+        } {
+            Ok(pipeline) => Ok(Arc::new(Self {
+                device_manager,
+                layout,
+                handle: pipeline[0],
+                stages,
+            })),
+            Err(es) => {
+                log!("cannot create graphics pipeline: {}", es.1);
+                Err(CrystalError::CannotCreateRenderPass)
+            }
+        }
+    }
+}
+
+impl traits::Pipeline for VulkanPipeline {
+    fn as_vulkan(self: Arc<Self>) -> Option<Arc<VulkanPipeline>> {
+        Some(self)
     }
 }
