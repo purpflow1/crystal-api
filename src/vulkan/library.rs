@@ -39,7 +39,6 @@ pub struct VulkanEntry {
     presentation: Arc<Presentation>,
 
     render_thread_handle: Mutex<Option<JoinHandle<Result<(), (vk::Result, Arc<Mutex<GpuSync>>)>>>>,
-    render_sync: Arc<Mutex<GpuSync>>,
 
     pub render_targets: BTreeMap<u16, Arc<VulkanRenderTarget>>,
 }
@@ -55,7 +54,14 @@ impl Drop for VulkanEntry {
                 .get(&CommandType::Graphics)
                 .unwrap();
 
-            let now = graphics.now(self.render_sync.clone());
+            let now = graphics.now(
+                self.get_viewport()
+                    .clone()
+                    .as_vulkan()
+                    .unwrap()
+                    .sync
+                    .clone(),
+            );
             now.acquire_next_image(&self.presentation).unwrap();
         }
     }
@@ -189,11 +195,6 @@ impl VulkanEntry {
 
         render_targets.insert(0, viewport_render_target);
 
-        let render_sync = GpuSync::new(
-            device_manager.clone(),
-            presentation.swapchain.swapchain_info.image_count,
-        )?;
-
         Ok(Arc::new(Self {
             device_manager: device_manager.clone(),
             command_manager,
@@ -206,7 +207,6 @@ impl VulkanEntry {
             presentation,
 
             render_thread_handle: Mutex::new(None),
-            render_sync,
 
             render_targets,
         }))
@@ -283,7 +283,15 @@ impl VulkanEntry {
 
         let vk_pipeline = pipeline.as_vulkan().unwrap();
 
-        let now = compute.now(self.render_sync.clone());
+        let sync = self
+            .get_viewport()
+            .clone()
+            .as_vulkan()
+            .unwrap()
+            .sync
+            .clone();
+
+        let now = compute.now(sync.clone());
 
         let future = now.join(
             compute
@@ -307,7 +315,7 @@ impl VulkanEntry {
         );
 
         future.flush(compute.queue.clone()).unwrap();
-        self.render_sync.lock().unwrap().wait_transfer().unwrap();
+        sync.lock().unwrap().wait_transfer().unwrap();
 
         Ok(())
     }
@@ -320,8 +328,6 @@ impl VulkanEntry {
             .unwrap()
             .clone();
 
-        let now = graphics.now(self.render_sync.clone());
-
         let (swapchain_out_of_date, suboptimal) = self.wait_for_thread();
 
         #[cfg(debug_assertions)]
@@ -332,6 +338,9 @@ impl VulkanEntry {
             .clone()
             .as_vulkan()
             .expect("fatal: wrong type of RenderTarget, expected: VulkanRenderTarget");
+
+        let sync = render_target.sync.clone();
+        let now = graphics.now(sync.clone());
 
         if swapchain_out_of_date {
             self.presentation.swapchain.recreate(None)?;
@@ -386,7 +395,7 @@ impl VulkanEntry {
         let clear_values = &[clear_value_color, clear_value_stencil];
 
         let gpu_future = now.join(graphics.clone().record_command_buffer(
-            self.render_sync.clone(),
+            sync.clone(),
             |command_buffer, device, n_pass| {
                 let render_pass_begin = vk::RenderPassBeginInfo::default()
                     .render_pass(render_target.render_pass)
@@ -483,6 +492,11 @@ impl VulkanEntry {
         uniform_num: usize,
         storage_num: usize,
     ) -> CrystalResult<Arc<dyn Layout>> {
+        log!(
+            "creating layout [ double_buffering = {} ]",
+            double_buffering
+        );
+
         Ok(layout::VulkanLayout::new(
             self.device_manager.clone(),
             texture_num,
@@ -498,6 +512,12 @@ impl VulkanEntry {
         image: &Image2D,
         anisotropy_texels: f32,
     ) -> CrystalResult<Arc<GpuSampler>> {
+        log!(
+            "creating texture [ width = {}, height = {} ]",
+            image.width,
+            image.height,
+        );
+
         let texture = VulkanTexture::new(
             self.device_manager.clone(),
             image,
@@ -579,132 +599,172 @@ impl VulkanEntry {
         formatted
     }
 
-    pub fn write_buffer_to_screen(
+    // pub fn write_buffer_to_screen(
+    //     &self,
+    //     buffer: Vec<u8>,
+    //     coords: (u32, u32),
+    //     size: (u32, u32),
+    // ) -> CrystalResult<()> {
+    //     let buffer_info = BufferInfo {
+    //         size: buffer.len() as u64,
+    //         usage: vk::BufferUsageFlags::TRANSFER_SRC,
+    //         properties: vk::MemoryPropertyFlags::HOST_VISIBLE
+    //             | vk::MemoryPropertyFlags::HOST_COHERENT,
+    //     };
+
+    //     let staging_buffer = BufferManager::new(self.device_manager.clone(), buffer_info).unwrap();
+
+    //     staging_buffer.map_memory(buffer.len() as u64, 0).unwrap();
+    //     staging_buffer.write(&buffer, 0).unwrap();
+
+    //     let swapchain_images = unsafe {
+    //         self.presentation
+    //             .swapchain
+    //             .swapchain
+    //             .read()
+    //             .unwrap()
+    //             .get_swapchain_images(*self.presentation.swapchain.swapchain_khr.read().unwrap())
+    //     }
+    //     .unwrap();
+
+    //     let swapchain_image =
+    //         swapchain_images[self.render_sync.lock().unwrap().image_index as usize];
+
+    //     let command_entry = self
+    //         .command_manager
+    //         .command_entries
+    //         .get(&CommandType::Transfer)
+    //         .clone()
+    //         .unwrap();
+
+    //     let future = command_entry
+    //         .record_single_time_buffer(|command_buffer, device| {
+    //             let subresource_range = vk::ImageSubresourceRange {
+    //                 aspect_mask: vk::ImageAspectFlags::COLOR,
+    //                 base_mip_level: 0,
+    //                 level_count: 1,
+    //                 base_array_layer: 0,
+    //                 layer_count: 1,
+    //             };
+
+    //             // Transition image layout for transfer
+    //             let barrier = vk::ImageMemoryBarrier::default()
+    //                 .old_layout(vk::ImageLayout::UNDEFINED)
+    //                 .new_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
+    //                 .image(swapchain_image)
+    //                 .subresource_range(subresource_range)
+    //                 .src_access_mask(vk::AccessFlags::empty())
+    //                 .dst_access_mask(vk::AccessFlags::TRANSFER_WRITE);
+
+    //             unsafe {
+    //                 device.cmd_pipeline_barrier(
+    //                     *command_buffer,
+    //                     vk::PipelineStageFlags::TOP_OF_PIPE,
+    //                     vk::PipelineStageFlags::TRANSFER,
+    //                     vk::DependencyFlags::empty(),
+    //                     &[],
+    //                     &[],
+    //                     &[barrier],
+    //                 )
+    //             };
+
+    //             // Copy buffer to image
+    //             let region = vk::BufferImageCopy::default()
+    //                 .buffer_offset(0)
+    //                 .buffer_row_length(0)
+    //                 .buffer_image_height(0)
+    //                 .image_subresource(vk::ImageSubresourceLayers {
+    //                     aspect_mask: vk::ImageAspectFlags::COLOR,
+    //                     mip_level: 0,
+    //                     base_array_layer: 0,
+    //                     layer_count: 1,
+    //                 })
+    //                 .image_offset(vk::Offset3D {
+    //                     x: coords.0 as i32,
+    //                     y: coords.1 as i32,
+    //                     z: 0,
+    //                 })
+    //                 .image_extent(vk::Extent3D {
+    //                     width: size.0,
+    //                     height: size.1,
+    //                     depth: 1,
+    //                 });
+
+    //             unsafe {
+    //                 device.cmd_copy_buffer_to_image(
+    //                     *command_buffer,
+    //                     staging_buffer.get_handler(0),
+    //                     swapchain_image,
+    //                     vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+    //                     &[region],
+    //                 )
+    //             };
+
+    //             // Transition back for presentation
+    //             let barrier = vk::ImageMemoryBarrier::default()
+    //                 .old_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
+    //                 .new_layout(vk::ImageLayout::PRESENT_SRC_KHR)
+    //                 .image(swapchain_image)
+    //                 .subresource_range(subresource_range)
+    //                 .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
+    //                 .dst_access_mask(vk::AccessFlags::MEMORY_READ);
+
+    //             unsafe {
+    //                 device.cmd_pipeline_barrier(
+    //                     *command_buffer,
+    //                     vk::PipelineStageFlags::TRANSFER,
+    //                     vk::PipelineStageFlags::BOTTOM_OF_PIPE,
+    //                     vk::DependencyFlags::empty(),
+    //                     &[],
+    //                     &[],
+    //                     &[barrier],
+    //                 )
+    //             };
+    //         })
+    //         .unwrap();
+
+    //     future.flush(command_entry.queue.clone()).unwrap();
+
+    //     Ok(())
+    // }
+
+    pub fn create_buffer(
         &self,
-        buffer: Vec<u8>,
-        coords: (u32, u32),
-        size: (u32, u32),
-    ) -> CrystalResult<()> {
+        size: u64,
+        uniform: bool,
+        transfer: bool,
+        enable_sync: bool,
+    ) -> CrystalResult<Arc<dyn traits::Buffer>> {
+        let mut usage = vk::BufferUsageFlags::STORAGE_BUFFER;
+
+        if uniform {
+            usage = vk::BufferUsageFlags::UNIFORM_BUFFER;
+        }
+
+        if transfer {
+            usage |= vk::BufferUsageFlags::TRANSFER_DST
+        }
+
         let buffer_info = BufferInfo {
-            size: buffer.len() as u64,
-            usage: vk::BufferUsageFlags::TRANSFER_SRC,
+            size,
+            usage,
             properties: vk::MemoryPropertyFlags::HOST_VISIBLE
                 | vk::MemoryPropertyFlags::HOST_COHERENT,
+            count: 1,
         };
 
-        let staging_buffer = BufferManager::new(self.device_manager.clone(), buffer_info).unwrap();
+        let render_target = self.get_viewport().clone().as_vulkan().unwrap();
 
-        staging_buffer.map_memory(buffer.len() as u64, 0).unwrap();
-        staging_buffer.write(&buffer, 0).unwrap();
+        let buffer_manager = BufferManager::new(
+            self.device_manager.clone(),
+            buffer_info,
+            if enable_sync {
+                Some(render_target.sync.clone())
+            } else {
+                None
+            },
+        )?;
 
-        let swapchain_images = unsafe {
-            self.presentation
-                .swapchain
-                .swapchain
-                .read()
-                .unwrap()
-                .get_swapchain_images(*self.presentation.swapchain.swapchain_khr.read().unwrap())
-        }
-        .unwrap();
-
-        let swapchain_image =
-            swapchain_images[self.render_sync.lock().unwrap().image_index as usize];
-
-        let command_entry = self
-            .command_manager
-            .command_entries
-            .get(&CommandType::Transfer)
-            .clone()
-            .unwrap();
-
-        let future = command_entry
-            .record_single_time_buffer(|command_buffer, device| {
-                let subresource_range = vk::ImageSubresourceRange {
-                    aspect_mask: vk::ImageAspectFlags::COLOR,
-                    base_mip_level: 0,
-                    level_count: 1,
-                    base_array_layer: 0,
-                    layer_count: 1,
-                };
-
-                // Transition image layout for transfer
-                let barrier = vk::ImageMemoryBarrier::default()
-                    .old_layout(vk::ImageLayout::UNDEFINED)
-                    .new_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
-                    .image(swapchain_image)
-                    .subresource_range(subresource_range)
-                    .src_access_mask(vk::AccessFlags::empty())
-                    .dst_access_mask(vk::AccessFlags::TRANSFER_WRITE);
-
-                unsafe {
-                    device.cmd_pipeline_barrier(
-                        *command_buffer,
-                        vk::PipelineStageFlags::TOP_OF_PIPE,
-                        vk::PipelineStageFlags::TRANSFER,
-                        vk::DependencyFlags::empty(),
-                        &[],
-                        &[],
-                        &[barrier],
-                    )
-                };
-
-                // Copy buffer to image
-                let region = vk::BufferImageCopy::default()
-                    .buffer_offset(0)
-                    .buffer_row_length(0)
-                    .buffer_image_height(0)
-                    .image_subresource(vk::ImageSubresourceLayers {
-                        aspect_mask: vk::ImageAspectFlags::COLOR,
-                        mip_level: 0,
-                        base_array_layer: 0,
-                        layer_count: 1,
-                    })
-                    .image_offset(vk::Offset3D {
-                        x: coords.0 as i32,
-                        y: coords.1 as i32,
-                        z: 0,
-                    })
-                    .image_extent(vk::Extent3D {
-                        width: size.0,
-                        height: size.1,
-                        depth: 1,
-                    });
-
-                unsafe {
-                    device.cmd_copy_buffer_to_image(
-                        *command_buffer,
-                        staging_buffer.buffer,
-                        swapchain_image,
-                        vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                        &[region],
-                    )
-                };
-
-                // Transition back for presentation
-                let barrier = vk::ImageMemoryBarrier::default()
-                    .old_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
-                    .new_layout(vk::ImageLayout::PRESENT_SRC_KHR)
-                    .image(swapchain_image)
-                    .subresource_range(subresource_range)
-                    .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
-                    .dst_access_mask(vk::AccessFlags::MEMORY_READ);
-
-                unsafe {
-                    device.cmd_pipeline_barrier(
-                        *command_buffer,
-                        vk::PipelineStageFlags::TRANSFER,
-                        vk::PipelineStageFlags::BOTTOM_OF_PIPE,
-                        vk::DependencyFlags::empty(),
-                        &[],
-                        &[],
-                        &[barrier],
-                    )
-                };
-            })
-            .unwrap();
-
-        future.flush(command_entry.queue.clone()).unwrap();
-
-        Ok(())
+        Ok(buffer_manager)
     }
 }

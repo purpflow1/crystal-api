@@ -3,6 +3,7 @@ use std::sync::{Arc, RwLock};
 use ash::vk;
 
 use crate::{
+    Buffer,
     debug::log,
     errors::{CrystalError, CrystalResult},
     images::Image2D,
@@ -180,13 +181,15 @@ impl VulkanTexture {
             usage: vk::BufferUsageFlags::TRANSFER_SRC,
             properties: vk::MemoryPropertyFlags::HOST_VISIBLE
                 | vk::MemoryPropertyFlags::HOST_COHERENT,
+            count: 1,
         };
 
-        let buffer_manager = BufferManager::new(device_manager.clone(), buffer_info)?;
-
-        buffer_manager.map_memory(image_size, 0).unwrap();
-        buffer_manager.write(&image.pixels, 0)?;
-        buffer_manager.unmap_memory().unwrap();
+        let buffer_manager = BufferManager::new(device_manager.clone(), buffer_info, None)?;
+        buffer_manager
+            .get_memory()
+            .lock()
+            .unwrap()
+            .copy_from_slice(&image.pixels);
 
         let format = match image.channels {
             1 => vk::Format::R8_SRGB,
@@ -415,7 +418,7 @@ impl VulkanTexture {
             unsafe {
                 device.cmd_copy_buffer_to_image(
                     *command_buffer,
-                    self.staging_buffer_manager.buffer,
+                    self.staging_buffer_manager.get_handlers()[0],
                     self.image.image,
                     vk::ImageLayout::TRANSFER_DST_OPTIMAL,
                     &[region],

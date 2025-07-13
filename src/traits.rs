@@ -1,9 +1,6 @@
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
-use crate::{
-    errors::CrystalResult, gpu_data::IntoGpuBuffer, mesh::Attribute, object::Object,
-    shader::Shader, vulkan,
-};
+use crate::{errors::CrystalResult, mesh::Attribute, object::Object, shader::Shader, vulkan};
 
 pub trait RenderTarget: Sync + Send {
     fn as_vulkan(self: Arc<Self>) -> Option<Arc<vulkan::VulkanRenderTarget>> {
@@ -15,8 +12,6 @@ pub trait Layout: Sync + Send {
     fn as_vulkan(self: Arc<Self>) -> Option<Arc<vulkan::VulkanLayout>> {
         None
     }
-
-    fn flush_buffer_tasks(self: Arc<Self>) -> CrystalResult<usize>;
 
     fn create_graphics_pipeline(
         self: Arc<Self>,
@@ -30,14 +25,8 @@ pub trait Layout: Sync + Send {
         shader: &Shader,
     ) -> CrystalResult<Arc<dyn Pipeline>>;
 
-    fn add_buffer(
-        &self,
-        binding: usize,
-        is_uniform: bool,
-        data: Arc<dyn IntoGpuBuffer>,
-    ) -> CrystalResult<()>;
-
     fn register_samplers(&self, objects: &[Arc<Object>]) -> CrystalResult<()>;
+    fn add_buffer(&self, binding: u32, buffer: Arc<dyn Buffer>) -> CrystalResult<()>;
 }
 
 pub trait Texture: Sync + Send {
@@ -60,4 +49,17 @@ pub trait Pipeline: Sync + Send {
     fn as_vulkan(self: Arc<Self>) -> Option<Arc<vulkan::VulkanPipeline>> {
         None
     }
+}
+
+pub trait GpuVec {
+    fn copy_from_slice(&mut self, data: &[u8]);
+    fn read(&self) -> &[u8];
+}
+
+pub trait Buffer: Sync + Send {
+    fn as_vulkan(self: Arc<Self>) -> Option<Arc<vulkan::BufferManager>> {
+        None
+    }
+
+    fn get_memory(&self) -> Arc<Mutex<dyn GpuVec>>;
 }

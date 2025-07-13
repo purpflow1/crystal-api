@@ -1,31 +1,25 @@
 use std::{
-    collections::{BTreeMap, VecDeque},
+    collections::BTreeMap,
     ffi::CString,
     hash::Hash,
     iter::zip,
     sync::{Arc, Mutex, MutexGuard, RwLock},
-    thread::JoinHandle,
 };
 
 use ash::vk::{self, Handle};
-use pollster::FutureExt;
 
 use crate::{
-    GpuSampler, RenderTarget, Shader, ShaderStage,
+    Buffer, GpuSampler, RenderTarget, Shader, ShaderStage,
     debug::log,
     errors::{CrystalError, CrystalResult},
-    gpu_data::{IntoGpuBuffer, IntoGpuTexture, PtrHandler},
+    gpu_data::IntoGpuTexture,
     mesh::{Attribute, VertexTexture},
     object::Object,
     traits,
     vulkan::VulkanTexture,
 };
 
-use super::{
-    VulkanRenderTarget,
-    devices::DeviceManager,
-    memory::{BufferInfo, BufferManager},
-};
+use super::{VulkanRenderTarget, devices::DeviceManager};
 
 struct LayoutDynamicData {
     device_manager: Arc<DeviceManager>,
@@ -38,10 +32,7 @@ struct LayoutDynamicData {
     double_buffering: bool,
 
     sampler_binding_data: BTreeMap<usize, (Arc<VulkanTexture>, Arc<RwLock<bool>>)>,
-    buffer_managers_sets: BTreeMap<usize, (Vec<Arc<BufferManager>>, Arc<dyn IntoGpuBuffer>)>,
     samplers: BTreeMap<u32, vk::Sampler>,
-
-    buffer_tasks_thread_handle: Option<JoinHandle<()>>,
 }
 
 unsafe impl Sync for LayoutDynamicData {}
@@ -59,14 +50,6 @@ impl Drop for LayoutDynamicData {
 
 impl LayoutDynamicData {
     fn update_data(&mut self) -> CrystalResult<usize> {
-        if let Some(_handle) = &self.buffer_tasks_thread_handle {
-            self.buffer_tasks_thread_handle
-                .take()
-                .unwrap()
-                .join()
-                .unwrap();
-        }
-
         let indices_to_clean: Vec<usize> = self
             .sampler_binding_data
             .iter()
@@ -74,54 +57,14 @@ impl LayoutDynamicData {
             .map(|(ind, _)| *ind)
             .collect();
 
-        for ind in indices_to_clean {
-            self.sampler_binding_data.remove(&ind);
+        for ind in &indices_to_clean {
+            self.sampler_binding_data.remove(ind);
         }
 
-        let mut buffer_tasks = VecDeque::new();
-
-        let indices_to_clean: Vec<usize> = self
-            .buffer_managers_sets
-            .iter()
-            .filter(|(_, (buffers, gpu_buffer))| {
-                let ptr = gpu_buffer.get_ptr();
-                let mut ptr = ptr.0.write().unwrap();
-
-                if ptr.is_null() {
-                    true
-                } else {
-                    *ptr =
-                        (*buffers[self.n_pass].mapped_memory.read().unwrap()).unwrap() as *mut u8;
-                    for task in gpu_buffer.query_tasks() {
-                        buffer_tasks.push_back((task, PtrHandler(RwLock::new(*ptr))));
-                    }
-
-                    false
-                }
-            })
-            .map(|(ind, _)| *ind)
-            .collect();
-
-        let result = indices_to_clean.len() + buffer_tasks.len();
-
-        for ind in indices_to_clean {
-            self.buffer_managers_sets.remove(&ind);
-        }
-
-        let handle = std::thread::spawn(move || {
-            while let Some((task, ptr)) = buffer_tasks.pop_front() {
-                let ptr_lock = ptr.0.read().unwrap();
-                if !ptr_lock.is_null() {
-                    task.flush((*ptr_lock) as *mut u8).block_on();
-                }
-            }
-        });
+        let result = indices_to_clean.len();
 
         if self.double_buffering {
             self.n_pass = (self.n_pass + 1) % 2;
-            self.buffer_tasks_thread_handle = Some(handle);
-        } else {
-            handle.join().unwrap()
         }
 
         Ok(result)
@@ -213,68 +156,30 @@ impl LayoutDynamicData {
         Ok(())
     }
 
-    fn add_buffer(
-        &mut self,
-        binding: usize,
-        is_uniform: bool,
-        data: Arc<dyn crate::gpu_data::IntoGpuBuffer>,
-    ) -> CrystalResult<()> {
-        let size = data.size() as u64;
+    fn add_buffer(&mut self, binding: u32, buffer: Arc<dyn Buffer>) -> CrystalResult<()> {
+        let buffer = buffer.as_vulkan().clone().unwrap();
 
-        let (descriptor_type, mut buffer_usage) = if is_uniform {
-            (
-                vk::DescriptorType::UNIFORM_BUFFER,
-                vk::BufferUsageFlags::UNIFORM_BUFFER,
-            )
+        let size = buffer.info.size;
+        let buffer_usage = buffer.info.usage;
+
+        let descriptor_type = if buffer_usage.contains(vk::BufferUsageFlags::UNIFORM_BUFFER) {
+            vk::DescriptorType::UNIFORM_BUFFER
         } else {
-            (
-                vk::DescriptorType::STORAGE_BUFFER,
-                vk::BufferUsageFlags::STORAGE_BUFFER,
-            )
+            vk::DescriptorType::STORAGE_BUFFER
         };
 
-        if data.is_transfer() {
-            buffer_usage |= vk::BufferUsageFlags::TRANSFER_DST;
-        }
-
-        let idx = (0..usize::MAX)
-            .find(|idx| {
-                self.buffer_managers_sets
-                    .iter()
-                    .find(|(x, _)| **x == *idx)
-                    .is_none()
-            })
-            .unwrap();
-
-        let mut buffers = vec![];
-
-        for buffer_idx in 0..if self.double_buffering { 2 } else { 1 } {
-            let buffer_info = BufferInfo {
-                size,
-                usage: buffer_usage,
-                properties: vk::MemoryPropertyFlags::HOST_VISIBLE
-                    | vk::MemoryPropertyFlags::HOST_COHERENT,
-            };
-
-            // TODO Make abstracted GPU buffer for shared use in different shaders
-            let buffer_manager = BufferManager::new(self.device_manager.clone(), buffer_info)?;
-
-            let ptr = buffer_manager.map_memory(size, 0)?;
-            buffers.push(buffer_manager.clone());
-
-            *data.get_ptr().0.write().unwrap() = ptr;
-
-            let uniform_buffer_info = vk::DescriptorBufferInfo::default()
-                .buffer(buffer_manager.buffer)
+        for (idx, buffer_handler) in buffer.get_handlers().iter().enumerate() {
+            let buffer_info = vk::DescriptorBufferInfo::default()
+                .buffer(*buffer_handler)
                 .offset(0)
                 .range(size);
 
-            let buffer_infos = &[uniform_buffer_info];
+            let buffer_infos = &[buffer_info];
 
-            let descriptor_set = if is_uniform {
-                self.uniform_descriptor_sets[buffer_idx]
+            let descriptor_set = if buffer_usage.contains(vk::BufferUsageFlags::UNIFORM_BUFFER) {
+                self.uniform_descriptor_sets[idx]
             } else {
-                self.storage_descriptor_sets[buffer_idx]
+                self.storage_descriptor_sets[idx]
             };
 
             let descriptor_write = vk::WriteDescriptorSet::default()
@@ -292,24 +197,35 @@ impl LayoutDynamicData {
             };
         }
 
-        let tasks = data.query_tasks();
+        // TODO check working
+        if buffer.info.count == 1 && self.double_buffering {
+            let descriptor_set = if buffer_usage.contains(vk::BufferUsageFlags::UNIFORM_BUFFER) {
+                self.uniform_descriptor_sets[1]
+            } else {
+                self.storage_descriptor_sets[1]
+            };
 
-        if self.double_buffering {
-            let ptr = (*buffers[1].mapped_memory.read().unwrap()).unwrap() as *mut u8;
+            let buffer_info = vk::DescriptorBufferInfo::default()
+                .buffer(buffer.get_handlers()[0])
+                .offset(0)
+                .range(size);
 
-            for task in tasks.clone() {
-                task.flush(ptr).block_on();
-            }
+            let buffer_infos = &[buffer_info];
+
+            let descriptor_write = vk::WriteDescriptorSet::default()
+                .dst_set(descriptor_set)
+                .dst_binding(binding as u32)
+                .dst_array_element(0)
+                .descriptor_type(descriptor_type)
+                .descriptor_count(1)
+                .buffer_info(buffer_infos);
+
+            unsafe {
+                self.device_manager
+                    .device
+                    .update_descriptor_sets(&[descriptor_write], &[])
+            };
         }
-
-        let ptr = (*buffers[0].mapped_memory.read().unwrap()).unwrap() as *mut u8;
-
-        for task in tasks {
-            task.flush(ptr).block_on();
-        }
-
-        let to_push = (buffers, data);
-        self.buffer_managers_sets.insert(idx, to_push);
 
         Ok(())
     }
@@ -378,19 +294,9 @@ impl traits::Layout for VulkanLayout {
         Some(self)
     }
 
-    fn flush_buffer_tasks(self: Arc<Self>) -> CrystalResult<usize> {
-        let mut dynamic_data = self.dynamic_data.lock().unwrap();
-        dynamic_data.update_data()
-    }
-
-    fn add_buffer(
-        &self,
-        binding: usize,
-        is_uniform: bool,
-        data: Arc<dyn crate::gpu_data::IntoGpuBuffer>,
-    ) -> CrystalResult<()> {
-        let mut dynamic_data = self.dynamic_data.lock().unwrap();
-        dynamic_data.add_buffer(binding, is_uniform, data)
+    fn add_buffer(&self, binding: u32, buffer: Arc<dyn Buffer>) -> CrystalResult<()> {
+        let mut lock = self.dynamic_data.lock().unwrap();
+        lock.add_buffer(binding, buffer)
     }
 
     fn register_samplers(&self, objects: &[Arc<Object>]) -> CrystalResult<()> {
@@ -673,9 +579,7 @@ impl VulkanLayout {
 
                 sampler_binding_data: BTreeMap::new(),
 
-                buffer_managers_sets: BTreeMap::new(),
                 samplers: BTreeMap::new(),
-                buffer_tasks_thread_handle: None,
             }),
         }))
     }
@@ -693,7 +597,7 @@ impl VulkanLayout {
         objects: &[Arc<Object>],
         command_buffer: &vk::CommandBuffer,
     ) -> CrystalResult<()> {
-        let dynamic_data = self.dynamic_data.lock().unwrap();
+        let mut dynamic_data = self.dynamic_data.lock().unwrap();
         let device_manager = dynamic_data.device_manager.clone();
 
         unsafe {
@@ -739,8 +643,8 @@ impl VulkanLayout {
                 .as_vulkan_ref()
                 .unwrap();
 
-            let index_buffer = vulkan_memory_manager.index_buffer_manager.buffer;
-            let vertex_buffer = vulkan_memory_manager.vertex_buffer_manager.buffer;
+            let index_buffer = vulkan_memory_manager.index_buffer_manager.get_handlers()[0];
+            let vertex_buffer = vulkan_memory_manager.vertex_buffer_manager.get_handlers()[0];
 
             unsafe {
                 device_manager.device.cmd_bind_pipeline(
@@ -779,6 +683,8 @@ impl VulkanLayout {
                 )
             }
         }
+
+        dynamic_data.update_data().unwrap();
 
         Ok(())
     }
@@ -888,6 +794,8 @@ impl VulkanPipeline {
         layout: Arc<VulkanLayout>,
         shader: &Shader,
     ) -> CrystalResult<Arc<Self>> {
+        log!("creating compute pipeline");
+
         let stage = match shader.stage {
             ShaderStage::Compute => vk::ShaderStageFlags::COMPUTE,
             _ => {
@@ -953,6 +861,8 @@ impl VulkanPipeline {
         attributes: &[Attribute],
         render_target: Arc<VulkanRenderTarget>,
     ) -> CrystalResult<Arc<Self>> {
+        log!("creating graphics pipeline");
+
         if shaders.is_empty() {
             log!("no shaders specified");
             return Err(CrystalError::ShaderError);

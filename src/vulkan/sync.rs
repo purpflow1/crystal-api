@@ -25,7 +25,7 @@ pub struct GpuSync {
     pub device_manager: Arc<DeviceManager>,
     barriers: Barriers,
     n_pass: usize,
-    odd_pass: usize,
+    pub odd_pass: usize,
     pub image_index: u32,
 }
 
@@ -157,14 +157,14 @@ impl GpuSync {
                 fence_transfer,
             },
             n_pass,
-            odd_pass: 1,
+            odd_pass: 0,
             image_index: 0,
         })))
     }
 
     pub fn unflip(&mut self) {
         self.n_pass = self.barriers.semaphore_image.len() - 1;
-        self.odd_pass = 1;
+        self.odd_pass = 0;
     }
 
     pub fn flip(&mut self) {

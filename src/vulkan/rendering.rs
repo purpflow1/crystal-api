@@ -1,6 +1,6 @@
 use std::{
     iter::zip,
-    sync::{Arc, RwLock},
+    sync::{Arc, Mutex, RwLock},
 };
 
 use ash::vk;
@@ -15,6 +15,7 @@ use super::{
     depth::{DepthResources, find_depth_format},
     devices::DeviceManager,
     images::Image,
+    sync::GpuSync,
 };
 
 pub struct VulkanRenderTarget {
@@ -28,6 +29,8 @@ pub struct VulkanRenderTarget {
 
     pub msaa_samples: vk::SampleCountFlags,
     image_format: vk::Format,
+
+    pub sync: Arc<Mutex<GpuSync>>,
 }
 
 impl Drop for VulkanRenderTarget {
@@ -302,6 +305,8 @@ impl VulkanRenderTarget {
             }
         };
 
+        let sync = GpuSync::new(device_manager.clone(), images.len() as u32)?;
+
         let (framebuffers, depth_resources, color_images) = Self::create_resources(
             device_manager.clone(),
             image_format,
@@ -325,6 +330,8 @@ impl VulkanRenderTarget {
 
             msaa_samples: samples,
             image_format,
+
+            sync,
         }))
     }
 }

@@ -2,9 +2,11 @@ use std::sync::Arc;
 
 use ash::vk;
 
+use crate::debug::log;
 use crate::errors::CrystalResult;
+use crate::gpu_data::AsBytes;
 use crate::mesh::{Index, VertexTexture};
-use crate::traits;
+use crate::{Buffer, traits};
 
 use super::devices::DeviceManager;
 use super::memory::{BufferInfo, BufferManager};
@@ -31,31 +33,39 @@ impl VulkanObjectMemoryManager {
         indices: &[Index],
     ) -> CrystalResult<Box<dyn traits::ObjectMemoryManager>> {
         let vertex_size = (vertices.len() * size_of::<VertexTexture>()) as u64;
+        let index_size = (indices.len() * size_of::<Index>()) as u64;
+        log!(
+            "creating object data of {:.1} MB",
+            (vertex_size + index_size) as f32 / 1024. / 1024.
+        );
 
         let mut buffer_info = BufferInfo {
             size: vertex_size,
             usage: vk::BufferUsageFlags::VERTEX_BUFFER,
             properties: vk::MemoryPropertyFlags::HOST_VISIBLE
                 | vk::MemoryPropertyFlags::HOST_COHERENT,
+            count: 1,
         };
 
         let vertex_buffer_manager =
-            BufferManager::new(device_manager.clone(), buffer_info.clone())?;
+            BufferManager::new(device_manager.clone(), buffer_info.clone(), None)?;
 
-        vertex_buffer_manager.map_memory(vertex_size, 0).unwrap();
-        vertex_buffer_manager.write(vertices, 0)?;
-        vertex_buffer_manager.unmap_memory().unwrap();
-
-        let index_size = (indices.len() * size_of::<Index>()) as u64;
+        vertex_buffer_manager
+            .get_memory()
+            .lock()
+            .unwrap()
+            .copy_from_slice(vertices.as_bytes());
 
         buffer_info.usage = vk::BufferUsageFlags::INDEX_BUFFER;
         buffer_info.size = index_size;
 
-        let index_buffer_manager = BufferManager::new(device_manager.clone(), buffer_info)?;
+        let index_buffer_manager = BufferManager::new(device_manager.clone(), buffer_info, None)?;
 
-        index_buffer_manager.map_memory(index_size, 0).unwrap();
-        index_buffer_manager.write(indices, 0)?;
-        index_buffer_manager.unmap_memory().unwrap();
+        index_buffer_manager
+            .get_memory()
+            .lock()
+            .unwrap()
+            .copy_from_slice(indices.as_bytes());
 
         Ok(Box::new(Self {
             vertex_buffer_manager,

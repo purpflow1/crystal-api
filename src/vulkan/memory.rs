@@ -1,6 +1,6 @@
 use std::{
-    ffi::c_void,
-    sync::{Arc, RwLock},
+    mem::ManuallyDrop,
+    sync::{Arc, Mutex},
 };
 
 use ash::vk;
@@ -8,44 +8,57 @@ use ash::vk;
 use crate::{
     debug::log,
     errors::{CrystalError, CrystalResult},
+    traits,
 };
 
-use super::devices::DeviceManager;
+use super::{devices::DeviceManager, sync::GpuSync};
+
+#[repr(transparent)]
+pub struct VulkanGpuVec(ManuallyDrop<Vec<u8>>);
+
+impl traits::GpuVec for VulkanGpuVec {
+    fn copy_from_slice(&mut self, data: &[u8]) {
+        (self.0[0..data.len()]).copy_from_slice(data);
+    }
+
+    fn read(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl VulkanGpuVec {
+    pub(crate) fn from_raw(ptr: *mut u8, size: usize) -> Self {
+        let tmp = unsafe { Vec::from_raw_parts(ptr, size, size) };
+        Self(ManuallyDrop::new(tmp))
+    }
+
+    pub(crate) fn is_null(&self) -> bool {
+        self.0.capacity() == 0
+    }
+
+    pub(crate) fn empty() -> Self {
+        let tmp = Vec::with_capacity(0);
+        Self(ManuallyDrop::new(tmp))
+    }
+}
 
 #[derive(Clone)]
 pub struct BufferInfo {
     pub size: u64,
     pub usage: vk::BufferUsageFlags,
     pub properties: vk::MemoryPropertyFlags,
+    pub count: usize,
 }
 
-pub struct BufferManager {
+pub struct BufferData {
     device_manager: Arc<DeviceManager>,
-    pub buffer: vk::Buffer,
-    device_memory: vk::DeviceMemory,
-    pub mapped_memory: RwLock<Option<*mut c_void>>,
-    info: BufferInfo,
+    handler: vk::Buffer,
+    memory: vk::DeviceMemory,
+    mapped: Arc<Mutex<VulkanGpuVec>>,
 }
 
-unsafe impl Sync for BufferManager {}
-unsafe impl Send for BufferManager {}
-
-impl Drop for BufferManager {
-    fn drop(&mut self) {
-        unsafe {
-            self.device_manager.device.destroy_buffer(self.buffer, None);
-            self.device_manager
-                .device
-                .free_memory(self.device_memory, None);
-        }
-    }
-}
-
-impl BufferManager {
-    pub(crate) fn new(
-        device_manager: Arc<DeviceManager>,
-        info: BufferInfo,
-    ) -> CrystalResult<Arc<Self>> {
+impl BufferData {
+    fn new(device_manager: Arc<DeviceManager>, info: BufferInfo) -> CrystalResult<Self> {
         let create_info = vk::BufferCreateInfo::default()
             .size(info.size)
             .usage(info.usage)
@@ -93,78 +106,105 @@ impl BufferManager {
             }
         };
 
-        Ok(Arc::new(Self {
+        Ok(Self {
             device_manager,
-            buffer,
-            device_memory,
-            mapped_memory: RwLock::new(None),
-            info,
-        }))
+            handler: buffer,
+            memory: device_memory,
+            mapped: Arc::new(Mutex::new(VulkanGpuVec::empty())),
+        })
     }
 
-    pub fn map_memory(&self, size: u64, offset: u64) -> CrystalResult<*mut u8> {
-        let mut mapped_memory = self.mapped_memory.write().unwrap();
+    fn map_memory(&self, size: u64, offset: u64) -> CrystalResult<Arc<Mutex<dyn traits::GpuVec>>> {
+        let mut mapped = self.mapped.lock().unwrap();
 
-        if mapped_memory.is_some() {
-            unsafe { self.device_manager.device.unmap_memory(self.device_memory) };
+        if !mapped.is_null() {
+            drop(mapped);
+            return Ok(self.mapped.clone());
         }
 
-        *mapped_memory = match unsafe {
+        let ptr = match unsafe {
             self.device_manager.device.map_memory(
-                self.device_memory,
+                self.memory,
                 offset,
                 size,
                 vk::MemoryMapFlags::empty(),
             )
         } {
-            Ok(ptr) => Some(ptr),
+            Ok(ptr) => ptr as *mut u8,
             Err(e) => {
                 log!("cannot map memory: {}", e);
                 return Err(CrystalError::MemoryError);
             }
         };
 
-        Ok(mapped_memory.unwrap() as *mut u8)
+        *mapped = VulkanGpuVec::from_raw(ptr, size as usize);
+        drop(mapped);
+
+        Ok(self.mapped.clone())
+    }
+}
+
+pub struct BufferManager {
+    device_manager: Arc<DeviceManager>,
+    buffer_data: Vec<BufferData>,
+    pub info: BufferInfo,
+    sync: Arc<Mutex<GpuSync>>,
+}
+
+unsafe impl Sync for BufferManager {}
+unsafe impl Send for BufferManager {}
+
+impl Drop for BufferManager {
+    fn drop(&mut self) {
+        for buffer_data in &self.buffer_data {
+            unsafe {
+                self.device_manager
+                    .device
+                    .destroy_buffer(buffer_data.handler, None);
+                self.device_manager
+                    .device
+                    .free_memory(buffer_data.memory, None);
+            }
+        }
+    }
+}
+
+impl traits::Buffer for BufferManager {
+    fn as_vulkan(self: Arc<Self>) -> Option<Arc<super::BufferManager>> {
+        Some(self.clone())
     }
 
-    pub fn unmap_memory(&self) -> CrystalResult<()> {
-        let mut mapped = self.mapped_memory.write().unwrap();
-        if mapped.is_some() {
-            unsafe { self.device_manager.device.unmap_memory(self.device_memory) };
-            *mapped = None;
-            Ok(())
+    fn get_memory(&self) -> Arc<Mutex<dyn traits::GpuVec>> {
+        let lock = self.sync.lock().unwrap();
+        let idx = if self.info.count > 1 {
+            lock.odd_pass
         } else {
-            Err(CrystalError::MemoryError)
-        }
+            0
+        };
+        self.buffer_data[idx]
+            .map_memory(self.info.size, 0)
+            .expect("fatal: vulkan memory mapping error")
+    }
+}
+
+impl BufferManager {
+    pub(crate) fn new(
+        device_manager: Arc<DeviceManager>,
+        info: BufferInfo,
+        sync: Option<Arc<Mutex<GpuSync>>>,
+    ) -> CrystalResult<Arc<Self>> {
+        let buffer_data = (0..info.count)
+            .map(|_| BufferData::new(device_manager.clone(), info.clone()).unwrap())
+            .collect();
+        Ok(Arc::new(Self {
+            device_manager: device_manager.clone(),
+            buffer_data,
+            info,
+            sync: sync.unwrap_or(GpuSync::no_sync(device_manager)),
+        }))
     }
 
-    pub fn write<T: Copy>(&self, data: &[T], offset: usize) -> CrystalResult<()> {
-        let size = data.len() * size_of::<T>();
-
-        assert!(
-            size + offset <= self.info.size as usize,
-            "fatal: copying outside of buffer size: {} > {}",
-            size + offset,
-            self.info.size
-        );
-
-        let lock = self.mapped_memory.read().unwrap();
-
-        let mapped_memory = lock.unwrap_or(std::ptr::null_mut() as *mut c_void);
-
-        assert!(
-            !mapped_memory.is_null(),
-            "fatal: trying to write to unmapped buffer"
-        );
-
-        unsafe {
-            let ptr = mapped_memory.byte_add(offset * size_of::<T>());
-            ptr.copy_from(
-                data.as_ptr() as *const std::ffi::c_void,
-                data.len() * size_of::<T>(),
-            );
-        }
-
-        Ok(())
+    pub fn get_handlers(&self) -> Vec<vk::Buffer> {
+        self.buffer_data.iter().map(|buf| buf.handler).collect()
     }
 }

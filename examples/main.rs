@@ -76,14 +76,14 @@ struct Uniform {
 struct Scene {
     camera: Camera,
 
-    light: Arc<GpuVec<[f32; 3]>>,
-    light_info: Arc<GpuVec<[u32; 3]>>,
+    light: Arc<dyn Buffer>,
+    light_info: Arc<dyn Buffer>,
 
-    uniform: Arc<GpuVec<Uniform>>,
-    transforms: Arc<GpuVec<glam::Mat4>>,
+    uniform: Arc<dyn Buffer>,
+    transforms: Arc<dyn Buffer>,
 
-    compute_buffer_in: Arc<GpuVec<Particle>>,
-    compute_buffer_out: Arc<GpuVec<Particle>>,
+    compute_buffer_in: Arc<dyn Buffer>,
+    compute_buffer_out: Arc<dyn Buffer>,
 
     objects: Vec<Arc<Object>>,
 }
@@ -133,13 +133,13 @@ impl Context {
                     ),
                 },
 
-                light: GpuVec::with_len(60),
-                light_info: GpuVec::with_len(3),
-                transforms: GpuVec::with_len(MAX_INSTANCE_NUM),
-                compute_buffer_in: GpuVec::with_len(256),
-                compute_buffer_out: GpuVec::with_len_transfer(256),
+                uniform: EmptyBuffer::new(),
+                light: EmptyBuffer::new(),
+                light_info: EmptyBuffer::new(),
+                transforms: EmptyBuffer::new(),
+                compute_buffer_in: EmptyBuffer::new(),
+                compute_buffer_out: EmptyBuffer::new(),
 
-                uniform: GpuVec::with_len(1),
                 objects: vec![],
             },
 
@@ -195,24 +195,86 @@ impl ApplicationHandler for Context {
         let test_sampler = graphics.create_sampler(&test_texture_image, 1.0).unwrap();
 
         let layout_obj = graphics.create_layout(true, 2, 3, 1, 3).unwrap();
+        let layout_compute = graphics.create_layout(false, 0, 0, 1, 2).unwrap();
+
+        let uniform = graphics
+            .create_buffer(size_of::<Uniform>() as u64, true, false, true)
+            .unwrap();
+        let transform = graphics
+            .create_buffer(
+                (size_of::<glam::Mat4>() * MAX_INSTANCE_NUM) as u64,
+                false,
+                false,
+                true,
+            )
+            .unwrap();
+        let light = graphics
+            .create_buffer(size_of::<[f32; 3]>() as u64 * 60, false, false, true)
+            .unwrap();
+        let light_info = graphics
+            .create_buffer(size_of::<[u32; 3]>() as u64 * 3, false, false, true)
+            .unwrap();
+
+        let compute_buffer_in = graphics
+            .create_buffer(size_of::<Particle>() as u64 * 256, false, false, false)
+            .unwrap();
+        let compute_buffer_out = graphics
+            .create_buffer(size_of::<Particle>() as u64 * 256, false, true, false)
+            .unwrap();
+
+        layout_obj.add_buffer(0, uniform.clone()).unwrap();
+        layout_obj.add_buffer(0, transform.clone()).unwrap();
+        layout_obj.add_buffer(1, light.clone()).unwrap();
+        layout_obj.add_buffer(2, light_info.clone()).unwrap();
+        layout_compute.add_buffer(0, uniform.clone()).unwrap();
+        layout_compute
+            .add_buffer(0, compute_buffer_in.clone())
+            .unwrap();
+        layout_compute
+            .add_buffer(1, compute_buffer_out.clone())
+            .unwrap();
+
+        self.scene.uniform = uniform;
+        self.scene.transforms = transform;
+        self.scene.light = light;
+        self.scene.light_info = light_info;
+        self.scene.compute_buffer_in = compute_buffer_in;
+        self.scene.compute_buffer_out = compute_buffer_out;
 
         self.scene
             .light
-            .clone_from_slice(&[[1., 1., 1.], [1., 1., 1.]]);
-        self.scene.light_info.clone_from_slice(&[[1, 0, 0]]);
-
-        layout_obj
-            .add_buffer(0, true, self.scene.uniform.clone())
-            .unwrap();
-        layout_obj
-            .add_buffer(0, false, self.scene.transforms.clone())
-            .unwrap();
-        layout_obj
-            .add_buffer(1, false, self.scene.light.clone())
-            .unwrap();
-        layout_obj
-            .add_buffer(2, false, self.scene.light_info.clone())
-            .unwrap();
+            .get_memory()
+            .lock()
+            .unwrap()
+            .copy_from_slice(vec![[1., 1., 1.], [1., 1., 1.]].as_bytes());
+        self.scene
+            .light_info
+            .get_memory()
+            .lock()
+            .unwrap()
+            .copy_from_slice(vec![1, 0, 0].as_bytes());
+        self.scene
+            .compute_buffer_in
+            .get_memory()
+            .lock()
+            .unwrap()
+            .copy_from_slice(
+                &(1..=256)
+                    .map(|n| Particle {
+                        pos: Vec3 {
+                            x: 3. / n as f32 - 1.5,
+                            y: 4.,
+                            z: 3. / n as f32 - 1.5,
+                        },
+                        vel: Vec3 {
+                            x: 0.,
+                            y: -1.,
+                            z: 0.,
+                        },
+                    })
+                    .collect::<Vec<Particle>>()
+                    .as_bytes(),
+            );
 
         let pipeline_render = layout_obj
             .clone()
@@ -223,34 +285,6 @@ impl ApplicationHandler for Context {
             )
             .unwrap();
 
-        let layout_compute = graphics.create_layout(false, 0, 0, 1, 2).unwrap();
-
-        self.scene.compute_buffer_in.clone_from_slice(
-            &(1..=256)
-                .map(|n| Particle {
-                    pos: Vec3 {
-                        x: 3. / n as f32 - 1.5,
-                        y: 4.,
-                        z: 3. / n as f32 - 1.5,
-                    },
-                    vel: Vec3 {
-                        x: 0.,
-                        y: -1.,
-                        z: 0.,
-                    },
-                })
-                .collect::<Vec<Particle>>(),
-        );
-
-        layout_compute
-            .add_buffer(0, true, self.scene.uniform.clone())
-            .unwrap();
-        layout_compute
-            .add_buffer(0, false, self.scene.compute_buffer_in.clone())
-            .unwrap();
-        layout_compute
-            .add_buffer(1, false, self.scene.compute_buffer_out.clone())
-            .unwrap();
         let pipeline_compute = layout_compute
             .clone()
             .create_compute_pipeline(&shader_compute)
@@ -315,11 +349,11 @@ impl ApplicationHandler for Context {
                 println!("CPU: {:.1}%", process.cpu_usage());
                 println!();
 
-                let compute = self.scene.compute_buffer_out.read_slice(0..5);
-                for data in compute {
-                    println!("{:?}", data);
-                }
-                println!();
+                let mem = self.scene.compute_buffer_out.get_memory();
+                let lock = mem.lock().unwrap();
+                let compute = lock.read();
+
+                println!("{:?}\n", &compute[..6 * size_of::<f32>()]);
 
                 self.state.delta_time_sum = Duration::ZERO;
                 self.state.current_frame = 0;
@@ -328,7 +362,7 @@ impl ApplicationHandler for Context {
 
         self.state.now = Some(std::time::Instant::now());
 
-        let transforms = [
+        let transforms = vec![
             glam::Mat4::from_scale_rotation_translation(
                 glam::Vec3::new(0.3, 0.3, 0.3),
                 glam::Quat::from_mat4(&glam::Mat4::from_rotation_y(
@@ -345,22 +379,25 @@ impl ApplicationHandler for Context {
             time: self.state.startup.elapsed().as_secs_f32(),
         };
 
-        self.scene.uniform.clone_from_slice(&[ubo.clone()]);
-        self.scene.transforms.clone_from_slice(&transforms);
-
-        self.layout_obj
-            .clone()
+        self.scene
+            .uniform
+            .get_memory()
+            .lock()
             .unwrap()
-            .flush_buffer_tasks()
-            .unwrap();
-
-        self.scene.uniform.clone_from_slice(&[ubo]);
-
-        self.layout_compute
-            .clone()
+            .copy_from_slice(vec![ubo.clone()].as_bytes());
+        self.scene
+            .transforms
+            .get_memory()
+            .lock()
             .unwrap()
-            .flush_buffer_tasks()
-            .unwrap();
+            .copy_from_slice(transforms.as_bytes());
+
+        self.scene
+            .uniform
+            .get_memory()
+            .lock()
+            .unwrap()
+            .copy_from_slice(vec![ubo].as_bytes());
 
         self.graphics
             .clone()

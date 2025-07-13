@@ -12,7 +12,7 @@ mod shader;
 mod traits;
 pub mod vulkan;
 
-pub use gpu_data::{GpuSampler, GpuVec};
+pub use gpu_data::*;
 pub use settings::GraphicsApiInitSettings;
 pub use shader::{Shader, ShaderStage};
 pub use traits::*;
