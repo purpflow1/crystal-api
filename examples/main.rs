@@ -484,12 +484,6 @@ impl ApplicationHandler for Context {
             .get_memory_full()
             .copy_from_slice(transforms.as_bytes());
 
-        // self.graphics
-        //     .clone()
-        //     .unwrap()
-        //     .dispatch_compute(&[self.obj_compute.clone().unwrap()], [1, 1, 1])
-        //     .unwrap();
-
         self.graphics
             .clone()
             .unwrap()
