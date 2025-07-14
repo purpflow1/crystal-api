@@ -9,6 +9,9 @@ opt-level = 3
 lto = true
 strip = true
 
+# TEMP
+debug = true
+
 [profile.dev]
 overflow-checks = true
 
