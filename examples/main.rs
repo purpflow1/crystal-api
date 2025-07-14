@@ -121,7 +121,7 @@ struct Context {
 
     layout_obj: Option<Arc<dyn Layout>>,
     layout_compute: Option<Arc<dyn Layout>>,
-    pipeline_compute: Option<Arc<dyn Pipeline>>,
+    obj_compute: Option<Arc<Object>>,
 
     settings: GraphicsApiInitSettings,
     scene: Scene,
@@ -141,7 +141,7 @@ impl Context {
             graphics: None,
             layout_obj: None,
             layout_compute: None,
-            pipeline_compute: None,
+            obj_compute: None,
             system: System::new_all(),
 
             settings,
@@ -369,14 +369,16 @@ impl ApplicationHandler for Context {
             .create_compute_pipeline(&shader_compute)
             .unwrap();
 
-        let mesh1 = Arc::new(
+        let obj_compute = Object::new(pipeline_compute);
+
+        let mesh = Arc::new(
             Mesh::from_buffer(BufReader::new(
                 File::open("resources/mishka/Untitled.obj").unwrap(),
             ))
             .unwrap(),
         );
 
-        let mesh_buffer = graphics.create_buffer_mesh(mesh1).unwrap();
+        let mesh_buffer = graphics.create_buffer_mesh(mesh).unwrap();
 
         let obj1 = Object::with_mesh_textured(
             pipeline_render.clone(),
@@ -403,7 +405,7 @@ impl ApplicationHandler for Context {
         self.window = Some(window);
         self.layout_obj = Some(layout_obj);
         self.layout_compute = Some(layout_compute);
-        self.pipeline_compute = Some(pipeline_compute);
+        self.obj_compute = Some(obj_compute);
     }
 
     fn about_to_wait(&mut self, _event_loop: &winit::event_loop::ActiveEventLoop) {
@@ -419,11 +421,19 @@ impl ApplicationHandler for Context {
 
                 let process = self.system.process(pid).unwrap();
 
+                let gpu_debug = self.graphics.as_ref().unwrap().get_debug_data();
+
+                macro_rules! as_mb {
+                    ($kb:expr) => {
+                        $kb as f32 / 1024. / 1024.
+                    };
+                }
+
                 println!("[DEBUG]");
                 println!("FPS: {}", self.state.current_frame);
-                println!("{}", self.graphics.as_ref().unwrap().update_debug_text());
-                println!("RAM: {:.1} MB", process.memory() as f32 / 1024.);
-                println!("CPU: {:.1}%", process.cpu_usage());
+                println!("GPU mem:   {:.1} MB", as_mb!(gpu_debug.used_memory));
+                println!("RAM usage: {:.1} MB", process.memory() as f32 / 1024.);
+                println!("CPU usage: {:.1}%", process.cpu_usage());
                 println!();
 
                 let mem = self
@@ -431,9 +441,11 @@ impl ApplicationHandler for Context {
                     .compute_buffer_out
                     .as_ref()
                     .unwrap()
-                    .get_memory(0..6 * size_of::<f32>());
+                    .get_memory(0..8 * size_of::<f32>());
 
-                println!("{:?}\n", mem);
+                println!("{:?}\n", unsafe {
+                    std::slice::from_raw_parts(mem.as_ptr() as *const Particle, 2)
+                });
 
                 self.state.delta_time_sum = Duration::ZERO;
                 self.state.current_frame = 0;
@@ -475,7 +487,7 @@ impl ApplicationHandler for Context {
         self.graphics
             .clone()
             .unwrap()
-            .dispatch(self.pipeline_compute.clone().unwrap(), [1, 1, 1])
+            .dispatch(&[self.obj_compute.clone().unwrap()], [1, 1, 1])
             .unwrap();
 
         self.graphics

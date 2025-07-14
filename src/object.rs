@@ -14,7 +14,7 @@ pub struct MeshBuffer {
 pub struct Object {
     pub(crate) id: Mutex<usize>,
     pub pipeline: Arc<dyn Pipeline>,
-    pub mesh_buffer: Arc<MeshBuffer>,
+    pub mesh_buffer: Option<Arc<MeshBuffer>>,
     pub samplers: Option<Vec<(u32, Arc<GpuSampler>)>>,
 }
 
@@ -23,12 +23,33 @@ unsafe impl Send for Object {}
 
 #[allow(dead_code)]
 impl Object {
+    pub fn new(pipeline: Arc<dyn Pipeline>) -> Arc<Self> {
+        Arc::new(Self {
+            id: Mutex::new(usize::MAX),
+            pipeline,
+            mesh_buffer: None,
+            samplers: None,
+        })
+    }
+
     pub fn with_mesh(pipeline: Arc<dyn Pipeline>, mesh: Arc<MeshBuffer>) -> Arc<Self> {
         Arc::new(Self {
             id: Mutex::new(usize::MAX),
             pipeline,
-            mesh_buffer: mesh,
+            mesh_buffer: Some(mesh),
             samplers: None,
+        })
+    }
+
+    pub fn with_textures(
+        pipeline: Arc<dyn Pipeline>,
+        textures: &[(u32, Arc<GpuSampler>)],
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            id: Mutex::new(usize::MAX),
+            pipeline,
+            mesh_buffer: None,
+            samplers: Some(textures.to_vec()),
         })
     }
 
@@ -40,7 +61,7 @@ impl Object {
         Arc::new(Self {
             id: Mutex::new(usize::MAX),
             pipeline,
-            mesh_buffer: mesh,
+            mesh_buffer: Some(mesh),
             samplers: Some(textures.to_vec()),
         })
     }

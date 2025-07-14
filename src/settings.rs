@@ -21,3 +21,8 @@ impl GraphicsApiInitSettings {
         Self { height, ..*self }
     }
 }
+
+pub struct DebugData {
+    pub used_memory: u64,
+    pub aviable_memory: u64,
+}

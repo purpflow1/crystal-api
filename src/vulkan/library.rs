@@ -27,6 +27,7 @@ use crate::{
     errors::{CrystalError, CrystalResult},
     mesh::{Index, Mesh, VertexTexture},
     object::{MeshBuffer, Object},
+    settings::DebugData,
     traits::{self, Layout},
 };
 
@@ -270,7 +271,7 @@ impl VulkanEntry {
 
     pub fn dispatch(
         self: Arc<Self>,
-        pipeline: Arc<dyn Pipeline>,
+        objects: &[Arc<Object>],
         groups: [u32; 3],
     ) -> CrystalResult<()> {
         let compute = self
@@ -279,8 +280,6 @@ impl VulkanEntry {
             .get(&CommandType::Compute)
             .unwrap()
             .clone();
-
-        let vk_pipeline = pipeline.as_vulkan().unwrap();
 
         let sync = self
             .get_viewport()
@@ -295,20 +294,24 @@ impl VulkanEntry {
         let future = now.join(
             compute
                 .record_single_time_buffer(|command_buffer, device| unsafe {
-                    device.cmd_bind_pipeline(
-                        *command_buffer,
-                        vk::PipelineBindPoint::COMPUTE,
-                        vk_pipeline.handle,
-                    );
-                    device.cmd_bind_descriptor_sets(
-                        *command_buffer,
-                        vk::PipelineBindPoint::COMPUTE,
-                        vk_pipeline.layout.pipeline_layout,
-                        0,
-                        &vk_pipeline.layout.get_descriptor_sets(),
-                        &[],
-                    );
-                    device.cmd_dispatch(*command_buffer, groups[0], groups[1], groups[2]);
+                    for object in objects {
+                        let pipeline = object.pipeline.clone().as_vulkan().unwrap();
+
+                        device.cmd_bind_pipeline(
+                            *command_buffer,
+                            vk::PipelineBindPoint::COMPUTE,
+                            pipeline.handle,
+                        );
+                        device.cmd_bind_descriptor_sets(
+                            *command_buffer,
+                            vk::PipelineBindPoint::COMPUTE,
+                            pipeline.layout.pipeline_layout,
+                            0,
+                            &pipeline.layout.get_descriptor_sets(),
+                            &[],
+                        );
+                        device.cmd_dispatch(*command_buffer, groups[0], groups[1], groups[2]);
+                    }
                 })
                 .unwrap(),
         );
@@ -330,7 +333,7 @@ impl VulkanEntry {
         let (swapchain_out_of_date, suboptimal) = self.wait_for_thread();
 
         #[cfg(debug_assertions)]
-        self.update_debug_text();
+        self.get_debug_data();
 
         let render_target_dyn = self.get_viewport();
         let render_target = render_target_dyn
@@ -532,7 +535,7 @@ impl VulkanEntry {
         self.render_targets[&0].clone()
     }
 
-    pub fn update_debug_text(&self) -> String {
+    pub fn get_debug_data(&self) -> DebugData {
         let mut budget_props = vk::PhysicalDeviceMemoryBudgetPropertiesEXT::default();
         let mut mem_props =
             vk::PhysicalDeviceMemoryProperties2::default().push_next(&mut budget_props);
@@ -545,36 +548,12 @@ impl VulkanEntry {
                 )
         }
 
-        let swapchain_images = unsafe {
-            self.presentation
-                .swapchain
-                .swapchain
-                .read()
-                .unwrap()
-                .get_swapchain_images(*self.presentation.swapchain.swapchain_khr.read().unwrap())
-        }
-        .unwrap();
+        let debug_data = DebugData {
+            used_memory: budget_props.heap_usage[0],
+            aviable_memory: budget_props.heap_budget[0],
+        };
 
-        let mut swapchain_memory_usage = 0;
-
-        for image in swapchain_images {
-            let mem = unsafe {
-                self.device_manager
-                    .device
-                    .get_image_memory_requirements(image)
-            };
-
-            swapchain_memory_usage += mem.size;
-        }
-
-        let formatted: String = format!(
-            "GPU mem:   {:.1} MB\n\
-             swapchain: {:.1} MB",
-            budget_props.heap_usage[0] as f32 / 1024f32 / 1024f32,
-            swapchain_memory_usage as f32 / 1024f32 / 1024f32,
-        );
-
-        formatted
+        debug_data
     }
 
     pub fn create_buffer_mesh(&self, mesh: Arc<Mesh>) -> CrystalResult<Arc<MeshBuffer>> {

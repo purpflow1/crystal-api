@@ -635,11 +635,12 @@ impl VulkanLayout {
                 None => panic!("fatal: wrong pipeline type, expected vulkan"),
             };
 
-            let index = object.mesh_buffer.indices.clone().as_vulkan().unwrap();
+            let mesh_buffer = object.mesh_buffer.as_ref().unwrap();
+
+            let index = mesh_buffer.indices.clone().as_vulkan().unwrap();
 
             let index_buffer = index.get_handlers()[0];
-            let vertex_buffer = object
-                .mesh_buffer
+            let vertex_buffer = mesh_buffer
                 .vertices
                 .clone()
                 .as_vulkan()
@@ -661,7 +662,7 @@ impl VulkanLayout {
                 );
             }
 
-            let index_count = object.mesh_buffer.mesh.indices.len();
+            let index_count = mesh_buffer.mesh.indices.len();
 
             unsafe {
                 device_manager.device.cmd_bind_vertex_buffers(
