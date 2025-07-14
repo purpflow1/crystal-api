@@ -16,6 +16,7 @@ overflow-checks = true
 winit = { version = "0.30.10", features = ["rwh_06"] }
 glam = "0.30.3"
 sysinfo = "0.23"
+png = "0.17.16"
 
 [[example]]
 name = "main"
@@ -25,8 +26,5 @@ path = "examples/main.rs"
 ash = "0.38.0"
 ash-window = "0.13.0"
 raw-window-handle = "0.6.0"
-png = "0.17.16"
 
-libloading = "0.7"
-bytemuck = "1.23.1"
 pollster = "0.4.0"
