@@ -483,12 +483,6 @@ impl ApplicationHandler for Context {
             .unwrap()
             .render_and_present(&self.scene.objects)
             .unwrap();
-
-        // self.graphics
-        //     .clone()
-        //     .unwrap()
-        //     .write_buffer_to_screen(vec![0u8; (100 * 100 * 4) as usize], (0, 0), (100, 100))
-        //     .unwrap();
     }
 
     fn window_event(
@@ -523,8 +517,6 @@ impl ApplicationHandler for Context {
                     .unwrap();
             }
             WindowEvent::RedrawRequested => {
-                // self.draw_text(self.graphics.clone().unwrap().update_debug_text());
-
                 let window = self.window.as_ref().unwrap();
                 window.request_redraw();
             }
@@ -544,7 +536,7 @@ fn main() -> CrystalResult<()> {
         .height(700);
 
     let event_loop = EventLoop::new().unwrap();
-    event_loop.set_control_flow(ControlFlow::Wait);
+    event_loop.set_control_flow(ControlFlow::Poll);
 
     let mut context = Context::new(settings)?;
     event_loop
