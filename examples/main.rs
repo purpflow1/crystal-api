@@ -73,17 +73,21 @@ struct Uniform {
     time: f32,
 }
 
+#[repr(C, align(16))]
+#[derive(Clone)]
+struct Light(glam::Vec3);
+
 struct Scene {
     camera: Camera,
 
-    light: Arc<dyn Buffer>,
-    light_info: Arc<dyn Buffer>,
+    light: Option<Arc<dyn Buffer>>,
+    light_info: Option<Arc<dyn Buffer>>,
 
-    uniform: Arc<dyn Buffer>,
-    transforms: Arc<dyn Buffer>,
+    uniform: Option<Arc<dyn Buffer>>,
+    transforms: Option<Arc<dyn Buffer>>,
 
-    compute_buffer_in: Arc<dyn Buffer>,
-    compute_buffer_out: Arc<dyn Buffer>,
+    compute_buffer_in: Option<Arc<dyn Buffer>>,
+    compute_buffer_out: Option<Arc<dyn Buffer>>,
 
     objects: Vec<Arc<Object>>,
 }
@@ -133,12 +137,12 @@ impl Context {
                     ),
                 },
 
-                uniform: EmptyBuffer::new(),
-                light: EmptyBuffer::new(),
-                light_info: EmptyBuffer::new(),
-                transforms: EmptyBuffer::new(),
-                compute_buffer_in: EmptyBuffer::new(),
-                compute_buffer_out: EmptyBuffer::new(),
+                uniform: None,
+                light: None,
+                light_info: None,
+                transforms: None,
+                compute_buffer_in: None,
+                compute_buffer_out: None,
 
                 objects: vec![],
             },
@@ -209,10 +213,10 @@ impl ApplicationHandler for Context {
             )
             .unwrap();
         let light = graphics
-            .create_buffer(size_of::<[f32; 3]>() as u64 * 60, false, false, true)
+            .create_buffer(size_of::<Light>() as u64 * 3, false, false, true)
             .unwrap();
         let light_info = graphics
-            .create_buffer(size_of::<[u32; 3]>() as u64 * 3, false, false, true)
+            .create_buffer(size_of::<u32>() as u64, false, false, true)
             .unwrap();
 
         let compute_buffer_in = graphics
@@ -234,30 +238,49 @@ impl ApplicationHandler for Context {
             .add_buffer(1, compute_buffer_out.clone())
             .unwrap();
 
-        self.scene.uniform = uniform;
-        self.scene.transforms = transform;
-        self.scene.light = light;
-        self.scene.light_info = light_info;
-        self.scene.compute_buffer_in = compute_buffer_in;
-        self.scene.compute_buffer_out = compute_buffer_out;
+        self.scene.uniform = Some(uniform);
+        self.scene.transforms = Some(transform);
+        self.scene.light = Some(light);
+        self.scene.light_info = Some(light_info);
+        self.scene.compute_buffer_in = Some(compute_buffer_in);
+        self.scene.compute_buffer_out = Some(compute_buffer_out);
 
         self.scene
             .light
-            .get_memory()
-            .lock()
+            .as_ref()
             .unwrap()
-            .copy_from_slice(vec![[1., 1., 1.], [1., 1., 1.]].as_bytes());
+            .get_memory_full()
+            .copy_from_slice(
+                vec![
+                    Light(glam::Vec3 {
+                        x: 0.1,
+                        y: 0.1,
+                        z: 0.1,
+                    }),
+                    Light(glam::Vec3 {
+                        x: 0.,
+                        y: 3.,
+                        z: 0.,
+                    }),
+                    Light(glam::Vec3 {
+                        x: 1.,
+                        y: 1.,
+                        z: 1.,
+                    }),
+                ]
+                .as_bytes(),
+            );
         self.scene
             .light_info
-            .get_memory()
-            .lock()
+            .as_ref()
             .unwrap()
-            .copy_from_slice(vec![1, 0, 0].as_bytes());
+            .get_memory_full()
+            .copy_from_slice(&1u32.to_le_bytes());
         self.scene
             .compute_buffer_in
-            .get_memory()
-            .lock()
+            .as_ref()
             .unwrap()
+            .get_memory_full()
             .copy_from_slice(
                 &(1..=256)
                     .map(|n| Particle {
@@ -349,11 +372,14 @@ impl ApplicationHandler for Context {
                 println!("CPU: {:.1}%", process.cpu_usage());
                 println!();
 
-                let mem = self.scene.compute_buffer_out.get_memory();
-                let lock = mem.lock().unwrap();
-                let compute = lock.read();
+                let mem = self
+                    .scene
+                    .compute_buffer_out
+                    .as_ref()
+                    .unwrap()
+                    .get_memory(0..6 * size_of::<f32>());
 
-                println!("{:?}\n", &compute[..6 * size_of::<f32>()]);
+                println!("{:?}\n", mem);
 
                 self.state.delta_time_sum = Duration::ZERO;
                 self.state.current_frame = 0;
@@ -381,22 +407,22 @@ impl ApplicationHandler for Context {
 
         self.scene
             .uniform
-            .get_memory()
-            .lock()
+            .as_ref()
             .unwrap()
+            .get_memory_full()
             .copy_from_slice(vec![ubo.clone()].as_bytes());
         self.scene
             .transforms
-            .get_memory()
-            .lock()
+            .as_ref()
             .unwrap()
+            .get_memory_full()
             .copy_from_slice(transforms.as_bytes());
 
         self.scene
             .uniform
-            .get_memory()
-            .lock()
+            .as_ref()
             .unwrap()
+            .get_memory_full()
             .copy_from_slice(vec![ubo].as_bytes());
 
         self.graphics

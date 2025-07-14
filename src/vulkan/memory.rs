@@ -1,5 +1,5 @@
 use std::{
-    mem::ManuallyDrop,
+    ops::Range,
     sync::{Arc, Mutex},
 };
 
@@ -13,35 +13,6 @@ use crate::{
 
 use super::{devices::DeviceManager, sync::GpuSync};
 
-#[repr(transparent)]
-pub struct VulkanGpuVec(ManuallyDrop<Vec<u8>>);
-
-impl traits::GpuVec for VulkanGpuVec {
-    fn copy_from_slice(&mut self, data: &[u8]) {
-        (self.0[0..data.len()]).copy_from_slice(data);
-    }
-
-    fn read(&self) -> &[u8] {
-        &self.0
-    }
-}
-
-impl VulkanGpuVec {
-    pub(crate) fn from_raw(ptr: *mut u8, size: usize) -> Self {
-        let tmp = unsafe { Vec::from_raw_parts(ptr, size, size) };
-        Self(ManuallyDrop::new(tmp))
-    }
-
-    pub(crate) fn is_null(&self) -> bool {
-        self.0.capacity() == 0
-    }
-
-    pub(crate) fn empty() -> Self {
-        let tmp = Vec::with_capacity(0);
-        Self(ManuallyDrop::new(tmp))
-    }
-}
-
 #[derive(Clone)]
 pub struct BufferInfo {
     pub size: u64,
@@ -54,7 +25,7 @@ pub struct BufferData {
     device_manager: Arc<DeviceManager>,
     handler: vk::Buffer,
     memory: vk::DeviceMemory,
-    mapped: Arc<Mutex<VulkanGpuVec>>,
+    mapped: *mut u8,
 }
 
 impl BufferData {
@@ -106,27 +77,11 @@ impl BufferData {
             }
         };
 
-        Ok(Self {
-            device_manager,
-            handler: buffer,
-            memory: device_memory,
-            mapped: Arc::new(Mutex::new(VulkanGpuVec::empty())),
-        })
-    }
-
-    fn map_memory(&self, size: u64, offset: u64) -> CrystalResult<Arc<Mutex<dyn traits::GpuVec>>> {
-        let mut mapped = self.mapped.lock().unwrap();
-
-        if !mapped.is_null() {
-            drop(mapped);
-            return Ok(self.mapped.clone());
-        }
-
-        let ptr = match unsafe {
-            self.device_manager.device.map_memory(
-                self.memory,
-                offset,
-                size,
+        let mapped = match unsafe {
+            device_manager.device.map_memory(
+                device_memory,
+                0,
+                info.size,
                 vk::MemoryMapFlags::empty(),
             )
         } {
@@ -137,10 +92,12 @@ impl BufferData {
             }
         };
 
-        *mapped = VulkanGpuVec::from_raw(ptr, size as usize);
-        drop(mapped);
-
-        Ok(self.mapped.clone())
+        Ok(Self {
+            device_manager,
+            handler: buffer,
+            memory: device_memory,
+            mapped,
+        })
     }
 }
 
@@ -174,16 +131,22 @@ impl traits::Buffer for BufferManager {
         Some(self.clone())
     }
 
-    fn get_memory(&self) -> Arc<Mutex<dyn traits::GpuVec>> {
+    fn get_memory(&self, range: Range<usize>) -> &mut [u8] {
         let lock = self.sync.lock().unwrap();
         let idx = if self.info.count > 1 {
             lock.odd_pass
         } else {
             0
         };
-        self.buffer_data[idx]
-            .map_memory(self.info.size, 0)
-            .expect("fatal: vulkan memory mapping error")
+
+        unsafe {
+            let ptr = self.buffer_data[idx].mapped.byte_add(range.start);
+            std::slice::from_raw_parts_mut(ptr, range.len())
+        }
+    }
+
+    fn get_memory_full(&self) -> &mut [u8] {
+        self.get_memory(0..self.info.size as usize)
     }
 }
 

@@ -1,4 +1,4 @@
-use std::sync::{Arc, Mutex};
+use std::{ops::Range, sync::Arc};
 
 use crate::{errors::CrystalResult, mesh::Attribute, object::Object, shader::Shader, vulkan};
 
@@ -51,15 +51,11 @@ pub trait Pipeline: Sync + Send {
     }
 }
 
-pub trait GpuVec {
-    fn copy_from_slice(&mut self, data: &[u8]);
-    fn read(&self) -> &[u8];
-}
-
 pub trait Buffer: Sync + Send {
     fn as_vulkan(self: Arc<Self>) -> Option<Arc<vulkan::BufferManager>> {
         None
     }
 
-    fn get_memory(&self) -> Arc<Mutex<dyn GpuVec>>;
+    fn get_memory(&self, range: Range<usize>) -> &mut [u8];
+    fn get_memory_full(&self) -> &mut [u8];
 }

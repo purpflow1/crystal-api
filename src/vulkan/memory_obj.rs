@@ -51,9 +51,7 @@ impl VulkanObjectMemoryManager {
             BufferManager::new(device_manager.clone(), buffer_info.clone(), None)?;
 
         vertex_buffer_manager
-            .get_memory()
-            .lock()
-            .unwrap()
+            .get_memory_full()
             .copy_from_slice(vertices.as_bytes());
 
         buffer_info.usage = vk::BufferUsageFlags::INDEX_BUFFER;
@@ -62,9 +60,7 @@ impl VulkanObjectMemoryManager {
         let index_buffer_manager = BufferManager::new(device_manager.clone(), buffer_info, None)?;
 
         index_buffer_manager
-            .get_memory()
-            .lock()
-            .unwrap()
+            .get_memory_full()
             .copy_from_slice(indices.as_bytes());
 
         Ok(Box::new(Self {

@@ -186,9 +186,7 @@ impl VulkanTexture {
 
         let buffer_manager = BufferManager::new(device_manager.clone(), buffer_info, None)?;
         buffer_manager
-            .get_memory()
-            .lock()
-            .unwrap()
+            .get_memory(0..image_size as usize / 2)
             .copy_from_slice(&image.pixels);
 
         let format = match image.channels {
