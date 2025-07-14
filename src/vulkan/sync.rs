@@ -125,16 +125,29 @@ impl GpuSync {
             );
         }
 
-        for i in 0..2 {
-            fence_render[i] =
-                match unsafe { device_manager.device.create_fence(&fence_create_info, None) } {
-                    Ok(semaphore) => semaphore,
-                    Err(e) => {
-                        log!("cannot create fence: {}", e);
-                        return Err(CrystalError::SyncError);
-                    }
-                };
+        fence_render[0] = match unsafe {
+            device_manager.device.create_fence(
+                &vk::FenceCreateInfo::default().flags(vk::FenceCreateFlags::SIGNALED),
+                None,
+            )
+        } {
+            Ok(semaphore) => semaphore,
+            Err(e) => {
+                log!("cannot create fence: {}", e);
+                return Err(CrystalError::SyncError);
+            }
+        };
 
+        fence_render[1] =
+            match unsafe { device_manager.device.create_fence(&fence_create_info, None) } {
+                Ok(semaphore) => semaphore,
+                Err(e) => {
+                    log!("cannot create fence: {}", e);
+                    return Err(CrystalError::SyncError);
+                }
+            };
+
+        for i in 0..2 {
             fence_transfer[i] =
                 match unsafe { device_manager.device.create_fence(&fence_create_info, None) } {
                     Ok(semaphore) => semaphore,

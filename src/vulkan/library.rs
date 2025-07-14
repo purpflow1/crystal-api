@@ -360,6 +360,8 @@ impl VulkanEntry {
             )?;
         }
 
+        sync.lock().unwrap().wait_render().unwrap();
+
         match graphics_now.acquire_next_image(&self.presentation) {
             Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
                 self.presentation.swapchain.recreate(None)?;

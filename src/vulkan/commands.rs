@@ -163,8 +163,6 @@ impl GpuFuture {
 
         drop(queue_lock);
 
-        sync.wait_render().unwrap();
-
         if let Err(e) = result {
             return Err((e, self.sync.clone()));
         }

@@ -462,8 +462,20 @@ impl ApplicationHandler for Context {
                 )),
                 glam::Vec3::new(0., 0., 0.),
             ),
-            glam::Mat4::from_translation(glam::Vec3::new(0., 0., -3.)),
-            glam::Mat4::from_translation(glam::Vec3::new(-3., 0., 1.)),
+            glam::Mat4::from_scale_rotation_translation(
+                glam::Vec3::new(1.0, 1.0, 1.0),
+                glam::Quat::from_mat4(&glam::Mat4::from_rotation_z(
+                    PI * 2. * self.state.delta_time_sum.as_secs_f32(),
+                )),
+                glam::Vec3::new(0., 0., -3.),
+            ),
+            glam::Mat4::from_scale_rotation_translation(
+                glam::Vec3::new(1.0, 1.0, 1.0),
+                glam::Quat::from_mat4(&glam::Mat4::from_rotation_x(
+                    PI * 2. * self.state.delta_time_sum.as_secs_f32(),
+                )),
+                glam::Vec3::new(-3., 0., 0.),
+            ),
         ];
 
         let ubo = Uniform {
