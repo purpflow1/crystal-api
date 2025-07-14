@@ -84,13 +84,17 @@ impl GpuFuture {
             .map(|buffer| buffer.handler)
             .collect();
 
-        let submit_info = vk::SubmitInfo::default().command_buffers(&command_buffers);
+        let mut signal_semaphores = Vec::with_capacity(1);
+        let mut fence = vk::Fence::null();
 
-        let fence = if sync_lock.is_sync() {
-            sync_lock.fence_transfer()
-        } else {
-            vk::Fence::null()
-        };
+        if sync_lock.is_sync() {
+            signal_semaphores.push(sync_lock.semaphore_transfer());
+            fence = sync_lock.fence_transfer();
+        }
+
+        let submit_info = vk::SubmitInfo::default()
+            .command_buffers(&command_buffers)
+            .signal_semaphores(&signal_semaphores);
 
         queue.submit(&[submit_info], fence).unwrap();
 
@@ -102,7 +106,7 @@ impl GpuFuture {
         Ok(self)
     }
 
-    pub fn then_swapchain_present_and_flush(
+    pub fn swapchain_present_and_flush(
         self: Box<Self>,
         queue: Arc<Queue>,
         presentation: Arc<Presentation>,
@@ -111,7 +115,7 @@ impl GpuFuture {
 
         let sync = self.sync.lock().unwrap();
 
-        let wait_semaphores = [sync.semaphore_image()]; // TODO add compute semaphore
+        let wait_semaphores = [sync.semaphore_image(), sync.semaphore_transfer()];
         let render_semaphores = [sync.semaphore_render()];
 
         let swaphchains = [*swapchain.swapchain_khr.read().unwrap()];
@@ -127,7 +131,10 @@ impl GpuFuture {
         let submit_info = vk::SubmitInfo::default()
             .wait_semaphores(&wait_semaphores)
             .signal_semaphores(&render_semaphores)
-            .wait_dst_stage_mask(&[vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT])
+            .wait_dst_stage_mask(&[
+                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+                vk::PipelineStageFlags::COMPUTE_SHADER,
+            ])
             .command_buffers(&command_buffers);
 
         let present_info = vk::PresentInfoKHR::default()
@@ -136,6 +143,8 @@ impl GpuFuture {
             .image_indices(&indices);
 
         let result;
+
+        sync.wait_transfer().unwrap();
 
         let queue_lock = queue
             .submit_still_lock(&[submit_info], sync.fence_render())

@@ -213,7 +213,7 @@ impl ApplicationHandler for Context {
         let render_target = graphics.get_viewport();
 
         let layout_obj = graphics.create_layout(true, 2, 3, 1, 3).unwrap();
-        let layout_compute = graphics.create_layout(false, 0, 0, 1, 2).unwrap();
+        let layout_compute = graphics.create_layout(true, 0, 0, 1, 2).unwrap();
 
         let default_sampler = {
             let file = File::open("resources/textures/default.png").unwrap();
@@ -276,10 +276,10 @@ impl ApplicationHandler for Context {
             .unwrap();
 
         let compute_buffer_in = graphics
-            .create_buffer(size_of::<Particle>() as u64 * 256, false, false, false)
+            .create_buffer(size_of::<Particle>() as u64 * 256, false, false, true)
             .unwrap();
         let compute_buffer_out = graphics
-            .create_buffer(size_of::<Particle>() as u64 * 256, false, true, false)
+            .create_buffer(size_of::<Particle>() as u64 * 256, false, true, true)
             .unwrap();
 
         layout_obj.add_buffer(0, uniform.clone()).unwrap();
@@ -369,7 +369,7 @@ impl ApplicationHandler for Context {
             .create_compute_pipeline(&shader_compute)
             .unwrap();
 
-        let obj_compute = Object::new(pipeline_compute);
+        let obj_compute = Object::new_compute(pipeline_compute, [1, 1, 1]);
 
         let mesh = Arc::new(
             Mesh::from_buffer(BufReader::new(
@@ -484,16 +484,24 @@ impl ApplicationHandler for Context {
             .get_memory_full()
             .copy_from_slice(transforms.as_bytes());
 
-        self.graphics
-            .clone()
-            .unwrap()
-            .dispatch(&[self.obj_compute.clone().unwrap()], [1, 1, 1])
-            .unwrap();
+        // self.graphics
+        //     .clone()
+        //     .unwrap()
+        //     .dispatch_compute(&[self.obj_compute.clone().unwrap()], [1, 1, 1])
+        //     .unwrap();
 
         self.graphics
             .clone()
             .unwrap()
-            .render_and_present(&self.scene.objects)
+            .dispatch_any(
+                &self
+                    .scene
+                    .objects
+                    .clone()
+                    .into_iter()
+                    .chain([self.obj_compute.clone().unwrap()].into_iter())
+                    .collect::<Vec<Arc<Object>>>(),
+            )
             .unwrap();
     }
 

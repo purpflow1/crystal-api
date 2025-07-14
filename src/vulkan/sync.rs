@@ -172,24 +172,24 @@ impl GpuSync {
         self.odd_pass = (self.odd_pass + 1) % 2;
     }
 
-    fn wait_fence(&self, fence: vk::Fence) -> CrystalResult<()> {
+    fn wait_fences(&self, fences: &[vk::Fence]) -> CrystalResult<()> {
         unsafe {
             self.device_manager
                 .device
-                .wait_for_fences(&[fence], true, u64::MAX)
+                .wait_for_fences(fences, true, u64::MAX)
                 .unwrap();
 
-            self.device_manager.device.reset_fences(&[fence]).unwrap();
+            self.device_manager.device.reset_fences(fences).unwrap();
         }
         Ok(())
     }
 
     pub fn wait_render(&self) -> CrystalResult<()> {
-        self.wait_fence(self.barriers.fence_render[self.odd_pass])
+        self.wait_fences(&[self.barriers.fence_render[self.odd_pass]])
     }
 
     pub fn wait_transfer(&self) -> CrystalResult<()> {
-        self.wait_fence(self.barriers.fence_transfer[self.odd_pass])
+        self.wait_fences(&[self.barriers.fence_transfer[self.odd_pass]])
     }
 
     pub fn fence_render(&self) -> vk::Fence {
@@ -209,7 +209,7 @@ impl GpuSync {
     }
 
     pub fn semaphore_transfer(&self) -> vk::Semaphore {
-        self.barriers.semaphore_transfer[self.n_pass]
+        self.barriers.semaphore_transfer[self.n_pass as usize]
     }
 
     pub fn is_sync(&self) -> bool {

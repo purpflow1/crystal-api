@@ -16,6 +16,7 @@ pub struct Object {
     pub pipeline: Arc<dyn Pipeline>,
     pub mesh_buffer: Option<Arc<MeshBuffer>>,
     pub samplers: Option<Vec<(u32, Arc<GpuSampler>)>>,
+    pub groups: Option<[u32; 3]>,
 }
 
 unsafe impl Sync for Object {}
@@ -23,12 +24,13 @@ unsafe impl Send for Object {}
 
 #[allow(dead_code)]
 impl Object {
-    pub fn new(pipeline: Arc<dyn Pipeline>) -> Arc<Self> {
+    pub fn new_compute(pipeline: Arc<dyn Pipeline>, groups: [u32; 3]) -> Arc<Self> {
         Arc::new(Self {
             id: Mutex::new(usize::MAX),
             pipeline,
             mesh_buffer: None,
             samplers: None,
+            groups: Some(groups),
         })
     }
 
@@ -38,6 +40,7 @@ impl Object {
             pipeline,
             mesh_buffer: Some(mesh),
             samplers: None,
+            groups: None,
         })
     }
 
@@ -50,6 +53,7 @@ impl Object {
             pipeline,
             mesh_buffer: None,
             samplers: Some(textures.to_vec()),
+            groups: None,
         })
     }
 
@@ -63,6 +67,7 @@ impl Object {
             pipeline,
             mesh_buffer: Some(mesh),
             samplers: Some(textures.to_vec()),
+            groups: None,
         })
     }
 }

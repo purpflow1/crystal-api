@@ -22,7 +22,7 @@ use super::{
 };
 
 use crate::{
-    AsBytes, Buffer, GpuSampler, GraphicsApiInitSettings, Pipeline,
+    AsBytes, Buffer, GpuSampler, GraphicsApiInitSettings,
     debug::log,
     errors::{CrystalError, CrystalResult},
     mesh::{Index, Mesh, VertexTexture},
@@ -269,11 +269,7 @@ impl VulkanEntry {
         (swapchain_out_of_date, suboptimal)
     }
 
-    pub fn dispatch(
-        self: Arc<Self>,
-        objects: &[Arc<Object>],
-        groups: [u32; 3],
-    ) -> CrystalResult<()> {
+    pub fn dispatch_compute(self: Arc<Self>, objects: &[Arc<Object>]) -> CrystalResult<()> {
         let compute = self
             .command_manager
             .command_entries
@@ -281,13 +277,7 @@ impl VulkanEntry {
             .unwrap()
             .clone();
 
-        let sync = self
-            .get_viewport()
-            .clone()
-            .as_vulkan()
-            .unwrap()
-            .sync
-            .clone();
+        let sync = GpuSync::no_sync(self.device_manager.clone());
 
         let now = compute.now(sync.clone());
 
@@ -296,6 +286,7 @@ impl VulkanEntry {
                 .record_single_time_buffer(|command_buffer, device| unsafe {
                     for object in objects {
                         let pipeline = object.pipeline.clone().as_vulkan().unwrap();
+                        let groups = object.groups.unwrap();
 
                         device.cmd_bind_pipeline(
                             *command_buffer,
@@ -310,6 +301,7 @@ impl VulkanEntry {
                             &pipeline.layout.get_descriptor_sets(),
                             &[],
                         );
+
                         device.cmd_dispatch(*command_buffer, groups[0], groups[1], groups[2]);
                     }
                 })
@@ -317,16 +309,22 @@ impl VulkanEntry {
         );
 
         future.flush(compute.queue.clone()).unwrap();
-        sync.lock().unwrap().wait_transfer().unwrap();
 
         Ok(())
     }
 
-    pub fn render_and_present(self: Arc<Self>, objects: &[Arc<Object>]) -> CrystalResult<()> {
+    pub fn dispatch_any(self: Arc<Self>, objects: &[Arc<Object>]) -> CrystalResult<()> {
         let graphics = self
             .command_manager
             .command_entries
             .get(&CommandType::Graphics)
+            .unwrap()
+            .clone();
+
+        let compute = self
+            .command_manager
+            .command_entries
+            .get(&CommandType::Compute)
             .unwrap()
             .clone();
 
@@ -342,7 +340,7 @@ impl VulkanEntry {
             .expect("fatal: wrong type of RenderTarget, expected: VulkanRenderTarget");
 
         let sync = render_target.sync.clone();
-        let now = graphics.now(sync.clone());
+        let graphics_now = graphics.now(sync.clone());
 
         if swapchain_out_of_date {
             self.presentation.swapchain.recreate(None)?;
@@ -360,7 +358,7 @@ impl VulkanEntry {
             )?;
         }
 
-        match now.acquire_next_image(&self.presentation) {
+        match graphics_now.acquire_next_image(&self.presentation) {
             Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
                 self.presentation.swapchain.recreate(None)?;
                 render_target.update_resources(
@@ -381,24 +379,57 @@ impl VulkanEntry {
             _ => (),
         };
 
-        let color = 0.2f32;
-        let mut clear_color = vk::ClearColorValue::default();
-        let clear_depth_stencil = vk::ClearDepthStencilValue::default().depth(1.).stencil(0);
-        unsafe {
-            clear_color.float32[0] = color;
-            clear_color.float32[1] = color;
-            clear_color.float32[2] = color;
-            clear_color.float32[3] = 1.0f32
-        };
-        let clear_value_color = vk::ClearValue { color: clear_color };
-        let clear_value_stencil = vk::ClearValue {
-            depth_stencil: clear_depth_stencil,
-        };
-        let clear_values = &[clear_value_color, clear_value_stencil];
+        let compute_now = compute.now(sync.clone());
 
-        let gpu_future = now.join(graphics.clone().record_command_buffer(
+        let compute_future = compute_now.join(
+            compute
+                .record_command_buffer(sync.clone(), |command_buffer, device, _n_pass| unsafe {
+                    for object in objects {
+                        if object.groups.is_none() {
+                            continue;
+                        }
+
+                        let pipeline = object.pipeline.clone().as_vulkan().unwrap();
+                        let groups = object.groups.unwrap();
+
+                        device.cmd_bind_pipeline(
+                            *command_buffer,
+                            vk::PipelineBindPoint::COMPUTE,
+                            pipeline.handle,
+                        );
+                        device.cmd_bind_descriptor_sets(
+                            *command_buffer,
+                            vk::PipelineBindPoint::COMPUTE,
+                            pipeline.layout.pipeline_layout,
+                            0,
+                            &pipeline.layout.get_descriptor_sets(),
+                            &[],
+                        );
+                        device.cmd_dispatch(*command_buffer, groups[0], groups[1], groups[2]);
+                    }
+                })
+                .unwrap(),
+        );
+
+        let graphics_future = graphics_now.join(graphics.record_command_buffer(
             sync.clone(),
             |command_buffer, device, n_pass| {
+                let color = 0.2f32;
+                let mut clear_color = vk::ClearColorValue::default();
+                let clear_depth_stencil =
+                    vk::ClearDepthStencilValue::default().depth(1.).stencil(0);
+                unsafe {
+                    clear_color.float32[0] = color;
+                    clear_color.float32[1] = color;
+                    clear_color.float32[2] = color;
+                    clear_color.float32[3] = 1.0f32
+                };
+                let clear_value_color = vk::ClearValue { color: clear_color };
+                let clear_value_stencil = vk::ClearValue {
+                    depth_stencil: clear_depth_stencil,
+                };
+                let clear_values = &[clear_value_color, clear_value_stencil];
+
                 let render_pass_begin = vk::RenderPassBeginInfo::default()
                     .render_pass(render_target.render_pass)
                     .framebuffer(*render_target.framebuffers[n_pass].read().unwrap())
@@ -437,7 +468,13 @@ impl VulkanEntry {
 
                 let layouts: HashSet<_> = objects
                     .iter()
-                    .map(|object| object.pipeline.clone().as_vulkan().unwrap().layout.clone())
+                    .filter_map(|object| {
+                        if object.groups.is_none() {
+                            Some(object.pipeline.clone().as_vulkan().unwrap().layout.clone())
+                        } else {
+                            None
+                        }
+                    })
                     .collect();
 
                 // TODO optimize
@@ -471,11 +508,14 @@ impl VulkanEntry {
 
         let presentation = self.presentation.clone();
 
+        compute.queue.wait_idle().unwrap();
+
         let handle = std::thread::Builder::new()
-            .name("swapchain present and flush".to_string())
+            .name("compute, swapchain present and flush".to_string())
             .spawn(move || {
-                gpu_future
-                    .then_swapchain_present_and_flush(graphics.queue.clone(), presentation)?;
+                compute_future.flush(compute.queue.clone()).unwrap();
+                graphics_future
+                    .swapchain_present_and_flush(graphics.queue.clone(), presentation)?;
                 Ok(())
             })
             .unwrap();
