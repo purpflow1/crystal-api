@@ -35,16 +35,6 @@ pub trait Texture: Sync + Send {
     }
 }
 
-pub(crate) trait ObjectMemoryManager: Sync + Send {
-    fn as_vulkan_mut(&mut self) -> Option<&mut vulkan::VulkanObjectMemoryManager> {
-        None
-    }
-
-    fn as_vulkan_ref(&self) -> Option<&vulkan::VulkanObjectMemoryManager> {
-        None
-    }
-}
-
 pub trait Pipeline: Sync + Send {
     fn as_vulkan(self: Arc<Self>) -> Option<Arc<vulkan::VulkanPipeline>> {
         None

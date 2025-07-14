@@ -10,7 +10,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-use images::Image2D;
 use mesh::{Mesh, VertexTexture};
 use winit::{
     application::ApplicationHandler,
@@ -76,6 +75,30 @@ struct Uniform {
 #[repr(C, align(16))]
 #[derive(Clone)]
 struct Light(glam::Vec3);
+
+pub struct Image2D {
+    pub width: u32,
+    pub height: u32,
+    pub channels: u32,
+    pub pixels: Vec<u8>,
+}
+
+impl Image2D {
+    pub fn new(path: &Path) -> CrystalResult<Self> {
+        let file = File::open(path).unwrap();
+        let decoder = png::Decoder::new(file);
+        let mut reader = decoder.read_info().unwrap();
+        let mut pixels = vec![0; reader.output_buffer_size()];
+        let info = reader.next_frame(&mut pixels).unwrap();
+
+        Ok(Self {
+            width: info.width,
+            height: info.height,
+            channels: info.bit_depth as u32,
+            pixels,
+        })
+    }
+}
 
 struct Scene {
     camera: Camera,
@@ -189,17 +212,50 @@ impl ApplicationHandler for Context {
 
         let render_target = graphics.get_viewport();
 
-        let default_texture_image =
-            Image2D::new(Path::new("resources/textures/default.png")).unwrap();
-        let default_sampler = graphics
-            .create_sampler(&default_texture_image, 1.0)
-            .unwrap();
-
-        let test_texture_image = Image2D::new(Path::new("resources/textures/test.png")).unwrap();
-        let test_sampler = graphics.create_sampler(&test_texture_image, 1.0).unwrap();
-
         let layout_obj = graphics.create_layout(true, 2, 3, 1, 3).unwrap();
         let layout_compute = graphics.create_layout(false, 0, 0, 1, 2).unwrap();
+
+        let default_sampler = {
+            let file = File::open("resources/textures/default.png").unwrap();
+            let decoder = png::Decoder::new(file);
+            let mut reader = decoder.read_info().unwrap();
+
+            let size = reader.output_buffer_size();
+            let buffer = graphics
+                .create_buffer(size as u64 * 2, false, true, false)
+                .unwrap();
+
+            let info = reader.next_frame(buffer.get_memory(0..size)).unwrap();
+
+            graphics
+                .create_sampler(
+                    buffer,
+                    [info.width, info.height, info.bit_depth as u32],
+                    1.0,
+                )
+                .unwrap()
+        };
+
+        let test_sampler = {
+            let file = File::open("resources/textures/test.png").unwrap();
+            let decoder = png::Decoder::new(file);
+            let mut reader = decoder.read_info().unwrap();
+
+            let size = reader.output_buffer_size();
+            let buffer = graphics
+                .create_buffer(size as u64 * 2, false, true, false)
+                .unwrap();
+
+            let info = reader.next_frame(buffer.get_memory(0..size)).unwrap();
+
+            graphics
+                .create_sampler(
+                    buffer,
+                    [info.width, info.height, info.bit_depth as u32],
+                    1.0,
+                )
+                .unwrap()
+        };
 
         let uniform = graphics
             .create_buffer(size_of::<Uniform>() as u64, true, false, true)
@@ -320,29 +376,27 @@ impl ApplicationHandler for Context {
             .unwrap(),
         );
 
+        let mesh_buffer = graphics.create_buffer_mesh(mesh1).unwrap();
+
         let obj1 = Object::with_mesh_textured(
             pipeline_render.clone(),
-            mesh1.clone(),
+            mesh_buffer.clone(),
             &[(0, test_sampler.clone())],
         );
 
         let obj2 = Object::with_mesh_textured(
             pipeline_render.clone(),
-            mesh1.clone(),
+            mesh_buffer.clone(),
             &[(0, default_sampler)],
         );
 
-        let obj3 = Object::with_mesh_textured(
-            pipeline_render.clone(),
-            mesh1.clone(),
-            &[(0, test_sampler)],
-        );
+        let obj3 =
+            Object::with_mesh_textured(pipeline_render.clone(), mesh_buffer, &[(0, test_sampler)]);
 
         self.scene.objects.push(obj1);
         self.scene.objects.push(obj2);
         self.scene.objects.push(obj3);
 
-        graphics.register_meshes(&self.scene.objects);
         layout_obj.register_samplers(&self.scene.objects).unwrap();
 
         self.graphics = Some(graphics);
@@ -410,20 +464,13 @@ impl ApplicationHandler for Context {
             .as_ref()
             .unwrap()
             .get_memory_full()
-            .copy_from_slice(vec![ubo.clone()].as_bytes());
+            .copy_from_slice(vec![ubo].as_bytes());
         self.scene
             .transforms
             .as_ref()
             .unwrap()
             .get_memory_full()
             .copy_from_slice(transforms.as_bytes());
-
-        self.scene
-            .uniform
-            .as_ref()
-            .unwrap()
-            .get_memory_full()
-            .copy_from_slice(vec![ubo].as_bytes());
 
         self.graphics
             .clone()

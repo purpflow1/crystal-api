@@ -3,17 +3,15 @@ use std::sync::{Arc, RwLock};
 use ash::vk;
 
 use crate::{
-    Buffer,
     debug::log,
     errors::{CrystalError, CrystalResult},
-    images::Image2D,
     traits,
 };
 
 use super::{
     commands::{CommandEntry, CommandManager, CommandType, GpuFuture},
     devices::DeviceManager,
-    memory::{BufferInfo, BufferManager},
+    memory::BufferManager,
 };
 
 pub struct Image {
@@ -170,26 +168,12 @@ impl traits::Texture for VulkanTexture {
 impl VulkanTexture {
     pub(crate) fn new(
         device_manager: Arc<DeviceManager>,
-        image: &Image2D,
         command_manager: Arc<CommandManager>,
+        buffer: Arc<BufferManager>,
+        data: [u32; 3],
         anisotropy_texels: f32,
     ) -> CrystalResult<Arc<Self>> {
-        let image_size = (image.height * image.width * image.channels) as u64;
-
-        let buffer_info = BufferInfo {
-            size: image_size,
-            usage: vk::BufferUsageFlags::TRANSFER_SRC,
-            properties: vk::MemoryPropertyFlags::HOST_VISIBLE
-                | vk::MemoryPropertyFlags::HOST_COHERENT,
-            count: 1,
-        };
-
-        let buffer_manager = BufferManager::new(device_manager.clone(), buffer_info, None)?;
-        buffer_manager
-            .get_memory(0..image_size as usize / 2)
-            .copy_from_slice(&image.pixels);
-
-        let format = match image.channels {
+        let format = match data[2] {
             1 => vk::Format::R8_SRGB,
             2 => vk::Format::R8G8_SRGB,
             3 => vk::Format::R8G8B8_SRGB,
@@ -214,8 +198,8 @@ impl VulkanTexture {
 
         let image = Image::new(
             device_manager.clone(),
-            image.width,
-            image.height,
+            data[0],
+            data[1],
             vk::SampleCountFlags::TYPE_1,
             format,
             vk::ImageTiling::OPTIMAL,
@@ -229,7 +213,7 @@ impl VulkanTexture {
         )?;
 
         let texture = Arc::new(Self {
-            staging_buffer_manager: buffer_manager,
+            staging_buffer_manager: buffer,
             image,
         });
 

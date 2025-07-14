@@ -1,15 +1,20 @@
 use std::{
-    sync::{Arc, Mutex, RwLock},
+    sync::{Arc, Mutex},
     usize,
 };
 
-use crate::{GpuSampler, ObjectMemoryManager, Pipeline, mesh::Mesh};
+use crate::{Buffer, GpuSampler, Pipeline, mesh::Mesh};
+
+pub struct MeshBuffer {
+    pub mesh: Arc<Mesh>,
+    pub vertices: Arc<dyn Buffer>,
+    pub indices: Arc<dyn Buffer>,
+}
 
 pub struct Object {
     pub(crate) id: Mutex<usize>,
     pub pipeline: Arc<dyn Pipeline>,
-    pub mesh: Option<Arc<Mesh>>,
-    pub(crate) memory_manager: RwLock<Option<Box<dyn ObjectMemoryManager>>>,
+    pub mesh_buffer: Arc<MeshBuffer>,
     pub samplers: Option<Vec<(u32, Arc<GpuSampler>)>>,
 }
 
@@ -18,36 +23,24 @@ unsafe impl Send for Object {}
 
 #[allow(dead_code)]
 impl Object {
-    pub fn new(pipeline: Arc<dyn Pipeline>) -> Arc<Self> {
+    pub fn with_mesh(pipeline: Arc<dyn Pipeline>, mesh: Arc<MeshBuffer>) -> Arc<Self> {
         Arc::new(Self {
             id: Mutex::new(usize::MAX),
             pipeline,
-            mesh: None,
-            memory_manager: RwLock::new(None),
-            samplers: None,
-        })
-    }
-
-    pub fn with_mesh(pipeline: Arc<dyn Pipeline>, mesh: Arc<Mesh>) -> Arc<Self> {
-        Arc::new(Self {
-            id: Mutex::new(usize::MAX),
-            pipeline,
-            mesh: Some(mesh),
-            memory_manager: RwLock::new(None),
+            mesh_buffer: mesh,
             samplers: None,
         })
     }
 
     pub fn with_mesh_textured(
         pipeline: Arc<dyn Pipeline>,
-        mesh: Arc<Mesh>,
+        mesh: Arc<MeshBuffer>,
         textures: &[(u32, Arc<GpuSampler>)],
     ) -> Arc<Self> {
         Arc::new(Self {
             id: Mutex::new(usize::MAX),
             pipeline,
-            mesh: Some(mesh),
-            memory_manager: RwLock::new(None),
+            mesh_buffer: mesh,
             samplers: Some(textures.to_vec()),
         })
     }

@@ -22,13 +22,12 @@ use super::{
 };
 
 use crate::{
-    GpuSampler, GraphicsApiInitSettings, Pipeline,
+    AsBytes, Buffer, GpuSampler, GraphicsApiInitSettings, Pipeline,
     debug::log,
     errors::{CrystalError, CrystalResult},
-    images::Image2D,
-    object::Object,
+    mesh::{Index, Mesh, VertexTexture},
+    object::{MeshBuffer, Object},
     traits::{self, Layout},
-    vulkan::VulkanObjectMemoryManager,
 };
 
 pub struct VulkanEntry {
@@ -509,45 +508,24 @@ impl VulkanEntry {
 
     pub fn create_sampler(
         &self,
-        image: &Image2D,
+        buffer: Arc<dyn traits::Buffer>,
+        data: [u32; 3],
         anisotropy_texels: f32,
     ) -> CrystalResult<Arc<GpuSampler>> {
         log!(
             "creating texture [ width = {}, height = {} ]",
-            image.width,
-            image.height,
+            data[0],
+            data[1],
         );
 
         let texture = VulkanTexture::new(
             self.device_manager.clone(),
-            image,
             self.command_manager.clone(),
+            buffer.clone().as_vulkan().unwrap(),
+            data,
             anisotropy_texels,
         )?;
         Ok(GpuSampler::from_texture(texture))
-    }
-
-    pub fn register_meshes(&self, objects: &[Arc<Object>]) {
-        objects.iter().for_each(|object| {
-            let mut memory_manager = object.memory_manager.write().unwrap();
-
-            match object.mesh.clone() {
-                Some(mesh) => match *memory_manager {
-                    Some(_) => {}
-                    None => {
-                        *memory_manager = Some(
-                            VulkanObjectMemoryManager::new(
-                                self.device_manager.clone(),
-                                &mesh.vertices,
-                                &mesh.indices,
-                            )
-                            .unwrap(),
-                        );
-                    }
-                },
-                None => {}
-            }
-        });
     }
 
     pub fn get_viewport(&self) -> Arc<dyn traits::RenderTarget> {
@@ -728,6 +706,46 @@ impl VulkanEntry {
     //     Ok(())
     // }
 
+    pub fn create_buffer_mesh(&self, mesh: Arc<Mesh>) -> CrystalResult<Arc<MeshBuffer>> {
+        let vertex_size = (mesh.vertices.len() * size_of::<VertexTexture>()) as u64;
+        let index_size = (mesh.indices.len() * size_of::<Index>()) as u64;
+        log!(
+            "creating mesh [ size = {:.1} MB] ",
+            (vertex_size + index_size) as f32 / 1024. / 1024.
+        );
+
+        let mut buffer_info = BufferInfo {
+            size: vertex_size,
+            usage: vk::BufferUsageFlags::VERTEX_BUFFER,
+            properties: vk::MemoryPropertyFlags::HOST_VISIBLE
+                | vk::MemoryPropertyFlags::HOST_COHERENT,
+            count: 1,
+        };
+
+        let vertex_buffer_manager =
+            BufferManager::new(self.device_manager.clone(), buffer_info.clone(), None)?;
+
+        vertex_buffer_manager
+            .get_memory_full()
+            .copy_from_slice(mesh.vertices.as_bytes());
+
+        buffer_info.usage = vk::BufferUsageFlags::INDEX_BUFFER;
+        buffer_info.size = index_size;
+
+        let index_buffer_manager =
+            BufferManager::new(self.device_manager.clone(), buffer_info, None)?;
+
+        index_buffer_manager
+            .get_memory_full()
+            .copy_from_slice(mesh.indices.as_bytes());
+
+        Ok(Arc::new(MeshBuffer {
+            mesh,
+            vertices: vertex_buffer_manager,
+            indices: index_buffer_manager,
+        }))
+    }
+
     pub fn create_buffer(
         &self,
         size: u64,
@@ -742,7 +760,7 @@ impl VulkanEntry {
         }
 
         if transfer {
-            usage |= vk::BufferUsageFlags::TRANSFER_DST
+            usage |= vk::BufferUsageFlags::TRANSFER_DST | vk::BufferUsageFlags::TRANSFER_SRC
         }
 
         let buffer_info = BufferInfo {
