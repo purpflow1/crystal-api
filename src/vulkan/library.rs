@@ -120,6 +120,7 @@ impl VulkanEntry {
                 log!(
                     "No validation layers found! Vulkan SDK should be installed for proper debug. Visit https://vulkan.lunarg.com/"
                 );
+                return Err(CrystalError::CannotLoadLibrary);
             }
 
             layers_pp = layers.iter().map(|x| x.as_ptr()).collect();
