@@ -197,7 +197,6 @@ impl LayoutDynamicData {
             };
         }
 
-        // TODO check working
         if buffer.info.count == 1 && self.double_buffering {
             let descriptor_set = if buffer_usage.contains(vk::BufferUsageFlags::UNIFORM_BUFFER) {
                 self.uniform_descriptor_sets[1]

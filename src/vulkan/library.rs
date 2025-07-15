@@ -114,11 +114,16 @@ impl VulkanEntry {
         let layers_pp: Vec<*const i8>;
 
         #[cfg(debug_assertions)]
+        let mut supported = true;
+
+        #[cfg(debug_assertions)]
         {
             layers = get_supported_validation_layers(&entry);
             if layers.is_empty() {
-                log!("no validation layers found!");
-                return CrystalResult::Err(CrystalError::CannotCreateDebugMessanger);
+                log!(
+                    "No validation layers found! Vulkan SDK should be installed for proper debug. Visit https://vulkan.lunarg.com/"
+                );
+                supported = false;
             }
 
             layers_pp = layers.iter().map(|x| x.as_ptr()).collect();
@@ -148,10 +153,13 @@ impl VulkanEntry {
             Ok(instance) => Arc::new(instance),
         };
 
-        #[cfg(debug_assertions)]
         let debug_utils_messanger = {
-            log!("creating debug utils");
-            create_debug_utils_messanger(&entry, &instance)?
+            if supported && cfg!(debug_assertions) {
+                log!("creating debug utils");
+                Some(create_debug_utils_messanger(&entry, &instance)?)
+            } else {
+                None
+            }
         };
 
         let surface = Presentation::create_surface(
@@ -199,10 +207,7 @@ impl VulkanEntry {
             device_manager: device_manager.clone(),
             command_manager,
 
-            #[cfg(debug_assertions)]
-            _debug_utils_messanger: Some(debug_utils_messanger),
-            #[cfg(not(debug_assertions))]
-            _debug_utils_messanger: None,
+            _debug_utils_messanger: debug_utils_messanger,
 
             presentation,
 
