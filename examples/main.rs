@@ -22,10 +22,8 @@ use winit::{
 const MAX_INSTANCE_NUM: usize = 3;
 
 struct State {
-    delta_time: Duration,
     delta_time_sum: Duration,
     current_frame: usize,
-    now: Option<Instant>,
     startup: Instant,
 }
 
@@ -119,8 +117,6 @@ struct Context {
     window: Option<Window>,
     graphics: Option<Arc<VulkanEntry>>,
 
-    layout_obj: Option<Arc<dyn Layout>>,
-    layout_compute: Option<Arc<dyn Layout>>,
     obj_compute: Option<Arc<Object>>,
 
     settings: GraphicsApiInitSettings,
@@ -139,8 +135,6 @@ impl Context {
         Ok(Self {
             window: None,
             graphics: None,
-            layout_obj: None,
-            layout_compute: None,
             obj_compute: None,
             system: System::new_all(),
 
@@ -171,10 +165,8 @@ impl Context {
             },
 
             state: State {
-                delta_time: Duration::ZERO,
                 delta_time_sum: Duration::ZERO,
                 current_frame: 0,
-                now: None,
                 startup: std::time::Instant::now(),
             },
         })
@@ -214,6 +206,7 @@ impl ApplicationHandler for Context {
 
         let layout_obj = graphics.create_layout(true, 2, 3, 1, 3).unwrap();
         let layout_compute = graphics.create_layout(true, 0, 0, 1, 2).unwrap();
+        // let layout_graph = graphics.create_layout(true, texture_num, sampler_num, uniform_num, storage_num)
 
         let default_sampler = {
             let file = File::open("resources/textures/default.png").unwrap();
@@ -403,57 +396,10 @@ impl ApplicationHandler for Context {
 
         self.graphics = Some(graphics);
         self.window = Some(window);
-        self.layout_obj = Some(layout_obj);
-        self.layout_compute = Some(layout_compute);
         self.obj_compute = Some(obj_compute);
     }
 
     fn about_to_wait(&mut self, _event_loop: &winit::event_loop::ActiveEventLoop) {
-        if let Some(now) = self.state.now {
-            self.state.delta_time = now.elapsed();
-            self.state.delta_time_sum += self.state.delta_time;
-            self.state.current_frame += 1;
-
-            if self.state.delta_time_sum.as_secs_f64() >= 1. {
-                let pid = Pid::from_u32(std::process::id());
-
-                self.system.refresh_process(pid);
-
-                let process = self.system.process(pid).unwrap();
-
-                let gpu_debug = self.graphics.as_ref().unwrap().get_debug_data();
-
-                macro_rules! as_mb {
-                    ($kb:expr) => {
-                        $kb as f32 / 1024. / 1024.
-                    };
-                }
-
-                println!("[DEBUG]");
-                println!("FPS: {}", self.state.current_frame);
-                println!("GPU mem:   {:.1} MB", as_mb!(gpu_debug.used_memory));
-                println!("RAM usage: {:.1} MB", process.memory() as f32 / 1024.);
-                println!("CPU usage: {:.1}%", process.cpu_usage());
-                println!();
-
-                let mem = self
-                    .scene
-                    .compute_buffer_out
-                    .as_ref()
-                    .unwrap()
-                    .get_memory(0..8 * size_of::<f32>());
-
-                println!("{:?}\n", unsafe {
-                    std::slice::from_raw_parts(mem.as_ptr() as *const Particle, 2)
-                });
-
-                self.state.delta_time_sum = Duration::ZERO;
-                self.state.current_frame = 0;
-            }
-        }
-
-        self.state.now = Some(std::time::Instant::now());
-
         let transforms = vec![
             glam::Mat4::from_scale_rotation_translation(
                 glam::Vec3::new(0.3, 0.3, 0.3),
@@ -495,6 +441,48 @@ impl ApplicationHandler for Context {
             .unwrap()
             .get_memory_full()
             .copy_from_slice(transforms.as_bytes());
+
+        let graphics = self.graphics.clone().unwrap();
+
+        self.state.delta_time_sum += graphics.get_delta_time();
+        self.state.current_frame += 1;
+
+        if self.state.delta_time_sum.as_secs_f64() >= 1. {
+            let pid = Pid::from_u32(std::process::id());
+
+            self.system.refresh_process(pid);
+
+            let process = self.system.process(pid).unwrap();
+
+            let gpu_debug = graphics.get_debug_data();
+
+            macro_rules! as_mb {
+                ($kb:expr) => {
+                    $kb as f32 / 1024. / 1024.
+                };
+            }
+
+            println!("[DEBUG]");
+            println!("FPS: {}", self.state.current_frame);
+            println!("GPU mem:   {:.1} MB", as_mb!(gpu_debug.used_memory));
+            println!("RAM usage: {:.1} MB", process.memory() as f32 / 1024.);
+            println!("CPU usage: {:.1}%", process.cpu_usage());
+            println!();
+
+            let mem = self
+                .scene
+                .compute_buffer_out
+                .as_ref()
+                .unwrap()
+                .get_memory(0..8 * size_of::<f32>());
+
+            println!("{:?}\n", unsafe {
+                std::slice::from_raw_parts(mem.as_ptr() as *const Particle, 2)
+            });
+
+            self.state.delta_time_sum = Duration::ZERO;
+            self.state.current_frame = 0;
+        }
 
         self.graphics
             .clone()

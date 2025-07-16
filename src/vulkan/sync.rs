@@ -18,7 +18,6 @@ pub struct Barriers {
     pub semaphore_render: Vec<vk::Semaphore>,
     pub semaphore_transfer: Vec<vk::Semaphore>,
     pub fence_render: [vk::Fence; 2],
-    pub fence_transfer: [vk::Fence; 2],
 }
 
 pub struct GpuSync {
@@ -50,9 +49,6 @@ impl Drop for GpuSync {
                 self.device_manager
                     .device
                     .destroy_fence(self.barriers.fence_render[i], None);
-                self.device_manager
-                    .device
-                    .destroy_fence(self.barriers.fence_transfer[i], None);
             }
         }
     }
@@ -79,7 +75,6 @@ impl GpuSync {
         let mut semaphore_render = Vec::with_capacity(render_images as usize);
         let mut semaphore_transfer = Vec::with_capacity(render_images as usize);
         let mut fence_render = [vk::Fence::null(); 2];
-        let mut fence_transfer = [vk::Fence::null(); 2];
 
         for _ in 0..render_images {
             semaphore_image.push(
@@ -147,17 +142,6 @@ impl GpuSync {
                 }
             };
 
-        for i in 0..2 {
-            fence_transfer[i] =
-                match unsafe { device_manager.device.create_fence(&fence_create_info, None) } {
-                    Ok(semaphore) => semaphore,
-                    Err(e) => {
-                        log!("cannot create fence: {}", e);
-                        return Err(CrystalError::SyncError);
-                    }
-                };
-        }
-
         let n_pass = semaphore_image.len() - 1;
 
         Ok(Arc::new(Mutex::new(Self {
@@ -167,7 +151,6 @@ impl GpuSync {
                 semaphore_render,
                 semaphore_transfer,
                 fence_render,
-                fence_transfer,
             },
             n_pass,
             odd_pass: 0,
@@ -201,16 +184,8 @@ impl GpuSync {
         self.wait_fences(&[self.barriers.fence_render[self.odd_pass]])
     }
 
-    pub fn wait_transfer(&self) -> CrystalResult<()> {
-        self.wait_fences(&[self.barriers.fence_transfer[self.odd_pass]])
-    }
-
     pub fn fence_render(&self) -> vk::Fence {
         self.barriers.fence_render[self.odd_pass]
-    }
-
-    pub fn fence_transfer(&self) -> vk::Fence {
-        self.barriers.fence_transfer[self.odd_pass]
     }
 
     pub fn semaphore_render(&self) -> vk::Semaphore {

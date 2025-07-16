@@ -89,7 +89,18 @@ impl GpuFuture {
 
         if sync_lock.is_sync() {
             signal_semaphores.push(sync_lock.semaphore_transfer());
-            fence = sync_lock.fence_transfer();
+        } else {
+            match unsafe {
+                queue
+                    .device
+                    .create_fence(&vk::FenceCreateInfo::default(), None)
+            } {
+                Ok(f) => fence = f,
+                Err(e) => {
+                    log!("failed to create one time fence: {:?}", e);
+                    return Err(CrystalError::SyncError);
+                }
+            };
         }
 
         let submit_info = vk::SubmitInfo::default()
@@ -97,6 +108,17 @@ impl GpuFuture {
             .signal_semaphores(&signal_semaphores);
 
         queue.submit(&[submit_info], fence).unwrap();
+
+        if !fence.is_null() {
+            unsafe {
+                queue
+                    .device
+                    .wait_for_fences(&[fence], true, u64::MAX)
+                    .unwrap();
+
+                queue.device.destroy_fence(fence, None);
+            };
+        }
 
         drop(command_buffers);
         command_buffer_lock.clear();
@@ -144,7 +166,7 @@ impl GpuFuture {
 
         let result;
 
-        sync.wait_transfer().unwrap();
+        //sync.wait_transfer().unwrap();
 
         let queue_lock = queue
             .submit_still_lock(&[submit_info], sync.fence_render())

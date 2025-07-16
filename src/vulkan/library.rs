@@ -31,6 +31,11 @@ use crate::{
     traits::{self, Layout},
 };
 
+pub struct TimeState {
+    timer: std::time::Instant,
+    delta_time: std::time::Duration,
+}
+
 pub struct VulkanEntry {
     command_manager: Arc<CommandManager>,
     device_manager: Arc<DeviceManager>,
@@ -39,6 +44,7 @@ pub struct VulkanEntry {
     presentation: Arc<Presentation>,
 
     render_thread_handle: Mutex<Option<JoinHandle<Result<(), (vk::Result, Arc<Mutex<GpuSync>>)>>>>,
+    time_state: Mutex<TimeState>,
 
     pub render_targets: BTreeMap<u16, Arc<VulkanRenderTarget>>,
 }
@@ -209,6 +215,10 @@ impl VulkanEntry {
             presentation,
 
             render_thread_handle: Mutex::new(None),
+            time_state: Mutex::new(TimeState {
+                timer: std::time::Instant::now(),
+                delta_time: std::time::Duration::ZERO,
+            }),
 
             render_targets,
         }))
@@ -361,6 +371,11 @@ impl VulkanEntry {
         }
 
         sync.lock().unwrap().wait_render().unwrap();
+
+        let mut timer = self.time_state.lock().unwrap();
+        timer.delta_time = timer.timer.elapsed();
+        timer.timer = std::time::Instant::now();
+        drop(timer);
 
         match graphics_now.acquire_next_image(&self.presentation) {
             Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
@@ -528,6 +543,10 @@ impl VulkanEntry {
         *handle_lock = Some(handle);
 
         Ok(())
+    }
+
+    pub fn get_delta_time(&self) -> std::time::Duration {
+        self.time_state.lock().unwrap().delta_time
     }
 
     pub fn create_layout(
