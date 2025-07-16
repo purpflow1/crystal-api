@@ -26,5 +26,3 @@ path = "examples/main.rs"
 ash = "0.38.0"
 ash-window = "0.13.0"
 raw-window-handle = "0.6.0"
-
-pollster = "0.4.0"

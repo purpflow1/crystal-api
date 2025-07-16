@@ -2,14 +2,13 @@ use std::{
     collections::{BTreeMap, HashSet},
     ffi::CStr,
     sync::{Arc, Mutex},
-    thread::JoinHandle,
 };
 
 use ash::vk::{self, Handle};
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
 use super::{
-    commands::{CommandManager, CommandType},
+    commands::{CommandManager, CommandType, PresentResult},
     debug_callback::{DebugUtilsMessanger, create_debug_utils_messanger},
     devices::DeviceManager,
     images::VulkanTexture,
@@ -43,7 +42,7 @@ pub struct VulkanEntry {
 
     presentation: Arc<Presentation>,
 
-    render_thread_handle: Mutex<Option<JoinHandle<Result<(), (vk::Result, Arc<Mutex<GpuSync>>)>>>>,
+    present_result: Mutex<PresentResult>,
     time_state: Mutex<TimeState>,
 
     pub render_targets: BTreeMap<u16, Arc<VulkanRenderTarget>>,
@@ -51,15 +50,15 @@ pub struct VulkanEntry {
 
 impl Drop for VulkanEntry {
     fn drop(&mut self) {
-        let (swapchain_out_of_date, _) = self.wait_for_thread();
+        let graphics = self
+            .command_manager
+            .command_entries
+            .get(&CommandType::Graphics)
+            .unwrap();
 
-        if !swapchain_out_of_date {
-            let graphics = self
-                .command_manager
-                .command_entries
-                .get(&CommandType::Graphics)
-                .unwrap();
+        graphics.wait().unwrap();
 
+        if !self.present_result.lock().unwrap().out_of_date {
             let now = graphics.now(
                 self.get_viewport()
                     .clone()
@@ -214,7 +213,7 @@ impl VulkanEntry {
 
             presentation,
 
-            render_thread_handle: Mutex::new(None),
+            present_result: Mutex::new(PresentResult::default()),
             time_state: Mutex::new(TimeState {
                 timer: std::time::Instant::now(),
                 delta_time: std::time::Duration::ZERO,
@@ -225,21 +224,12 @@ impl VulkanEntry {
     }
 
     pub fn recreate_resources(&self, width: u32, height: u32) -> CrystalResult<()> {
-        let mut handle_lock = self.render_thread_handle.lock().unwrap();
-        match &*handle_lock {
-            Some(_handle) => {
-                let _ = handle_lock.take().unwrap().join().unwrap();
-                self.command_manager
-                    .command_entries
-                    .get(&CommandType::Graphics)
-                    .clone()
-                    .unwrap()
-                    .wait()?;
-            }
-            None => {}
-        };
-
-        *handle_lock = None;
+        self.command_manager
+            .command_entries
+            .get(&CommandType::Graphics)
+            .clone()
+            .unwrap()
+            .wait()?;
 
         self.presentation
             .swapchain
@@ -253,32 +243,6 @@ impl VulkanEntry {
                 .unwrap()
                 .clone(),
         )
-    }
-
-    fn wait_for_thread(&self) -> (bool, bool) {
-        let mut swapchain_out_of_date = false;
-        let mut suboptimal = false;
-
-        let mut handle_lock = self.render_thread_handle.lock().unwrap();
-
-        match &*handle_lock {
-            Some(_handle) => match handle_lock.take().unwrap().join().unwrap() {
-                Ok(()) => {}
-                Err((vk::Result::ERROR_OUT_OF_DATE_KHR, _)) => {
-                    swapchain_out_of_date = true;
-                    suboptimal = true;
-                }
-                Err((vk::Result::SUBOPTIMAL_KHR, _)) => {
-                    suboptimal = true;
-                }
-                Err((e, _)) => {
-                    panic!("failed to present queue: {}", e);
-                }
-            },
-            None => {}
-        };
-
-        (swapchain_out_of_date, suboptimal)
     }
 
     pub fn dispatch_compute(self: Arc<Self>, objects: &[Arc<Object>]) -> CrystalResult<()> {
@@ -340,8 +304,6 @@ impl VulkanEntry {
             .unwrap()
             .clone();
 
-        let (swapchain_out_of_date, suboptimal) = self.wait_for_thread();
-
         #[cfg(debug_assertions)]
         self.get_debug_data();
 
@@ -354,11 +316,13 @@ impl VulkanEntry {
         let sync = render_target.sync.clone();
         let graphics_now = graphics.now(sync.clone());
 
-        if swapchain_out_of_date {
+        let present_result = *self.present_result.lock().unwrap();
+
+        if present_result.out_of_date {
             self.presentation.swapchain.recreate(None)?;
         }
 
-        if suboptimal {
+        if present_result.suboptimal {
             render_target.update_resources(
                 self.presentation.swapchain.extent(),
                 self.presentation
@@ -529,18 +493,12 @@ impl VulkanEntry {
 
         compute.queue.wait_idle().unwrap();
 
-        let handle = std::thread::Builder::new()
-            .name("compute, swapchain present and flush".to_string())
-            .spawn(move || {
-                compute_future.flush(compute.queue.clone()).unwrap();
-                graphics_future
-                    .swapchain_present_and_flush(graphics.queue.clone(), presentation)?;
-                Ok(())
-            })
-            .unwrap();
+        compute_future.flush(compute.queue.clone()).unwrap();
+        let result =
+            graphics_future.swapchain_present_and_flush(graphics.queue.clone(), presentation);
 
-        let mut handle_lock = self.render_thread_handle.lock().unwrap();
-        *handle_lock = Some(handle);
+        let mut result_lock = self.present_result.lock().unwrap();
+        *result_lock = result;
 
         Ok(())
     }

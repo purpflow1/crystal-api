@@ -17,6 +17,12 @@ use crate::{
 
 use super::{devices::Queue, sync::GpuSync};
 
+#[derive(Default, Clone, Copy)]
+pub struct PresentResult {
+    pub suboptimal: bool,
+    pub out_of_date: bool,
+}
+
 pub struct GpuFuture {
     sync: Arc<Mutex<GpuSync>>,
     command_buffers: Mutex<Vec<Arc<CommandBuffer>>>,
@@ -129,10 +135,10 @@ impl GpuFuture {
     }
 
     pub fn swapchain_present_and_flush(
-        self: Box<Self>,
+        &self,
         queue: Arc<Queue>,
         presentation: Arc<Presentation>,
-    ) -> Result<Box<Self>, (vk::Result, Arc<Mutex<GpuSync>>)> {
+    ) -> PresentResult {
         let swapchain = presentation.swapchain.clone();
 
         let sync = self.sync.lock().unwrap();
@@ -164,9 +170,7 @@ impl GpuFuture {
             .swapchains(&swaphchains)
             .image_indices(&indices);
 
-        let result;
-
-        //sync.wait_transfer().unwrap();
+        let present_result;
 
         let queue_lock = queue
             .submit_still_lock(&[submit_info], sync.fence_render())
@@ -176,22 +180,30 @@ impl GpuFuture {
             command_buffers_lock.clear();
             drop(command_buffers_lock);
 
-            result = swapchain
+            present_result = swapchain
                 .swapchain
                 .write()
                 .unwrap()
                 .queue_present(*queue_lock, &present_info);
         };
 
-        drop(queue_lock);
+        let mut result = PresentResult::default();
 
-        if let Err(e) = result {
-            return Err((e, self.sync.clone()));
+        match present_result {
+            Ok(suboptimal) => result.suboptimal = suboptimal,
+            Err(err) => match err {
+                vk::Result::ERROR_OUT_OF_DATE_KHR => result.out_of_date = true,
+                vk::Result::SUBOPTIMAL_KHR => {
+                    result.out_of_date = true;
+                    result.suboptimal = true
+                }
+                e => {
+                    panic!("fatal: cannot present to queue: {:?}", e);
+                }
+            },
         }
 
-        drop(sync);
-
-        Ok(self)
+        result
     }
 }
 
