@@ -359,7 +359,7 @@ impl ApplicationHandler for Context {
 
         let mesh = Arc::new(
             Mesh::from_buffer(BufReader::new(
-                File::open("resources/mishka/Untitled.obj").unwrap(),
+                File::open("resources/mishka/owo.obj").unwrap(),
             ))
             .unwrap(),
         );
