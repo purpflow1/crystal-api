@@ -1,8 +1,6 @@
 # Crystal API
 **Crystal API**  is a sub-high level graphics wrapper for **Vulkan v1.0** and higher. Currently in WIP stage, but usable for now (may be extremely unstable).
 
----
-
 ## Long-term goals
 - Adding _non-present_ **Crystal API** entry (for compute operations only)
 - Adding **Metal API** support
