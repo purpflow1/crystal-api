@@ -19,8 +19,6 @@ use winit::{
     window::Window,
 };
 
-const MAX_INSTANCE_NUM: usize = 3;
-
 struct State {
     delta_time_sum: Duration,
     current_frame: usize,
@@ -254,12 +252,7 @@ impl ApplicationHandler for Context {
             .create_buffer(size_of::<Uniform>() as u64, true, false, true)
             .unwrap();
         let transform = graphics
-            .create_buffer(
-                (size_of::<glam::Mat4>() * MAX_INSTANCE_NUM) as u64,
-                false,
-                false,
-                true,
-            )
+            .create_buffer((size_of::<glam::Mat4>() * 3) as u64, false, false, true)
             .unwrap();
         let light = graphics
             .create_buffer(size_of::<Light>() as u64 * 3, false, false, true)

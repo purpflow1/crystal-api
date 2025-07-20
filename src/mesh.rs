@@ -15,7 +15,7 @@ type Vec2 = [f32; 2];
 pub type Index = u32;
 
 #[repr(C, align(16))]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 pub struct VertexTexture {
     pub pos: Vec3,
     pub nor: Vec3,
@@ -52,6 +52,32 @@ pub struct Mesh {
 }
 
 impl Mesh {
+    pub fn screen_space_plane() -> Self {
+        let vertices = vec![
+            VertexTexture {
+                pos: [0., 0., 0.],
+                ..Default::default()
+            },
+            VertexTexture {
+                pos: [1., 0., 0.],
+                ..Default::default()
+            },
+            VertexTexture {
+                pos: [1., -1., 0.],
+                ..Default::default()
+            },
+            VertexTexture {
+                pos: [-1., -1., 0.],
+                ..Default::default()
+            },
+        ];
+
+        Self {
+            vertices,
+            indices: vec![0, 1, 2, 2, 3, 0],
+        }
+    }
+
     pub fn from_buffer<T>(buffer: BufReader<T>) -> CrystalResult<Self>
     where
         BufReader<T>: BufRead,
