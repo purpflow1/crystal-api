@@ -1,7 +1,7 @@
 use std::{fs, path::Path, process::Command};
 
 fn main() {
-    println!("cargo:rerun-if-changed=shaders/");
+    println!("cargo::rerun-if-changed=shaders/");
 
     let shader_dir = Path::new("shaders/");
     let out_dir = Path::new("shaders/");
@@ -26,7 +26,11 @@ fn compile_shaders(shader_dir: &Path, out_dir: &Path) {
     }
 
     if !compiled {
-        println!("cargo:warning=No shaders found in {}", shader_dir.display());
+        println!("cargo::info=Hello");
+        println!(
+            "cargo::warning=No shaders found in {}",
+            shader_dir.display()
+        );
     }
 }
 
@@ -47,6 +51,6 @@ fn compile_shader(shader_path: &Path, out_dir: &Path) {
         panic!("Shader compilation failed for {}", file_name);
     }
 
-    println!("cargo:rerun-if-changed={}", shader_path.display());
-    println!("cargo:warning=Compiled shader: {}", file_name);
+    println!("cargo::rerun-if-changed={}", shader_path.display());
+    println!("cargo::warning=Compiled shader: {}", file_name);
 }
