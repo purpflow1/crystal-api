@@ -405,18 +405,15 @@ impl ApplicationHandler for Context {
             PI * 2. * self.state.delta_time_sum.as_secs_f32(),
         ));
 
-        let mut transforms = Vec::with_capacity(125);
+        let mut transforms = Vec::with_capacity(OBJECT_DIMENTION.pow(3));
 
         (1..=OBJECT_DIMENTION).for_each(|i| {
-            let x = i as f32 * DISTANCE;
             (1..=OBJECT_DIMENTION).for_each(|j| {
-                let y = j as f32 * DISTANCE;
                 (1..=OBJECT_DIMENTION).for_each(|k| {
-                    let z = k as f32 * DISTANCE;
                     let transform = glam::Mat4::from_scale_rotation_translation(
                         glam::Vec3::new(0.3, 0.3, 0.3),
                         rotation_matrix,
-                        glam::Vec3::new(x, y, z),
+                        glam::Vec3::new(i as f32, j as f32, k as f32) * DISTANCE,
                     );
 
                     transforms.push(transform);

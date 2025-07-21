@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::BTreeMap,
     ffi::CStr,
     sync::{Arc, Mutex},
 };
@@ -28,6 +28,7 @@ use crate::{
     object::{MeshBuffer, Object},
     settings::DebugData,
     traits::{self, Layout},
+    vulkan::VulkanLayout,
 };
 
 pub struct TimeState {
@@ -449,39 +450,34 @@ impl VulkanEntry {
                 let scissors = &[scissor];
                 unsafe { device.cmd_set_scissor(*command_buffer, 0, scissors) }
 
-                let layouts: HashSet<_> = objects
-                    .iter()
-                    .filter_map(|object| {
-                        if object.groups.is_none() {
-                            Some(object.pipeline.clone().as_vulkan().unwrap().layout.clone())
-                        } else {
-                            None
-                        }
-                    })
-                    .collect();
+                let mut layout_objects =
+                    BTreeMap::<u64, (Arc<VulkanLayout>, Vec<Arc<Object>>)>::new();
 
-                // TODO optimize
-                for layout in layouts {
-                    let objects: Vec<Arc<Object>> = objects
-                        .iter()
-                        .filter_map(|object| {
-                            if object
-                                .pipeline
-                                .clone()
-                                .as_vulkan()
-                                .unwrap()
-                                .layout
-                                .pipeline_layout
-                                .as_raw()
-                                == layout.pipeline_layout.as_raw()
-                            {
-                                Some(object.clone())
-                            } else {
-                                None
+                objects.iter().for_each(|object| {
+                    if object.groups.is_none() {
+                        let layout = object.pipeline.clone().as_vulkan().unwrap().layout.clone();
+
+                        let raw = object
+                            .pipeline
+                            .clone()
+                            .as_vulkan()
+                            .unwrap()
+                            .layout
+                            .pipeline_layout
+                            .as_raw();
+
+                        match layout_objects.get_mut(&raw) {
+                            Some((_, objects)) => {
+                                objects.push(object.clone());
                             }
-                        })
-                        .collect();
+                            None => {
+                                layout_objects.insert(raw, (layout, vec![object.clone()]));
+                            }
+                        }
+                    }
+                });
 
+                for (_, (layout, objects)) in layout_objects {
                     layout.render(&objects, command_buffer).unwrap();
                 }
 

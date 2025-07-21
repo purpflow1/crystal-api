@@ -1,12 +1,11 @@
 use std::{
     collections::BTreeMap,
     ffi::CString,
-    hash::Hash,
     iter::zip,
     sync::{Arc, Mutex, MutexGuard, RwLock},
 };
 
-use ash::vk::{self, Handle};
+use ash::vk;
 
 use crate::{
     Buffer, GpuSampler, RenderTarget, Shader, ShaderStage,
@@ -239,18 +238,6 @@ pub struct VulkanLayout {
     pub pipeline_layout: vk::PipelineLayout,
 
     dynamic_data: Mutex<LayoutDynamicData>,
-}
-
-impl PartialEq for VulkanLayout {
-    fn eq(&self, other: &Self) -> bool {
-        self.pipeline_layout.as_raw() == other.pipeline_layout.as_raw()
-    }
-}
-impl Eq for VulkanLayout {}
-impl Hash for VulkanLayout {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.pipeline_layout.as_raw().hash(state);
-    }
 }
 
 impl Drop for VulkanLayout {
