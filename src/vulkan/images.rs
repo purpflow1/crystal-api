@@ -62,7 +62,7 @@ impl Image {
             1
         };
 
-        let image_create_info = vk::ImageCreateInfo::default()
+        let mut image_create_info = vk::ImageCreateInfo::default()
             .image_type(vk::ImageType::TYPE_2D)
             .extent(extent)
             .mip_levels(mip_levels)
@@ -73,6 +73,16 @@ impl Image {
             .usage(usage)
             .sharing_mode(vk::SharingMode::EXCLUSIVE)
             .samples(samples);
+
+        let mut fixed_rate_flags = [vk::ImageCompressionFixedRateFlagsEXT::TYPE_2BPC];
+
+        let mut compression_control = vk::ImageCompressionControlEXT::default()
+            .flags(vk::ImageCompressionFlagsEXT::FIXED_RATE_EXPLICIT)
+            .fixed_rate_flags(&mut fixed_rate_flags);
+
+        if device_manager.extensions.compression {
+            image_create_info = image_create_info.push_next(&mut compression_control);
+        }
 
         let image = match unsafe { device_manager.device.create_image(&image_create_info, None) } {
             Ok(image) => image,
@@ -155,7 +165,6 @@ impl Image {
 }
 
 pub struct VulkanTexture {
-    pub staging_buffer_manager: Arc<BufferManager>,
     pub image: Arc<Image>,
 }
 
@@ -212,17 +221,18 @@ impl VulkanTexture {
             anisotropy_texels,
         )?;
 
-        let texture = Arc::new(Self {
-            staging_buffer_manager: buffer,
-            image,
-        });
+        let texture = Arc::new(Self { image });
 
-        texture.prepare_texture_image(command_manager)?;
+        texture.prepare_texture_image(buffer, command_manager)?;
 
         Ok(texture)
     }
 
-    pub fn prepare_texture_image(&self, command_manager: Arc<CommandManager>) -> CrystalResult<()> {
+    fn prepare_texture_image(
+        &self,
+        buffer: Arc<BufferManager>,
+        command_manager: Arc<CommandManager>,
+    ) -> CrystalResult<()> {
         let command_entry = command_manager
             .command_entries
             .get(&CommandType::Transfer)
@@ -233,7 +243,7 @@ impl VulkanTexture {
             command_entry.clone(),
             vk::ImageLayout::TRANSFER_DST_OPTIMAL,
         )?;
-        let future = future.join(self.stage_image(command_entry.clone())?);
+        let future = future.join(self.stage_image(buffer, command_entry.clone())?);
         let future = future.join(self.generate_mipmaps(command_entry.clone())?);
 
         future.flush(command_entry.queue.clone())?;
@@ -380,6 +390,7 @@ impl VulkanTexture {
 
     pub(crate) fn stage_image(
         &self,
+        buffer: Arc<BufferManager>,
         command_entry: Arc<CommandEntry>,
     ) -> CrystalResult<Box<GpuFuture>> {
         command_entry.record_single_time_buffer(|command_buffer, device| {
@@ -400,7 +411,7 @@ impl VulkanTexture {
             unsafe {
                 device.cmd_copy_buffer_to_image(
                     *command_buffer,
-                    self.staging_buffer_manager.get_handlers()[0],
+                    buffer.get_handlers()[0],
                     self.image.image,
                     vk::ImageLayout::TRANSFER_DST_OPTIMAL,
                     &[region],

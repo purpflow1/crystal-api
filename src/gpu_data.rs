@@ -1,4 +1,7 @@
-use std::sync::{Arc, RwLock};
+use std::{
+    sync::{Arc, Mutex},
+    usize,
+};
 
 use crate::traits;
 
@@ -22,37 +25,16 @@ impl<T> AsBytes for &[T] {
     }
 }
 
-pub trait IntoGpuTexture {
-    fn get_texture(&self) -> Arc<dyn traits::Texture>;
-    fn get_alive(&self) -> Arc<RwLock<bool>>;
+pub struct GpuSamplerSet {
+    pub(crate) id: Mutex<usize>,
+    pub textures: Vec<(u32, Arc<dyn traits::Texture>)>,
 }
 
-pub struct GpuSampler {
-    pub texture: Arc<dyn traits::Texture>,
-    alive: Arc<RwLock<bool>>,
-}
-
-impl Drop for GpuSampler {
-    fn drop(&mut self) {
-        *self.alive.write().unwrap() = false;
-    }
-}
-
-impl IntoGpuTexture for GpuSampler {
-    fn get_alive(&self) -> Arc<RwLock<bool>> {
-        self.alive.clone()
-    }
-
-    fn get_texture(&self) -> Arc<dyn traits::Texture> {
-        self.texture.clone()
-    }
-}
-
-impl GpuSampler {
-    pub fn from_texture(texture: Arc<dyn traits::Texture>) -> Arc<Self> {
+impl GpuSamplerSet {
+    pub fn from_textures(textures: &[(u32, Arc<dyn traits::Texture>)]) -> Arc<Self> {
         Arc::new(Self {
-            texture,
-            alive: Arc::new(RwLock::new(true)),
+            id: Mutex::new(usize::MAX),
+            textures: textures.to_vec(),
         })
     }
 }

@@ -2,20 +2,18 @@ use std::{
     collections::BTreeMap,
     ffi::CString,
     iter::zip,
-    sync::{Arc, Mutex, MutexGuard, RwLock},
+    sync::{Arc, Mutex, MutexGuard},
 };
 
 use ash::vk;
 
 use crate::{
-    Buffer, GpuSampler, RenderTarget, Shader, ShaderStage,
+    Buffer, GpuSamplerSet, RenderTarget, Shader, ShaderStage,
     debug::log,
     errors::{CrystalError, CrystalResult},
-    gpu_data::IntoGpuTexture,
     mesh::{Attribute, VertexTexture},
     object::Object,
     traits,
-    vulkan::VulkanTexture,
 };
 
 use super::{VulkanRenderTarget, devices::DeviceManager};
@@ -30,7 +28,7 @@ struct LayoutDynamicData {
     n_pass: usize,
     double_buffering: bool,
 
-    sampler_binding_data: BTreeMap<usize, (Arc<VulkanTexture>, Arc<RwLock<bool>>)>,
+    sampler_binding_data: BTreeMap<usize, Arc<GpuSamplerSet>>,
     samplers: BTreeMap<u32, vk::Sampler>,
 }
 
@@ -52,7 +50,7 @@ impl LayoutDynamicData {
         let indices_to_clean: Vec<usize> = self
             .sampler_binding_data
             .iter()
-            .filter(|(_, (_, alive))| !*alive.read().unwrap())
+            .filter(|(_, sampler)| Arc::strong_count(sampler) == 1)
             .map(|(ind, _)| *ind)
             .collect();
 
@@ -69,26 +67,28 @@ impl LayoutDynamicData {
         Ok(result)
     }
 
-    fn add_textures(
-        &mut self,
-        descriptor_set_id: &mut usize,
-        samplers: &[(u32, Arc<GpuSampler>)],
-    ) -> CrystalResult<()> {
-        for (binding, texture) in samplers {
-            let id = (0..usize::MAX)
-                .find(|idx| {
-                    self.sampler_binding_data
-                        .iter()
-                        .find(|(x, _)| **x == *idx)
-                        .is_none()
-                })
-                .unwrap();
-
-            let vulkan_texture = texture.get_texture().as_vulkan().unwrap();
-            *descriptor_set_id = id;
-
+    fn add_textures(&mut self, sampler_set: Arc<GpuSamplerSet>) -> CrystalResult<()> {
+        let mut id_lock = sampler_set.id.lock().unwrap();
+        if *id_lock != usize::MAX {
             self.sampler_binding_data
-                .insert(id, (vulkan_texture.clone(), texture.get_alive()));
+                .remove(&*id_lock)
+                .expect("fatal: sampler is already bound to another layout");
+        }
+
+        *id_lock = (0..usize::MAX)
+            .find(|idx| {
+                self.sampler_binding_data
+                    .iter()
+                    .find(|(x, _)| **x == *idx)
+                    .is_none()
+            })
+            .unwrap();
+
+        self.sampler_binding_data
+            .insert(*id_lock, sampler_set.clone());
+
+        for (binding, texture) in &sampler_set.textures {
+            let vulkan_texture = texture.clone().as_vulkan().unwrap();
 
             let sampler = match self.samplers.get(&vulkan_texture.image.mip_levels) {
                 Some(sampler) => *sampler,
@@ -135,7 +135,7 @@ impl LayoutDynamicData {
                 .sampler(sampler)];
 
             let descriptor_write = {
-                let descriptor_set = self.sampler_descriptor_sets[*descriptor_set_id];
+                let descriptor_set = self.sampler_descriptor_sets[*id_lock];
 
                 vk::WriteDescriptorSet::default()
                     .dst_set(descriptor_set)
@@ -285,17 +285,12 @@ impl traits::Layout for VulkanLayout {
         lock.add_buffer(binding, buffer)
     }
 
-    fn register_samplers(&self, objects: &[Arc<Object>]) -> CrystalResult<()> {
+    fn register_samplers(&self, samplers: &[Arc<GpuSamplerSet>]) -> CrystalResult<()> {
         let mut dynamic_data = self.dynamic_data.lock().unwrap();
 
-        objects.iter().for_each(|object| {
-            dynamic_data
-                .add_textures(
-                    &mut *object.id.lock().unwrap(),
-                    object.samplers.as_ref().expect("object has no samplers!"),
-                )
-                .unwrap()
-        });
+        samplers
+            .iter()
+            .for_each(|sampler| dynamic_data.add_textures(sampler.clone()).unwrap());
         Ok(())
     }
 
@@ -603,8 +598,8 @@ impl VulkanLayout {
         let mut current_object_idx = 0u32;
 
         for object in objects.iter() {
-            if let Some(_samplers) = &object.samplers {
-                let id = *object.id.lock().unwrap();
+            if let Some(sampler) = &object.sampler {
+                let id = *sampler.id.lock().unwrap();
 
                 unsafe {
                     device_manager.device.cmd_bind_descriptor_sets(

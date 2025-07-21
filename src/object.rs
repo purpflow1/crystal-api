@@ -1,9 +1,6 @@
-use std::{
-    sync::{Arc, Mutex},
-    usize,
-};
+use std::sync::Arc;
 
-use crate::{Buffer, GpuSampler, Pipeline, mesh::Mesh};
+use crate::{Buffer, GpuSamplerSet, Pipeline, mesh::Mesh};
 
 pub struct MeshBuffer {
     pub mesh: Arc<Mesh>,
@@ -12,10 +9,9 @@ pub struct MeshBuffer {
 }
 
 pub struct Object {
-    pub(crate) id: Mutex<usize>,
     pub pipeline: Arc<dyn Pipeline>,
     pub mesh_buffer: Option<Arc<MeshBuffer>>,
-    pub samplers: Option<Vec<(u32, Arc<GpuSampler>)>>,
+    pub sampler: Option<Arc<GpuSamplerSet>>,
     pub groups: Option<[u32; 3]>,
     pub array: u32,
 }
@@ -27,10 +23,9 @@ unsafe impl Send for Object {}
 impl Object {
     pub fn new_compute(pipeline: Arc<dyn Pipeline>, groups: [u32; 3]) -> Arc<Self> {
         Arc::new(Self {
-            id: Mutex::new(usize::MAX),
             pipeline,
             mesh_buffer: None,
-            samplers: None,
+            sampler: None,
             groups: Some(groups),
             array: 0,
         })
@@ -38,24 +33,19 @@ impl Object {
 
     pub fn with_mesh(pipeline: Arc<dyn Pipeline>, mesh: Arc<MeshBuffer>) -> Arc<Self> {
         Arc::new(Self {
-            id: Mutex::new(usize::MAX),
             pipeline,
             mesh_buffer: Some(mesh),
-            samplers: None,
+            sampler: None,
             groups: None,
             array: 1,
         })
     }
 
-    pub fn with_textures(
-        pipeline: Arc<dyn Pipeline>,
-        textures: &[(u32, Arc<GpuSampler>)],
-    ) -> Arc<Self> {
+    pub fn with_textures(pipeline: Arc<dyn Pipeline>, sampler: Arc<GpuSamplerSet>) -> Arc<Self> {
         Arc::new(Self {
-            id: Mutex::new(usize::MAX),
             pipeline,
             mesh_buffer: None,
-            samplers: Some(textures.to_vec()),
+            sampler: Some(sampler),
             groups: None,
             array: 1,
         })
@@ -64,13 +54,12 @@ impl Object {
     pub fn with_mesh_sampled(
         pipeline: Arc<dyn Pipeline>,
         mesh: Arc<MeshBuffer>,
-        samplers: &[(u32, Arc<GpuSampler>)],
+        sampler: Arc<GpuSamplerSet>,
     ) -> Arc<Self> {
         Arc::new(Self {
-            id: Mutex::new(usize::MAX),
             pipeline,
             mesh_buffer: Some(mesh),
-            samplers: Some(samplers.to_vec()),
+            sampler: Some(sampler),
             groups: None,
             array: 1,
         })
@@ -79,14 +68,13 @@ impl Object {
     pub fn with_mesh_sampled_array(
         pipeline: Arc<dyn Pipeline>,
         mesh: Arc<MeshBuffer>,
-        samplers: &[(u32, Arc<GpuSampler>)],
+        sampler: Arc<GpuSamplerSet>,
         array: u32,
     ) -> Arc<Self> {
         Arc::new(Self {
-            id: Mutex::new(usize::MAX),
             pipeline,
             mesh_buffer: Some(mesh),
-            samplers: Some(samplers.to_vec()),
+            sampler: Some(sampler),
             groups: None,
             array,
         })

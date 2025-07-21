@@ -5,7 +5,7 @@ pub enum CrystalError {
     CannotLoadLibrary,
     ConnotInitLibrary,
     CannotCreateDebugMessanger,
-    CannotPickPhysicalDevice,
+    Unsupported,
     CannotInitDevice,
     SwapChainIsNotSupported,
     SwapChainError,

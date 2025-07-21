@@ -3,6 +3,7 @@ pub struct GraphicsApiInitSettings {
     pub msaa_samples: u8,
     pub width: u32,
     pub height: u32,
+    pub bypass_capability_check: bool,
 }
 
 impl GraphicsApiInitSettings {
@@ -19,6 +20,13 @@ impl GraphicsApiInitSettings {
 
     pub fn height(&self, height: u32) -> Self {
         Self { height, ..*self }
+    }
+
+    pub fn bypass_capability_check(&self, bypass_capability_check: bool) -> Self {
+        Self {
+            bypass_capability_check,
+            ..*self
+        }
     }
 }
 

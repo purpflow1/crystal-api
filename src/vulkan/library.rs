@@ -21,7 +21,7 @@ use super::{
 };
 
 use crate::{
-    AsBytes, Buffer, GpuSampler, GraphicsApiInitSettings,
+    AsBytes, Buffer, GpuSamplerSet, GraphicsApiInitSettings, Texture,
     debug::log,
     errors::{CrystalError, CrystalResult},
     mesh::{Index, Mesh, VertexTexture},
@@ -82,8 +82,6 @@ impl VulkanEntry {
             #[cfg(debug_assertions)]
             vk::EXT_DEBUG_UTILS_NAME.as_ptr(),
         ];
-
-        let device_extensions = [vk::KHR_SWAPCHAIN_NAME.as_ptr()];
 
         let mut required_extensions = match ash_window::enumerate_required_extensions(
             window.display_handle().unwrap().as_raw(),
@@ -172,8 +170,49 @@ impl VulkanEntry {
             }),
         );
 
-        let device_manager =
-            DeviceManager::new(entry, instance, Some(surface.clone()), &device_extensions)?;
+        let mut device_manager = None;
+
+        for step in 0..=1 {
+            match step {
+                0 => {
+                    let device_extensions = [
+                        vk::KHR_SWAPCHAIN_NAME.as_ptr(),
+                        vk::EXT_IMAGE_COMPRESSION_CONTROL_NAME.as_ptr(),
+                        vk::EXT_IMAGE_COMPRESSION_CONTROL_SWAPCHAIN_NAME.as_ptr(),
+                    ];
+
+                    if let Ok(dm) = DeviceManager::new(
+                        entry.clone(),
+                        instance.clone(),
+                        Some(surface.clone()),
+                        &device_extensions,
+                    ) {
+                        device_manager = Some(dm);
+                        break;
+                    }
+                }
+                1 => {
+                    let device_extensions = [vk::KHR_SWAPCHAIN_NAME.as_ptr()];
+
+                    if let Ok(dm) = DeviceManager::new(
+                        entry.clone(),
+                        instance.clone(),
+                        Some(surface.clone()),
+                        &device_extensions,
+                    ) {
+                        device_manager = Some(dm);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        if device_manager.is_none() {
+            return Err(CrystalError::Unsupported);
+        }
+
+        let device_manager = device_manager.unwrap();
 
         log!("| picked device: [ {} ]", device_manager.device_name);
         log!(
@@ -536,26 +575,40 @@ impl VulkanEntry {
         )?)
     }
 
-    pub fn create_sampler(
+    pub fn create_texture(
         &self,
         buffer: Arc<dyn traits::Buffer>,
         data: [u32; 3],
         anisotropy_texels: f32,
-    ) -> CrystalResult<Arc<GpuSampler>> {
+    ) -> CrystalResult<Arc<dyn Texture>> {
         log!(
             "creating texture [ width = {}, height = {} ]",
             data[0],
             data[1],
         );
 
-        let texture = VulkanTexture::new(
+        Ok(VulkanTexture::new(
             self.device_manager.clone(),
             self.command_manager.clone(),
             buffer.clone().as_vulkan().unwrap(),
             data,
             anisotropy_texels,
-        )?;
-        Ok(GpuSampler::from_texture(texture))
+        )?)
+    }
+
+    pub fn create_sampler_set(
+        &self,
+        textures: &[(u32, Arc<dyn Texture>)],
+    ) -> CrystalResult<Arc<GpuSamplerSet>> {
+        log!(
+            "creating sampler [ bindings = {:?} ]",
+            textures
+                .iter()
+                .map(|(binding, _)| *binding)
+                .collect::<Vec<_>>()
+        );
+
+        Ok(GpuSamplerSet::from_textures(textures))
     }
 
     pub fn get_viewport(&self) -> Arc<dyn traits::RenderTarget> {

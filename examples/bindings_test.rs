@@ -190,13 +190,14 @@ impl ApplicationHandler for Context {
 
             let info = reader.next_frame(buffer.get_memory(0..size)).unwrap();
 
-            graphics
-                .create_sampler(
+            let texture = graphics
+                .create_texture(
                     buffer,
                     [info.width, info.height, info.bit_depth as u32],
                     1.0,
                 )
-                .unwrap()
+                .unwrap();
+            graphics.create_sampler_set(&[(0, texture)]).unwrap()
         };
 
         let test_sampler = {
@@ -211,13 +212,14 @@ impl ApplicationHandler for Context {
 
             let info = reader.next_frame(buffer.get_memory(0..size)).unwrap();
 
-            graphics
-                .create_sampler(
+            let texture = graphics
+                .create_texture(
                     buffer,
                     [info.width, info.height, info.bit_depth as u32],
                     1.0,
                 )
-                .unwrap()
+                .unwrap();
+            graphics.create_sampler_set(&[(0, texture)]).unwrap()
         };
 
         let uniform = graphics
@@ -300,18 +302,18 @@ impl ApplicationHandler for Context {
 
         let mut rng = rand::rng();
 
+        layout_obj
+            .register_samplers(&[default_sampler.clone(), test_sampler.clone()])
+            .unwrap();
+
         for _ in 0..MAX_OBJECT_NUM {
             let object = Object::with_mesh_sampled(
                 pipeline_render.clone(),
                 mesh_buffer.clone(),
-                &[(
-                    0,
-                    [default_sampler.clone(), test_sampler.clone()][rng.random_range(0..2)].clone(),
-                )],
+                [default_sampler.clone(), test_sampler.clone()][rng.random_range(0..2)].clone(),
             );
 
             self.scene.objects.push(object.clone());
-            layout_obj.register_samplers(&[object]).unwrap();
         }
 
         self.graphics = Some(graphics);
@@ -463,7 +465,8 @@ fn main() -> CrystalResult<()> {
     let settings = GraphicsApiInitSettings::default()
         .msaa_samples(4)
         .width(1000)
-        .height(700);
+        .height(700)
+        .bypass_capability_check(true);
 
     let event_loop = EventLoop::new().unwrap();
     event_loop.set_control_flow(ControlFlow::Poll);

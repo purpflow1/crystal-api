@@ -163,7 +163,7 @@ impl DeviceManager {
         extensions: &[*const i8],
     ) -> CrystalResult<Arc<Self>> {
         let (physical_device, device_name, physical_device_extensions) =
-            pick_physical_device(&instance, &extensions)?;
+            pick_physical_device(&instance, extensions)?;
 
         let memory_properties =
             unsafe { instance.get_physical_device_memory_properties(physical_device) };
@@ -224,7 +224,7 @@ fn pick_physical_device<'a>(
         Ok(devices) => devices,
         Err(e) => {
             log!("cannot enumerate physical devices: {}", e);
-            return Err(CrystalError::CannotPickPhysicalDevice);
+            return Err(CrystalError::Unsupported);
         }
     };
 
@@ -303,8 +303,7 @@ fn pick_physical_device<'a>(
     let device = match picked_device {
         Some(device) => device,
         None => {
-            log!("no suitable devices found");
-            return Err(CrystalError::CannotPickPhysicalDevice);
+            return Err(CrystalError::Unsupported);
         }
     };
 

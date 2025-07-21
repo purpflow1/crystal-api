@@ -38,6 +38,7 @@ pub struct SwapchainInfo {
     surface: Arc<PresentSurface>,
 
     queue_family_indices: [u32; 2],
+
     pub surface_format: vk::SurfaceFormatKHR,
     extent: RwLock<vk::Extent2D>,
     present_mode: vk::PresentModeKHR,
@@ -275,14 +276,26 @@ impl Swapchain {
     )> {
         let swapchain =
             ash::khr::swapchain::Device::new(&device_manager.instance, &device_manager.device);
-        let swapchain_khr =
-            match unsafe { swapchain.create_swapchain(&swapchain_create_info.as_vk(), None) } {
-                Ok(swapchain_khr) => swapchain_khr,
-                Err(e) => {
-                    log!("cannot create swapchain: {}", e);
-                    return Err(CrystalError::SwapChainError);
-                }
-            };
+
+        let mut fixed_rate_flags = [vk::ImageCompressionFixedRateFlagsEXT::TYPE_2BPC];
+
+        let mut compression_control = vk::ImageCompressionControlEXT::default()
+            .flags(vk::ImageCompressionFlagsEXT::FIXED_RATE_EXPLICIT)
+            .fixed_rate_flags(&mut fixed_rate_flags);
+
+        let mut info = swapchain_create_info.as_vk();
+
+        if device_manager.extensions.compression {
+            info = info.push_next(&mut compression_control);
+        }
+
+        let swapchain_khr = match unsafe { swapchain.create_swapchain(&info, None) } {
+            Ok(swapchain_khr) => swapchain_khr,
+            Err(e) => {
+                log!("cannot create swapchain: {}", e);
+                return Err(CrystalError::SwapChainError);
+            }
+        };
 
         let swapchain_images = match unsafe { swapchain.get_swapchain_images(swapchain_khr) } {
             Ok(images) => images,

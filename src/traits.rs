@@ -1,6 +1,6 @@
 use std::{ops::Range, sync::Arc};
 
-use crate::{errors::CrystalResult, mesh::Attribute, object::Object, shader::Shader, vulkan};
+use crate::{GpuSamplerSet, errors::CrystalResult, mesh::Attribute, shader::Shader, vulkan};
 
 pub trait RenderTarget: Sync + Send {
     fn as_vulkan(self: Arc<Self>) -> Option<Arc<vulkan::VulkanRenderTarget>> {
@@ -25,7 +25,7 @@ pub trait Layout: Sync + Send {
         shader: &Shader,
     ) -> CrystalResult<Arc<dyn Pipeline>>;
 
-    fn register_samplers(&self, objects: &[Arc<Object>]) -> CrystalResult<()>;
+    fn register_samplers(&self, samplers: &[Arc<GpuSamplerSet>]) -> CrystalResult<()>;
     fn add_buffer(&self, binding: u32, buffer: Arc<dyn Buffer>) -> CrystalResult<()>;
 }
 

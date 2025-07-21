@@ -230,13 +230,14 @@ impl ApplicationHandler for Context {
 
             let info = reader.next_frame(buffer.get_memory(0..size)).unwrap();
 
-            graphics
-                .create_sampler(
+            let texture = graphics
+                .create_texture(
                     buffer,
                     [info.width, info.height, info.bit_depth as u32],
                     1.0,
                 )
-                .unwrap()
+                .unwrap();
+            graphics.create_sampler_set(&[(0, texture)]).unwrap()
         };
 
         let _test_sampler = {
@@ -251,13 +252,14 @@ impl ApplicationHandler for Context {
 
             let info = reader.next_frame(buffer.get_memory(0..size)).unwrap();
 
-            graphics
-                .create_sampler(
+            let texture = graphics
+                .create_texture(
                     buffer,
                     [info.width, info.height, info.bit_depth as u32],
                     1.0,
                 )
-                .unwrap()
+                .unwrap();
+            graphics.create_sampler_set(&[(0, texture)]).unwrap()
         };
 
         let uniform = graphics
@@ -312,9 +314,9 @@ impl ApplicationHandler for Context {
             .copy_from_slice(
                 vec![
                     Light(glam::Vec3 {
-                        x: 0.1,
-                        y: 0.1,
-                        z: 0.1,
+                        x: 1.,
+                        y: 1.,
+                        z: 1.,
                     }),
                     Light(glam::Vec3 {
                         x: 0.,
@@ -322,9 +324,9 @@ impl ApplicationHandler for Context {
                         z: 0.,
                     }),
                     Light(glam::Vec3 {
-                        x: 1.,
-                        y: 1.,
-                        z: 1.,
+                        x: 0.,
+                        y: 0.,
+                        z: 0.,
                     }),
                 ]
                 .as_bytes(),
@@ -386,12 +388,14 @@ impl ApplicationHandler for Context {
         let object = Object::with_mesh_sampled_array(
             pipeline_render.clone(),
             mesh_buffer.clone(),
-            &[(0, default_sampler.clone())],
+            default_sampler.clone(),
             OBJECT_DIMENTION.pow(3) as u32,
         );
 
         self.scene.objects.push(object.clone());
-        layout_obj.register_samplers(&[object]).unwrap();
+        layout_obj
+            .register_samplers(&[default_sampler, _test_sampler])
+            .unwrap();
 
         self.graphics = Some(graphics);
         self.window = Some(window);
