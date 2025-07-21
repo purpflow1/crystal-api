@@ -19,6 +19,10 @@ use winit::{
     window::Window,
 };
 
+const DEBUG_OUTPUT: bool = true;
+const OBJECT_DIMENTION: usize = 10;
+const DISTANCE: f32 = 2.;
+
 struct State {
     delta_time_sum: Duration,
     current_frame: usize,
@@ -130,6 +134,8 @@ impl Context {
         let width = settings.width;
         let height = settings.height;
 
+        const DISTANCE_FROM_OBJECTS: f32 = (DISTANCE + 1.) * OBJECT_DIMENTION as f32;
+
         Ok(Self {
             window: None,
             graphics: None,
@@ -146,7 +152,11 @@ impl Context {
                         100.,
                     ),
                     view: glam::Mat4::look_at_lh(
-                        glam::Vec3::new(5., 5., 5.),
+                        glam::Vec3::new(
+                            DISTANCE_FROM_OBJECTS,
+                            DISTANCE_FROM_OBJECTS,
+                            DISTANCE_FROM_OBJECTS,
+                        ),
                         glam::Vec3::ZERO,
                         glam::Vec3::new(0., -1., 0.),
                     ),
@@ -202,7 +212,9 @@ impl ApplicationHandler for Context {
 
         let render_target = graphics.get_viewport();
 
-        let layout_obj = graphics.create_layout(true, 2, 3, 1, 3).unwrap();
+        let layout_obj = graphics
+            .create_layout(true, 2, OBJECT_DIMENTION.pow(3), 1, 3)
+            .unwrap();
         let layout_compute = graphics.create_layout(true, 0, 0, 1, 2).unwrap();
         // let layout_graph = graphics.create_layout(true, texture_num, sampler_num, uniform_num, storage_num)
 
@@ -227,7 +239,7 @@ impl ApplicationHandler for Context {
                 .unwrap()
         };
 
-        let test_sampler = {
+        let _test_sampler = {
             let file = File::open("resources/textures/test.png").unwrap();
             let decoder = png::Decoder::new(file);
             let mut reader = decoder.read_info().unwrap();
@@ -252,7 +264,12 @@ impl ApplicationHandler for Context {
             .create_buffer(size_of::<Uniform>() as u64, true, false, true)
             .unwrap();
         let transform = graphics
-            .create_buffer((size_of::<glam::Mat4>() * 3) as u64, false, false, true)
+            .create_buffer(
+                (size_of::<glam::Mat4>() * OBJECT_DIMENTION.pow(3)) as u64,
+                false,
+                false,
+                true,
+            )
             .unwrap();
         let light = graphics
             .create_buffer(size_of::<Light>() as u64 * 3, false, false, true)
@@ -366,26 +383,17 @@ impl ApplicationHandler for Context {
 
         let mesh_buffer = graphics.create_buffer_mesh(mesh).unwrap();
 
-        let obj1 = Object::with_mesh_textured(
+        let object = Object::with_mesh_sampled(
             pipeline_render.clone(),
             mesh_buffer.clone(),
-            &[(0, test_sampler.clone())],
+            &[(0, default_sampler.clone())],
         );
 
-        let obj2 = Object::with_mesh_textured(
-            pipeline_render.clone(),
-            mesh_buffer.clone(),
-            &[(0, default_sampler)],
-        );
+        (0..OBJECT_DIMENTION.pow(3)).for_each(|_| {
+            self.scene.objects.push(object.clone());
+        });
 
-        let obj3 =
-            Object::with_mesh_textured(pipeline_render.clone(), mesh_buffer, &[(0, test_sampler)]);
-
-        self.scene.objects.push(obj1);
-        self.scene.objects.push(obj2);
-        self.scene.objects.push(obj3);
-
-        layout_obj.register_samplers(&self.scene.objects).unwrap();
+        layout_obj.register_samplers(&[object]).unwrap();
 
         self.graphics = Some(graphics);
         self.window = Some(window);
@@ -393,29 +401,28 @@ impl ApplicationHandler for Context {
     }
 
     fn about_to_wait(&mut self, _event_loop: &winit::event_loop::ActiveEventLoop) {
-        let transforms = vec![
-            glam::Mat4::from_scale_rotation_translation(
-                glam::Vec3::new(0.3, 0.3, 0.3),
-                glam::Quat::from_mat4(&glam::Mat4::from_rotation_y(
-                    PI * 2. * self.state.delta_time_sum.as_secs_f32(),
-                )),
-                glam::Vec3::new(0., 0., 0.),
-            ),
-            glam::Mat4::from_scale_rotation_translation(
-                glam::Vec3::new(1.0, 1.0, 1.0),
-                glam::Quat::from_mat4(&glam::Mat4::from_rotation_z(
-                    PI * 2. * self.state.delta_time_sum.as_secs_f32(),
-                )),
-                glam::Vec3::new(0., 0., -3.),
-            ),
-            glam::Mat4::from_scale_rotation_translation(
-                glam::Vec3::new(1.0, 1.0, 1.0),
-                glam::Quat::from_mat4(&glam::Mat4::from_rotation_x(
-                    PI * 2. * self.state.delta_time_sum.as_secs_f32(),
-                )),
-                glam::Vec3::new(-3., 0., 0.),
-            ),
-        ];
+        let rotation_matrix = glam::Quat::from_mat4(&glam::Mat4::from_rotation_y(
+            PI * 2. * self.state.delta_time_sum.as_secs_f32(),
+        ));
+
+        let mut transforms = Vec::with_capacity(125);
+
+        (1..=OBJECT_DIMENTION).for_each(|i| {
+            let x = i as f32 * DISTANCE;
+            (1..=OBJECT_DIMENTION).for_each(|j| {
+                let y = j as f32 * DISTANCE;
+                (1..=OBJECT_DIMENTION).for_each(|k| {
+                    let z = k as f32 * DISTANCE;
+                    let transform = glam::Mat4::from_scale_rotation_translation(
+                        glam::Vec3::new(0.3, 0.3, 0.3),
+                        rotation_matrix,
+                        glam::Vec3::new(x, y, z),
+                    );
+
+                    transforms.push(transform);
+                })
+            })
+        });
 
         let ubo = Uniform {
             eye: self.scene.camera.calc_eye_matrix(),
@@ -440,7 +447,7 @@ impl ApplicationHandler for Context {
         self.state.delta_time_sum += graphics.get_delta_time();
         self.state.current_frame += 1;
 
-        if self.state.delta_time_sum.as_secs_f64() >= 1. {
+        if DEBUG_OUTPUT && self.state.delta_time_sum.as_secs_f64() >= 1. {
             let pid = Pid::from_u32(std::process::id());
 
             self.system.refresh_process(pid);

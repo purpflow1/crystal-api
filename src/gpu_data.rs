@@ -1,4 +1,4 @@
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, RwLock};
 
 use crate::traits;
 
@@ -25,21 +25,6 @@ impl<T> AsBytes for &[T] {
 pub trait IntoGpuTexture {
     fn get_texture(&self) -> Arc<dyn traits::Texture>;
     fn get_alive(&self) -> Arc<RwLock<bool>>;
-}
-
-pub struct PtrHandler(pub(crate) Mutex<*mut u8>);
-
-unsafe impl Sync for PtrHandler {}
-unsafe impl Send for PtrHandler {}
-
-impl PtrHandler {
-    pub fn new_null() -> Self {
-        Self(Mutex::new(std::ptr::null_mut()))
-    }
-
-    pub fn get_ptr<T>(&self) -> *mut T {
-        *self.0.lock().unwrap() as *mut T
-    }
 }
 
 pub struct GpuSampler {

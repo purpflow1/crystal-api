@@ -57,16 +57,16 @@ impl Object {
         })
     }
 
-    pub fn with_mesh_textured(
+    pub fn with_mesh_sampled(
         pipeline: Arc<dyn Pipeline>,
         mesh: Arc<MeshBuffer>,
-        textures: &[(u32, Arc<GpuSampler>)],
+        samplers: &[(u32, Arc<GpuSampler>)],
     ) -> Arc<Self> {
         Arc::new(Self {
             id: Mutex::new(usize::MAX),
             pipeline,
             mesh_buffer: Some(mesh),
-            samplers: Some(textures.to_vec()),
+            samplers: Some(samplers.to_vec()),
             groups: None,
         })
     }
