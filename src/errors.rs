@@ -2,26 +2,22 @@ use std::fmt::{Debug, Display};
 
 #[derive(Debug)]
 pub enum CrystalError {
-    CannotLoadLibrary,
     ConnotInitLibrary,
-    CannotCreateDebugMessanger,
-    Unsupported,
-    CannotInitDevice,
-    SwapChainIsNotSupported,
-    SwapChainError,
-    CannotCreateRenderTarget,
-    CannotCreateRenderPass,
-    CannotCreateFramebuffer,
-    CannotCreateCommandManager,
-    CommandManagerError,
-    RenderingError,
-    SyncError,
-    GpuIsNotSupported,
+    NotSupportedSystem,
+    NotSupportedDevice,
+    NotSupportedPresent,
 
+    PresentError,
+    TransferError,
+    RenderingError,
+
+    SyncError,
     ShaderError,
     MemoryError,
-    DescriptorError,
+    DataError,
     ImageError,
+
+    DebugError,
 
     OutOfDate,
 }

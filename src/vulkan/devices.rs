@@ -173,7 +173,7 @@ impl DeviceManager {
         let queue_families = find_queue_families(instance.clone(), surface, physical_device);
 
         if queue_families.len() == 0 {
-            return Err(CrystalError::GpuIsNotSupported);
+            return Err(CrystalError::NotSupportedDevice);
         }
 
         let (logical_device, queues) = create_logical_device(
@@ -224,7 +224,7 @@ fn pick_physical_device<'a>(
         Ok(devices) => devices,
         Err(e) => {
             log!("cannot enumerate physical devices: {}", e);
-            return Err(CrystalError::Unsupported);
+            return Err(CrystalError::NotSupportedDevice);
         }
     };
 
@@ -303,7 +303,7 @@ fn pick_physical_device<'a>(
     let device = match picked_device {
         Some(device) => device,
         None => {
-            return Err(CrystalError::Unsupported);
+            return Err(CrystalError::NotSupportedDevice);
         }
     };
 
@@ -409,7 +409,7 @@ fn create_logical_device(
     {
         Err(e) => {
             log!("cannot create logical device: {}", e);
-            return Err(CrystalError::CannotInitDevice);
+            return Err(CrystalError::NotSupportedDevice);
         }
         Ok(device) => Arc::new(device),
     };

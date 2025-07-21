@@ -103,7 +103,7 @@ impl VulkanEntry {
             Ok(entry) => Arc::new(entry),
             Err(e) => {
                 log!("cannot load vulkan entry: {}", e);
-                return CrystalResult::Err(CrystalError::CannotLoadLibrary);
+                return CrystalResult::Err(CrystalError::ConnotInitLibrary);
             }
         };
 
@@ -124,7 +124,7 @@ impl VulkanEntry {
                 log!(
                     "No validation layers found! Vulkan SDK should be installed for proper debug. Visit https://vulkan.lunarg.com/"
                 );
-                return Err(CrystalError::CannotLoadLibrary);
+                return Err(CrystalError::ConnotInitLibrary);
             }
 
             layers_pp = layers.iter().map(|x| x.as_ptr()).collect();
@@ -209,18 +209,23 @@ impl VulkanEntry {
         }
 
         if device_manager.is_none() {
-            return Err(CrystalError::Unsupported);
+            return Err(CrystalError::NotSupportedDevice);
         }
 
         let device_manager = device_manager.unwrap();
 
         log!("| picked device: [ {} ]", device_manager.device_name);
         log!(
-            "| -- compression  = {}",
+            "| {} compression  = {}",
+            if !device_manager.extensions.compression {
+                "WARN"
+            } else {
+                "----"
+            },
             device_manager.extensions.compression
         );
         log!(
-            "| -- formats 4444 = {}",
+            "| ---- formats 4444 = {}",
             device_manager.extensions.formats_4444
         );
 

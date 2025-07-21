@@ -145,7 +145,7 @@ impl VulkanRenderTarget {
                     Ok(framebuffer) => framebuffer,
                     Err(e) => {
                         log!("cannot create framebuffer: {}", e);
-                        return Err(CrystalError::CannotCreateFramebuffer);
+                        return Err(CrystalError::NotSupportedPresent);
                     }
                 };
             framebuffers.push(framebuffer);
@@ -301,7 +301,7 @@ impl VulkanRenderTarget {
             Ok(render_pass) => render_pass,
             Err(e) => {
                 log!("failed to crate render pass: {}", e);
-                return Err(CrystalError::CannotCreateRenderPass);
+                return Err(CrystalError::NotSupportedPresent);
             }
         };
 

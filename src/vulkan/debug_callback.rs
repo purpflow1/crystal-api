@@ -70,7 +70,7 @@ pub fn create_debug_utils_messanger(
         Ok(messanger) => messanger,
         Err(e) => {
             log!("cannot create vulkan debug messanger: {}", e);
-            return Err(CrystalError::CannotCreateDebugMessanger);
+            return Err(CrystalError::DebugError);
         }
     };
 

@@ -77,7 +77,7 @@ impl SwapchainInfo {
             Some(&format) => format,
             None => {
                 log!("not found required swap surface format");
-                return Err(CrystalError::SwapChainIsNotSupported);
+                return Err(CrystalError::NotSupportedPresent);
             }
         };
 
@@ -139,7 +139,7 @@ impl SwapchainInfo {
             Ok(data) => data,
             Err(e) => {
                 log!("cannot get physical device surface formats: {}", e);
-                return Err(CrystalError::CannotInitDevice);
+                return Err(CrystalError::NotSupportedPresent);
             }
         };
 
@@ -151,7 +151,7 @@ impl SwapchainInfo {
             Ok(data) => data,
             Err(e) => {
                 log!("cannot get physical device surface capabilities: {}", e);
-                return Err(CrystalError::CannotInitDevice);
+                return Err(CrystalError::NotSupportedPresent);
             }
         };
 
@@ -163,12 +163,12 @@ impl SwapchainInfo {
             Ok(data) => data,
             Err(e) => {
                 log!("cannot get physical device surface present modes: {}", e);
-                return Err(CrystalError::CannotInitDevice);
+                return Err(CrystalError::NotSupportedPresent);
             }
         };
 
         if formats.is_empty() || present_modes.is_empty() {
-            return Err(CrystalError::SwapChainIsNotSupported);
+            return Err(CrystalError::NotSupportedPresent);
         }
 
         Ok(SwapChainSupportDetails {
@@ -190,7 +190,7 @@ impl SwapchainInfo {
             Ok(data) => data,
             Err(e) => {
                 log!("cannot get physical device surface capabilities: {}", e);
-                return Err(CrystalError::CannotInitDevice);
+                return Err(CrystalError::NotSupportedDevice);
             }
         };
 
@@ -293,7 +293,7 @@ impl Swapchain {
             Ok(swapchain_khr) => swapchain_khr,
             Err(e) => {
                 log!("cannot create swapchain: {}", e);
-                return Err(CrystalError::SwapChainError);
+                return Err(CrystalError::NotSupportedPresent);
             }
         };
 
@@ -301,7 +301,7 @@ impl Swapchain {
             Ok(images) => images,
             Err(e) => {
                 log!("cannot get swapchain images: {}", e);
-                return Err(CrystalError::SwapChainError);
+                return Err(CrystalError::NotSupportedPresent);
             }
         };
 
@@ -332,7 +332,7 @@ impl Swapchain {
                     Ok(image_view) => image_view,
                     Err(e) => {
                         log!("cannot create image view: {}", e);
-                        return Err(CrystalError::SwapChainError);
+                        return Err(CrystalError::NotSupportedPresent);
                     }
                 };
 

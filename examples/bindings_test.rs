@@ -20,7 +20,7 @@ use winit::{
     window::Window,
 };
 
-const DEBUG_OUTPUT: bool = true;
+const DEBUG_OUTPUT: bool = false;
 const MAX_OBJECT_NUM: usize = 128;
 const DISTANCE: f32 = 2.;
 
@@ -465,8 +465,7 @@ fn main() -> CrystalResult<()> {
     let settings = GraphicsApiInitSettings::default()
         .msaa_samples(4)
         .width(1000)
-        .height(700)
-        .bypass_capability_check(true);
+        .height(700);
 
     let event_loop = EventLoop::new().unwrap();
     event_loop.set_control_flow(ControlFlow::Poll);

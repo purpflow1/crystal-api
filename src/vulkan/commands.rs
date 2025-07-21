@@ -266,7 +266,7 @@ impl CommandBuffer {
                 .collect(),
             Err(e) => {
                 log!("cannot allocate command buffers: {}", e);
-                return Err(CrystalError::CannotCreateCommandManager);
+                return Err(CrystalError::TransferError);
             }
         };
 
@@ -304,7 +304,7 @@ impl CommandPool {
             Ok(command_pool) => command_pool,
             Err(e) => {
                 log!("cannot create command pool: {}", e);
-                return Err(CrystalError::CannotCreateCommandManager);
+                return Err(CrystalError::TransferError);
             }
         };
 
@@ -370,7 +370,7 @@ impl CommandEntry {
             Ok(buffers) => buffers[0],
             Err(e) => {
                 log!("cannot allocate command buffer: {}", e);
-                return Err(CrystalError::CommandManagerError);
+                return Err(CrystalError::TransferError);
             }
         };
 
@@ -385,7 +385,7 @@ impl CommandEntry {
             Ok(_) => (),
             Err(e) => {
                 log!("cannot begin command buffer: {}", e);
-                return Err(CrystalError::CommandManagerError);
+                return Err(CrystalError::TransferError);
             }
         }
 
@@ -399,7 +399,7 @@ impl CommandEntry {
             Ok(()) => (),
             Err(e) => {
                 log!("cannot begin command buffer: {}", e);
-                return Err(CrystalError::CommandManagerError);
+                return Err(CrystalError::TransferError);
             }
         }
 
@@ -434,7 +434,7 @@ impl CommandEntry {
             Ok(()) => {}
             Err(e) => {
                 log!("failed resetting command buffer: {}", e);
-                return Err(CrystalError::CommandManagerError);
+                return Err(CrystalError::TransferError);
             }
         };
 
@@ -448,7 +448,7 @@ impl CommandEntry {
             Ok(_) => {}
             Err(e) => {
                 log!("cannot begin command buffer: {}", e);
-                return Err(CrystalError::CommandManagerError);
+                return Err(CrystalError::TransferError);
             }
         };
 
@@ -466,7 +466,7 @@ impl CommandEntry {
             Ok(_) => {}
             Err(e) => {
                 log!("cannot end command buffer: {}", e);
-                return Err(CrystalError::CommandManagerError);
+                return Err(CrystalError::TransferError);
             }
         };
 

@@ -372,7 +372,7 @@ impl VulkanLayout {
             Ok(descriptor_pool) => descriptor_pool,
             Err(e) => {
                 log!("cannot create descriptor pool: {}", e);
-                return Err(CrystalError::DescriptorError);
+                return Err(CrystalError::DataError);
             }
         };
 
@@ -424,7 +424,7 @@ impl VulkanLayout {
             Ok(descriptor_set_layout) => descriptor_set_layout,
             Err(e) => {
                 log!("cannot create descriptor set layout: {}", e);
-                return Err(CrystalError::DescriptorError);
+                return Err(CrystalError::DataError);
             }
         };
 
@@ -437,7 +437,7 @@ impl VulkanLayout {
             Ok(descriptor_set_layout) => descriptor_set_layout,
             Err(e) => {
                 log!("cannot create descriptor set layout: {}", e);
-                return Err(CrystalError::DescriptorError);
+                return Err(CrystalError::DataError);
             }
         };
 
@@ -450,7 +450,7 @@ impl VulkanLayout {
             Ok(descriptor_set_layout) => descriptor_set_layout,
             Err(e) => {
                 log!("cannot create descriptor set layout: {}", e);
-                return Err(CrystalError::DescriptorError);
+                return Err(CrystalError::DataError);
             }
         };
 
@@ -479,7 +479,7 @@ impl VulkanLayout {
                 Ok(descriptor_sets) => descriptor_sets,
                 Err(e) => {
                     log!("cannot allocate uniform descriptor sets: {}", e);
-                    return Err(CrystalError::DescriptorError);
+                    return Err(CrystalError::DataError);
                 }
             }
         } else {
@@ -495,7 +495,7 @@ impl VulkanLayout {
                 Ok(descriptor_sets) => descriptor_sets,
                 Err(e) => {
                     log!("cannot allocate storage descriptor sets: {}", e);
-                    return Err(CrystalError::DescriptorError);
+                    return Err(CrystalError::DataError);
                 }
             }
         } else {
@@ -511,7 +511,7 @@ impl VulkanLayout {
                 Ok(descriptor_sets) => descriptor_sets,
                 Err(e) => {
                     log!("cannot allocate sampler descriptor sets: {}", e);
-                    return Err(CrystalError::DescriptorError);
+                    return Err(CrystalError::DataError);
                 }
             }
         } else {
@@ -536,7 +536,7 @@ impl VulkanLayout {
             Ok(layout) => layout,
             Err(e) => {
                 log!("cannot create pipeline layout: {}", e);
-                return Err(CrystalError::DescriptorError);
+                return Err(CrystalError::DataError);
             }
         };
 
@@ -1010,7 +1010,7 @@ impl VulkanPipeline {
             })),
             Err(es) => {
                 log!("cannot create graphics pipeline: {}", es.1);
-                Err(CrystalError::CannotCreateRenderPass)
+                Err(CrystalError::ShaderError)
             }
         }
     }
