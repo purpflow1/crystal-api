@@ -7,7 +7,6 @@
 - Adding **DirectX** support
 
 ## Short-term goals
-- Adding benchmark tests (**Crystal API** may have undiscovered fatal bugs)
 - Adding raytracing support
 - Adding texture compression
 - Optimize shader loading
