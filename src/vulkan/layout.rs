@@ -600,7 +600,9 @@ impl VulkanLayout {
             )
         }
 
-        for (current_object_idx, object) in objects.iter().enumerate() {
+        let mut current_object_idx = 0u32;
+
+        for object in objects.iter() {
             if let Some(_samplers) = &object.samplers {
                 let id = *object.id.lock().unwrap();
 
@@ -659,16 +661,20 @@ impl VulkanLayout {
                 )
             }
 
+            let instance_count = object.array;
+
             unsafe {
                 device_manager.device.cmd_draw_indexed(
                     *command_buffer,
                     index_count as u32,
-                    1,
+                    instance_count,
                     0 as u32,
                     0 as i32,
                     current_object_idx as u32,
                 )
             }
+
+            current_object_idx += instance_count;
         }
 
         dynamic_data.update_data().unwrap();

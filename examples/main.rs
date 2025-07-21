@@ -383,16 +383,14 @@ impl ApplicationHandler for Context {
 
         let mesh_buffer = graphics.create_buffer_mesh(mesh).unwrap();
 
-        let object = Object::with_mesh_sampled(
+        let object = Object::with_mesh_sampled_array(
             pipeline_render.clone(),
             mesh_buffer.clone(),
             &[(0, default_sampler.clone())],
+            OBJECT_DIMENTION.pow(3) as u32,
         );
 
-        (0..OBJECT_DIMENTION.pow(3)).for_each(|_| {
-            self.scene.objects.push(object.clone());
-        });
-
+        self.scene.objects.push(object.clone());
         layout_obj.register_samplers(&[object]).unwrap();
 
         self.graphics = Some(graphics);

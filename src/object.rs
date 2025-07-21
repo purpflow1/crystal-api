@@ -17,6 +17,7 @@ pub struct Object {
     pub mesh_buffer: Option<Arc<MeshBuffer>>,
     pub samplers: Option<Vec<(u32, Arc<GpuSampler>)>>,
     pub groups: Option<[u32; 3]>,
+    pub array: u32,
 }
 
 unsafe impl Sync for Object {}
@@ -31,6 +32,7 @@ impl Object {
             mesh_buffer: None,
             samplers: None,
             groups: Some(groups),
+            array: 0,
         })
     }
 
@@ -41,6 +43,7 @@ impl Object {
             mesh_buffer: Some(mesh),
             samplers: None,
             groups: None,
+            array: 1,
         })
     }
 
@@ -54,6 +57,7 @@ impl Object {
             mesh_buffer: None,
             samplers: Some(textures.to_vec()),
             groups: None,
+            array: 1,
         })
     }
 
@@ -68,6 +72,23 @@ impl Object {
             mesh_buffer: Some(mesh),
             samplers: Some(samplers.to_vec()),
             groups: None,
+            array: 1,
+        })
+    }
+
+    pub fn with_mesh_sampled_array(
+        pipeline: Arc<dyn Pipeline>,
+        mesh: Arc<MeshBuffer>,
+        samplers: &[(u32, Arc<GpuSampler>)],
+        array: u32,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            id: Mutex::new(usize::MAX),
+            pipeline,
+            mesh_buffer: Some(mesh),
+            samplers: Some(samplers.to_vec()),
+            groups: None,
+            array,
         })
     }
 }
