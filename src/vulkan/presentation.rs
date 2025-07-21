@@ -70,7 +70,7 @@ impl SwapchainInfo {
             Self::query_swap_chain_support(surface.clone(), &device_manager.physical_device)?;
 
         let swap_surface_format = match swap_chain_support_details.formats.iter().find(|format| {
-            format.format == vk::Format::B8G8R8A8_SRGB
+            format.format == vk::Format::B8G8R8A8_UNORM
                 && format.color_space == vk::ColorSpaceKHR::SRGB_NONLINEAR
         }) {
             Some(&format) => format,

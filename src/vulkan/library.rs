@@ -175,6 +175,16 @@ impl VulkanEntry {
         let device_manager =
             DeviceManager::new(entry, instance, Some(surface.clone()), &device_extensions)?;
 
+        log!("| picked device: [ {} ]", device_manager.device_name);
+        log!(
+            "| -- compression  = {}",
+            device_manager.extensions.compression
+        );
+        log!(
+            "| -- formats 4444 = {}",
+            device_manager.extensions.formats_4444
+        );
+
         let presentation =
             Presentation::new(device_manager.clone(), surface, settings.msaa_samples)?;
 
@@ -398,7 +408,7 @@ impl VulkanEntry {
         let graphics_future = graphics_now.join(graphics.record_command_buffer(
             sync.clone(),
             |command_buffer, device, n_pass| {
-                let color = 0.2f32;
+                let color = 0.5f32;
                 let mut clear_color = vk::ClearColorValue::default();
                 let clear_depth_stencil =
                     vk::ClearDepthStencilValue::default().depth(1.).stencil(0);

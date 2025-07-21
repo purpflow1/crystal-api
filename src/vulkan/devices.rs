@@ -13,16 +13,8 @@ use crate::{
 
 #[derive(Clone, Default)]
 pub struct PhysicalDeviceExtensions {
-    compression: bool,
-}
-
-impl std::fmt::Debug for PhysicalDeviceExtensions {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_fmt(format_args!(
-            "[device extensions]\ncompression = {}",
-            self.compression
-        ))
-    }
+    pub compression: bool,
+    pub formats_4444: bool,
 }
 
 pub struct Queue {
@@ -113,6 +105,7 @@ pub struct DeviceManager {
     pub instance: Arc<ash::Instance>,
     pub device: Arc<ash::Device>,
     pub physical_device: vk::PhysicalDevice,
+    pub device_name: String,
     pub memory_properties: vk::PhysicalDeviceMemoryProperties,
     pub device_properties: vk::PhysicalDeviceProperties,
     pub queues: Vec<Arc<Queue>>,
@@ -169,7 +162,7 @@ impl DeviceManager {
         surface: Option<Arc<PresentSurface>>,
         extensions: &[*const i8],
     ) -> CrystalResult<Arc<Self>> {
-        let (physical_device, physical_device_extensions) =
+        let (physical_device, device_name, physical_device_extensions) =
             pick_physical_device(&instance, &extensions)?;
 
         let memory_properties =
@@ -196,6 +189,7 @@ impl DeviceManager {
             instance,
             device: logical_device.clone(),
             physical_device,
+            device_name,
             memory_properties,
             device_properties,
             queues,
@@ -222,10 +216,10 @@ impl std::fmt::Debug for QueueFamilyInfo {
     }
 }
 
-fn pick_physical_device(
+fn pick_physical_device<'a>(
     instance: &Instance,
     extensions: &[*const i8],
-) -> CrystalResult<(vk::PhysicalDevice, PhysicalDeviceExtensions)> {
+) -> CrystalResult<(vk::PhysicalDevice, String, PhysicalDeviceExtensions)> {
     let devices = match unsafe { instance.enumerate_physical_devices() } {
         Ok(devices) => devices,
         Err(e) => {
@@ -307,10 +301,7 @@ fn pick_physical_device(
     }
 
     let device = match picked_device {
-        Some(device) => {
-            log!("picked device: {}", device_name);
-            device
-        }
+        Some(device) => device,
         None => {
             log!("no suitable devices found");
             return Err(CrystalError::CannotPickPhysicalDevice);
@@ -318,26 +309,30 @@ fn pick_physical_device(
     };
 
     let mut supported_extensions = PhysicalDeviceExtensions::default();
-    supported_extensions.compression = true;
 
-    let compression_extensions = [
-        vk::EXT_IMAGE_COMPRESSION_CONTROL_NAME.as_ptr(),
-        vk::EXT_IMAGE_COMPRESSION_CONTROL_SWAPCHAIN_NAME.as_ptr(),
-    ];
-
-    compression_extensions.iter().for_each(|ext| {
-        let ext_name = unsafe { CStr::from_ptr(*ext) }.to_str().unwrap();
-        if device_supported_extensions
+    {
+        let compression_extension = vk::EXT_IMAGE_COMPRESSION_CONTROL_NAME.as_ptr();
+        let ext_name = unsafe { CStr::from_ptr(compression_extension) }
+            .to_str()
+            .unwrap();
+        supported_extensions.compression = device_supported_extensions
             .iter()
             .find(|&dev_ext| *dev_ext == ext_name)
-            .is_none()
-            && supported_extensions.compression
-        {
-            supported_extensions.compression = false;
-        }
-    });
+            .is_some();
+    }
 
-    Ok((device, supported_extensions))
+    {
+        let formats_extension = vk::EXT_4444_FORMATS_NAME.as_ptr();
+        let ext_name = unsafe { CStr::from_ptr(formats_extension) }
+            .to_str()
+            .unwrap();
+        supported_extensions.formats_4444 = device_supported_extensions
+            .iter()
+            .find(|&dev_ext| *dev_ext == ext_name)
+            .is_some();
+    }
+
+    Ok((device, device_name.to_string(), supported_extensions))
 }
 
 fn find_queue_families(
