@@ -17,10 +17,15 @@ winit = { version = "0.30.10", features = ["rwh_06"] }
 glam = "0.30.3"
 sysinfo = "0.23"
 png = "0.17.16"
+rand = "0.9.2"
 
 [[example]]
-name = "main"
-path = "examples/main.rs"
+name = "array_load_test"
+path = "examples/array_load_test.rs"
+
+[[example]]
+name = "bindings_test"
+path = "examples/bindings_test.rs"
 
 [dependencies]
 ash = "0.38.0"
