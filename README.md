@@ -8,7 +8,6 @@
 
 ## Short-term goals
 - Adding raytracing support
-- Adding texture compression
 - Optimize shader loading
 
 ---
