@@ -14,7 +14,7 @@
 
 ## Short-term goals
 - Adding raytracing support
-- Optimize shader loading
+- Optimize device picking
 
 ---
 

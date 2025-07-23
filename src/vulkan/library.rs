@@ -185,12 +185,12 @@ impl VulkanEntry {
 
         let mut device_manager = None;
 
-        for step in 0..=1 {
+        for step in 0..=2 {
             match step {
                 0 => {
                     let device_extensions = [
                         vk::KHR_SWAPCHAIN_NAME.as_ptr(),
-                        // vk::EXT_IMAGE_COMPRESSION_CONTROL_NAME.as_ptr(),
+                        vk::EXT_IMAGE_COMPRESSION_CONTROL_NAME.as_ptr(),
                         vk::EXT_IMAGE_COMPRESSION_CONTROL_SWAPCHAIN_NAME.as_ptr(),
                     ];
 
@@ -205,6 +205,22 @@ impl VulkanEntry {
                     }
                 }
                 1 => {
+                    let device_extensions = [
+                        vk::KHR_SWAPCHAIN_NAME.as_ptr(),
+                        vk::EXT_IMAGE_COMPRESSION_CONTROL_SWAPCHAIN_NAME.as_ptr(),
+                    ];
+
+                    if let Ok(dm) = DeviceManager::new(
+                        entry.clone(),
+                        instance.clone(),
+                        Some(surface.clone()),
+                        &device_extensions,
+                    ) {
+                        device_manager = Some(dm);
+                        break;
+                    }
+                }
+                2 => {
                     let device_extensions = [vk::KHR_SWAPCHAIN_NAME.as_ptr()];
 
                     if let Ok(dm) = DeviceManager::new(

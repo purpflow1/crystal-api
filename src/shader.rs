@@ -29,10 +29,12 @@ impl Shader {
             }
         };
 
-        let mut shader_code_bytes = Vec::<u8>::new();
+        let size = file.metadata().unwrap().len() as usize;
+
+        let mut shader_code_bytes = Vec::<u8>::with_capacity(size);
 
         match file.read_to_end(&mut shader_code_bytes) {
-            Ok(size) => unsafe {
+            Ok(_) => unsafe {
                 shader_code_bytes.set_len(size);
             },
             Err(e) => {
@@ -42,21 +44,21 @@ impl Shader {
         };
 
         let shader_code = unsafe {
-            let len = shader_code_bytes.len();
-
-            let ptr = std::alloc::alloc(std::alloc::Layout::from_size_align_unchecked(len, 0x10))
+            let ptr = std::alloc::alloc(std::alloc::Layout::from_size_align_unchecked(size, 0x10))
                 as *mut u8;
 
             if ptr.is_null() {
                 panic!("Failed to allocate memory");
             }
 
-            std::slice::from_raw_parts_mut(ptr, len).copy_from_slice(std::slice::from_raw_parts(
+            std::slice::from_raw_parts_mut(ptr, size).copy_from_slice(std::slice::from_raw_parts(
                 shader_code_bytes.as_ptr(),
                 shader_code_bytes.len(),
             ));
 
-            Vec::from_raw_parts(ptr as *mut u32, len / 4, len / 4)
+            let len = size / 4;
+
+            Vec::from_raw_parts(ptr as *mut u32, len, len)
         };
 
         Ok(Shader {
