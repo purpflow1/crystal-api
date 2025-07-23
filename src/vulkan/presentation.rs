@@ -277,15 +277,12 @@ impl Swapchain {
         let swapchain =
             ash::khr::swapchain::Device::new(&device_manager.instance, &device_manager.device);
 
-        let mut fixed_rate_flags = [vk::ImageCompressionFixedRateFlagsEXT::TYPE_2BPC];
-
         let mut compression_control = vk::ImageCompressionControlEXT::default()
-            .flags(vk::ImageCompressionFlagsEXT::FIXED_RATE_EXPLICIT)
-            .fixed_rate_flags(&mut fixed_rate_flags);
+            .flags(vk::ImageCompressionFlagsEXT::FIXED_RATE_DEFAULT);
 
         let mut info = swapchain_create_info.as_vk();
 
-        if device_manager.extensions.compression {
+        if device_manager.extensions.swapchain_compression {
             info = info.push_next(&mut compression_control);
         }
 

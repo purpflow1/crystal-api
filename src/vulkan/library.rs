@@ -136,18 +136,31 @@ impl VulkanEntry {
         let instance = match unsafe { entry.create_instance(&create_info, None) } {
             Err(e) => {
                 log!("cannot create vulkan instance: {}", e);
-                #[cfg(debug_assertions)]
-                log!("LAYERS:");
 
                 #[cfg(debug_assertions)]
-                layers.iter().for_each(|x| {
-                    let layer_bytes = &unsafe { *(x.as_ptr() as *const [u8; 256]) };
-                    let layer = CStr::from_bytes_until_nul(layer_bytes)
-                        .unwrap()
-                        .to_str()
-                        .unwrap();
-                    log!(" {}", layer);
-                });
+                {
+                    log!("| [layers]");
+
+                    layers.iter().for_each(|x| {
+                        let layer_bytes = &unsafe { *(x.as_ptr() as *const [u8; 256]) };
+                        let layer = CStr::from_bytes_until_nul(layer_bytes)
+                            .unwrap()
+                            .to_str()
+                            .unwrap();
+                        log!("| {}", layer);
+                    });
+
+                    log!("| [extensions]");
+
+                    instance_extensions.iter().for_each(|x| {
+                        let ext_bytes = &unsafe { *(*x as *const [u8; 256]) };
+                        let ext = CStr::from_bytes_until_nul(ext_bytes)
+                            .unwrap()
+                            .to_str()
+                            .unwrap();
+                        log!("| {}", ext);
+                    });
+                }
 
                 return CrystalResult::Err(CrystalError::ConnotInitLibrary);
             }
@@ -177,7 +190,7 @@ impl VulkanEntry {
                 0 => {
                     let device_extensions = [
                         vk::KHR_SWAPCHAIN_NAME.as_ptr(),
-                        vk::EXT_IMAGE_COMPRESSION_CONTROL_NAME.as_ptr(),
+                        // vk::EXT_IMAGE_COMPRESSION_CONTROL_NAME.as_ptr(),
                         vk::EXT_IMAGE_COMPRESSION_CONTROL_SWAPCHAIN_NAME.as_ptr(),
                     ];
 
@@ -217,12 +230,12 @@ impl VulkanEntry {
         log!("| picked device: [ {} ]", device_manager.device_name);
         log!(
             "| {} compression  = {}",
-            if !device_manager.extensions.compression {
+            if !device_manager.extensions.swapchain_compression {
                 "WARN"
             } else {
                 "----"
             },
-            device_manager.extensions.compression
+            device_manager.extensions.swapchain_compression
         );
         log!(
             "| ---- formats 4444 = {}",

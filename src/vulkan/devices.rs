@@ -13,7 +13,7 @@ use crate::{
 
 #[derive(Clone, Default)]
 pub struct PhysicalDeviceExtensions {
-    pub compression: bool,
+    pub swapchain_compression: bool,
     pub formats_4444: bool,
 }
 
@@ -314,7 +314,7 @@ fn pick_physical_device<'a>(
         let ext_name = unsafe { CStr::from_ptr(compression_extension) }
             .to_str()
             .unwrap();
-        supported_extensions.compression = device_supported_extensions
+        supported_extensions.swapchain_compression = device_supported_extensions
             .iter()
             .find(|&dev_ext| *dev_ext == ext_name)
             .is_some();

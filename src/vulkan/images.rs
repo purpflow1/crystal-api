@@ -62,8 +62,13 @@ impl Image {
             1
         };
 
-        let mut image_create_info = vk::ImageCreateInfo::default()
-            .image_type(vk::ImageType::TYPE_2D)
+        let ty = vk::ImageType::TYPE_2D;
+
+        let mut compression_control = vk::ImageCompressionControlEXT::default()
+            .flags(vk::ImageCompressionFlagsEXT::FIXED_RATE_DEFAULT);
+
+        let image_create_info = vk::ImageCreateInfo::default()
+            .image_type(ty)
             .extent(extent)
             .mip_levels(mip_levels)
             .array_layers(1)
@@ -72,17 +77,8 @@ impl Image {
             .initial_layout(layout)
             .usage(usage)
             .sharing_mode(vk::SharingMode::EXCLUSIVE)
-            .samples(samples);
-
-        let mut fixed_rate_flags = [vk::ImageCompressionFixedRateFlagsEXT::TYPE_2BPC];
-
-        let mut compression_control = vk::ImageCompressionControlEXT::default()
-            .flags(vk::ImageCompressionFlagsEXT::FIXED_RATE_EXPLICIT)
-            .fixed_rate_flags(&mut fixed_rate_flags);
-
-        if device_manager.extensions.compression {
-            image_create_info = image_create_info.push_next(&mut compression_control);
-        }
+            .samples(samples)
+            .push_next(&mut compression_control);
 
         let image = match unsafe { device_manager.device.create_image(&image_create_info, None) } {
             Ok(image) => image,

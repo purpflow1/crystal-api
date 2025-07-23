@@ -19,8 +19,9 @@ use winit::{
     window::Window,
 };
 
-const DEBUG_OUTPUT: bool = false;
-const MAX_OBJECT_NUM: usize = 128;
+const DEBUG_OUTPUT: bool = true;
+const MAX_OBJECT_DIMENTION: usize = 16;
+const MAX_OBJECT_NUM: usize = MAX_OBJECT_DIMENTION * MAX_OBJECT_DIMENTION;
 const DISTANCE: f32 = 2.;
 
 struct State {
@@ -338,7 +339,7 @@ impl ApplicationHandler for Context {
                 let result = rng.random();
 
                 if result {
-                    let row_size: usize = MAX_OBJECT_NUM.isqrt();
+                    let row_size: usize = MAX_OBJECT_DIMENTION;
                     let offset_z = (idx / row_size) as f32 * DISTANCE;
                     let offset_x = (idx % row_size) as f32 * DISTANCE;
 
