@@ -7,7 +7,7 @@ use ash::vk;
 
 use crate::{
     debug::log,
-    errors::{CrystalError, CrystalResult},
+    errors::{GraphicsError, GraphicsResult},
     traits,
 };
 
@@ -70,7 +70,7 @@ impl VulkanRenderTarget {
         &self,
         extent: vk::Extent2D,
         images: Vec<vk::ImageView>,
-    ) -> CrystalResult<()> {
+    ) -> GraphicsResult<()> {
         *self.extent.write().unwrap() = extent;
         self.destroy_framebuffers();
         let (framebuffers, depth_resources, color_images) = Self::create_resources(
@@ -98,7 +98,7 @@ impl VulkanRenderTarget {
         images: Vec<vk::ImageView>,
         samples: vk::SampleCountFlags,
         render_pass: vk::RenderPass,
-    ) -> CrystalResult<(Vec<vk::Framebuffer>, Vec<DepthResources>, Vec<Arc<Image>>)> {
+    ) -> GraphicsResult<(Vec<vk::Framebuffer>, Vec<DepthResources>, Vec<Arc<Image>>)> {
         let mut framebuffers = vec![];
         let mut depth_resources = vec![];
         let mut color_images = vec![];
@@ -145,7 +145,7 @@ impl VulkanRenderTarget {
                     Ok(framebuffer) => framebuffer,
                     Err(e) => {
                         log!("cannot create framebuffer: {}", e);
-                        return Err(CrystalError::NotSupportedPresent);
+                        return Err(GraphicsError::NotSupportedPresent);
                     }
                 };
             framebuffers.push(framebuffer);
@@ -161,7 +161,7 @@ impl VulkanRenderTarget {
         extent: vk::Extent2D,
         images: Vec<vk::ImageView>,
         msaa_samples: u8,
-    ) -> CrystalResult<Arc<Self>> {
+    ) -> GraphicsResult<Arc<Self>> {
         let counts = device_manager
             .device_properties
             .limits
@@ -301,7 +301,7 @@ impl VulkanRenderTarget {
             Ok(render_pass) => render_pass,
             Err(e) => {
                 log!("failed to crate render pass: {}", e);
-                return Err(CrystalError::NotSupportedPresent);
+                return Err(GraphicsError::NotSupportedPresent);
             }
         };
 

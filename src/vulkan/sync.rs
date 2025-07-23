@@ -7,7 +7,7 @@ use ash::vk::{self};
 
 use crate::{
     debug::log,
-    errors::{CrystalError, CrystalResult},
+    errors::{GraphicsError, GraphicsResult},
 };
 
 use super::devices::DeviceManager;
@@ -68,7 +68,7 @@ impl GpuSync {
     pub fn new(
         device_manager: Arc<DeviceManager>,
         render_images: u32,
-    ) -> CrystalResult<Arc<Mutex<Self>>> {
+    ) -> GraphicsResult<Arc<Mutex<Self>>> {
         let (semaphore_create_info, fence_create_info) = Default::default();
 
         let mut semaphore_image = Vec::with_capacity(render_images as usize);
@@ -86,7 +86,7 @@ impl GpuSync {
                     Ok(semaphore) => semaphore,
                     Err(e) => {
                         log!("cannot create semaphore: {}", e);
-                        return Err(CrystalError::SyncError);
+                        return Err(GraphicsError::SyncError);
                     }
                 },
             );
@@ -100,7 +100,7 @@ impl GpuSync {
                     Ok(semaphore) => semaphore,
                     Err(e) => {
                         log!("cannot create semaphore: {}", e);
-                        return Err(CrystalError::SyncError);
+                        return Err(GraphicsError::SyncError);
                     }
                 },
             );
@@ -114,7 +114,7 @@ impl GpuSync {
                     Ok(semaphore) => semaphore,
                     Err(e) => {
                         log!("cannot create semaphore: {}", e);
-                        return Err(CrystalError::SyncError);
+                        return Err(GraphicsError::SyncError);
                     }
                 },
             );
@@ -129,7 +129,7 @@ impl GpuSync {
             Ok(semaphore) => semaphore,
             Err(e) => {
                 log!("cannot create fence: {}", e);
-                return Err(CrystalError::SyncError);
+                return Err(GraphicsError::SyncError);
             }
         };
 
@@ -138,7 +138,7 @@ impl GpuSync {
                 Ok(semaphore) => semaphore,
                 Err(e) => {
                     log!("cannot create fence: {}", e);
-                    return Err(CrystalError::SyncError);
+                    return Err(GraphicsError::SyncError);
                 }
             };
 
@@ -168,7 +168,7 @@ impl GpuSync {
         self.odd_pass = (self.odd_pass + 1) % 2;
     }
 
-    fn wait_fences(&self, fences: &[vk::Fence]) -> CrystalResult<()> {
+    fn wait_fences(&self, fences: &[vk::Fence]) -> GraphicsResult<()> {
         unsafe {
             self.device_manager
                 .device
@@ -180,7 +180,7 @@ impl GpuSync {
         Ok(())
     }
 
-    pub fn wait_render(&self) -> CrystalResult<()> {
+    pub fn wait_render(&self) -> GraphicsResult<()> {
         self.wait_fences(&[self.barriers.fence_render[self.odd_pass]])
     }
 

@@ -23,7 +23,7 @@ use super::{
 use crate::{
     AsBytes, Buffer, GpuSamplerSet, GraphicsApiInitSettings, Texture,
     debug::log,
-    errors::{CrystalError, CrystalResult},
+    errors::{GraphicsError, GraphicsResult},
     mesh::{Index, Mesh, VertexTexture},
     object::{MeshBuffer, Object},
     settings::DebugData,
@@ -77,7 +77,7 @@ impl VulkanEntry {
     pub fn with_presentation<T: HasWindowHandle + HasDisplayHandle>(
         settings: &GraphicsApiInitSettings,
         window: &T,
-    ) -> CrystalResult<Arc<Self>> {
+    ) -> GraphicsResult<Arc<Self>> {
         let mut instance_extensions = vec![
             #[cfg(debug_assertions)]
             vk::EXT_DEBUG_UTILS_NAME.as_ptr(),
@@ -89,7 +89,7 @@ impl VulkanEntry {
             Ok(ext) => ext.to_vec(),
             Err(e) => {
                 log!("cannot enumerate required display extensions: {}", e);
-                return Err(CrystalError::ConnotInitLibrary);
+                return Err(GraphicsError::ConnotInitLibrary);
             }
         };
         instance_extensions.append(&mut required_extensions);
@@ -103,7 +103,7 @@ impl VulkanEntry {
             Ok(entry) => Arc::new(entry),
             Err(e) => {
                 log!("cannot load vulkan entry: {}", e);
-                return CrystalResult::Err(CrystalError::ConnotInitLibrary);
+                return GraphicsResult::Err(GraphicsError::ConnotInitLibrary);
             }
         };
 
@@ -124,7 +124,7 @@ impl VulkanEntry {
                 log!(
                     "No validation layers found! Vulkan SDK should be installed for proper debug. Visit https://vulkan.lunarg.com/"
                 );
-                return Err(CrystalError::ConnotInitLibrary);
+                return Err(GraphicsError::ConnotInitLibrary);
             }
 
             layers_pp = layers.iter().map(|x| x.as_ptr()).collect();
@@ -162,7 +162,7 @@ impl VulkanEntry {
                     });
                 }
 
-                return CrystalResult::Err(CrystalError::ConnotInitLibrary);
+                return GraphicsResult::Err(GraphicsError::ConnotInitLibrary);
             }
             Ok(instance) => Arc::new(instance),
         };
@@ -238,7 +238,7 @@ impl VulkanEntry {
         }
 
         if device_manager.is_none() {
-            return Err(CrystalError::NotSupportedDevice);
+            return Err(GraphicsError::NotSupportedDevice);
         }
 
         let device_manager = device_manager.unwrap();
@@ -307,7 +307,7 @@ impl VulkanEntry {
         }))
     }
 
-    pub fn recreate_resources(&self, width: u32, height: u32) -> CrystalResult<()> {
+    pub fn recreate_resources(&self, width: u32, height: u32) -> GraphicsResult<()> {
         self.command_manager
             .command_entries
             .get(&CommandType::Graphics)
@@ -329,7 +329,7 @@ impl VulkanEntry {
         )
     }
 
-    pub fn dispatch_compute(self: Arc<Self>, objects: &[Arc<Object>]) -> CrystalResult<()> {
+    pub fn dispatch_compute(self: Arc<Self>, objects: &[Arc<Object>]) -> GraphicsResult<()> {
         let compute = self
             .command_manager
             .command_entries
@@ -373,7 +373,7 @@ impl VulkanEntry {
         Ok(())
     }
 
-    pub fn dispatch_any(self: Arc<Self>, objects: &[Arc<Object>]) -> CrystalResult<()> {
+    pub fn dispatch_any(self: Arc<Self>, objects: &[Arc<Object>]) -> GraphicsResult<()> {
         let graphics = self
             .command_manager
             .command_entries
@@ -441,7 +441,7 @@ impl VulkanEntry {
             }
             Err(e) => {
                 log!("failed aquire next image: {:?}", e);
-                return Err(CrystalError::RenderingError);
+                return Err(GraphicsError::RenderingError);
             }
             _ => (),
         };
@@ -593,7 +593,7 @@ impl VulkanEntry {
         sampler_num: usize,
         uniform_num: usize,
         storage_num: usize,
-    ) -> CrystalResult<Arc<dyn Layout>> {
+    ) -> GraphicsResult<Arc<dyn Layout>> {
         log!(
             "creating layout [ double_buffering = {} ]",
             double_buffering
@@ -614,7 +614,7 @@ impl VulkanEntry {
         buffer: Arc<dyn traits::Buffer>,
         data: [u32; 3],
         anisotropy_texels: f32,
-    ) -> CrystalResult<Arc<dyn Texture>> {
+    ) -> GraphicsResult<Arc<dyn Texture>> {
         log!(
             "creating texture [ width = {}, height = {} ]",
             data[0],
@@ -633,7 +633,7 @@ impl VulkanEntry {
     pub fn create_sampler_set(
         &self,
         textures: &[(u32, Arc<dyn Texture>)],
-    ) -> CrystalResult<Arc<GpuSamplerSet>> {
+    ) -> GraphicsResult<Arc<GpuSamplerSet>> {
         log!(
             "creating sampler [ bindings = {:?} ]",
             textures
@@ -670,7 +670,7 @@ impl VulkanEntry {
         debug_data
     }
 
-    pub fn create_buffer_mesh(&self, mesh: Arc<Mesh>) -> CrystalResult<Arc<MeshBuffer>> {
+    pub fn create_buffer_mesh(&self, mesh: Arc<Mesh>) -> GraphicsResult<Arc<MeshBuffer>> {
         let vertex_size = (mesh.vertices.len() * size_of::<VertexTexture>()) as u64;
         let index_size = (mesh.indices.len() * size_of::<Index>()) as u64;
         log!(
@@ -716,7 +716,7 @@ impl VulkanEntry {
         uniform: bool,
         transfer: bool,
         enable_sync: bool,
-    ) -> CrystalResult<Arc<dyn traits::Buffer>> {
+    ) -> GraphicsResult<Arc<dyn traits::Buffer>> {
         let mut usage = vk::BufferUsageFlags::STORAGE_BUFFER;
 
         if uniform {

@@ -3,7 +3,7 @@ use std::{
     mem::offset_of,
 };
 
-use crate::errors::CrystalResult;
+use crate::errors::GraphicsResult;
 
 pub struct Attribute {
     pub size: usize,
@@ -78,7 +78,7 @@ impl Mesh {
         }
     }
 
-    pub fn from_buffer<T>(buffer: BufReader<T>) -> CrystalResult<Self>
+    pub fn from_buffer<T>(buffer: BufReader<T>) -> GraphicsResult<Self>
     where
         BufReader<T>: BufRead,
     {

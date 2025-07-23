@@ -4,7 +4,7 @@ use ash::vk;
 
 use crate::{
     debug::log,
-    errors::{CrystalError, CrystalResult},
+    errors::{GraphicsError, GraphicsResult},
     traits,
 };
 
@@ -52,7 +52,7 @@ impl Image {
         mem_property: vk::MemoryPropertyFlags,
         generate_mips: bool,
         anisotropy_texels: f32,
-    ) -> CrystalResult<Arc<Self>> {
+    ) -> GraphicsResult<Arc<Self>> {
         let extent = vk::Extent3D::default().width(width).height(height).depth(1);
         let layout = vk::ImageLayout::UNDEFINED;
 
@@ -84,7 +84,7 @@ impl Image {
             Ok(image) => image,
             Err(e) => {
                 log!("cannot create image: {}", e);
-                return Err(CrystalError::ImageError);
+                return Err(GraphicsError::ImageError);
             }
         };
 
@@ -106,7 +106,7 @@ impl Image {
             Ok(mem) => mem,
             Err(e) => {
                 log!("cannot allocate image memory: {:?}", e);
-                return Err(CrystalError::ImageError);
+                return Err(GraphicsError::ImageError);
             }
         };
 
@@ -118,7 +118,7 @@ impl Image {
             Ok(_) => (),
             Err(e) => {
                 log!("cannot bind image memory: {}", e);
-                return Err(CrystalError::ImageError);
+                return Err(GraphicsError::ImageError);
             }
         };
 
@@ -143,7 +143,7 @@ impl Image {
             Ok(image_view) => image_view,
             Err(e) => {
                 log!("cannot create image view: {}", e);
-                return Err(CrystalError::ImageError);
+                return Err(GraphicsError::ImageError);
             }
         };
 
@@ -177,7 +177,7 @@ impl VulkanTexture {
         buffer: Arc<BufferManager>,
         data: [u32; 3],
         anisotropy_texels: f32,
-    ) -> CrystalResult<Arc<Self>> {
+    ) -> GraphicsResult<Arc<Self>> {
         let format = match data[2] {
             1 => vk::Format::R8_SRGB,
             2 => vk::Format::R8G8_SRGB,
@@ -228,7 +228,7 @@ impl VulkanTexture {
         &self,
         buffer: Arc<BufferManager>,
         command_manager: Arc<CommandManager>,
-    ) -> CrystalResult<()> {
+    ) -> GraphicsResult<()> {
         let command_entry = command_manager
             .command_entries
             .get(&CommandType::Transfer)
@@ -250,7 +250,7 @@ impl VulkanTexture {
     pub(crate) fn generate_mipmaps(
         &self,
         command_entry: Arc<CommandEntry>,
-    ) -> CrystalResult<Box<GpuFuture>> {
+    ) -> GraphicsResult<Box<GpuFuture>> {
         command_entry.record_single_time_buffer(|command_buffer, device| {
             let mut barrier = vk::ImageMemoryBarrier::default()
                 .image(self.image.image)
@@ -388,7 +388,7 @@ impl VulkanTexture {
         &self,
         buffer: Arc<BufferManager>,
         command_entry: Arc<CommandEntry>,
-    ) -> CrystalResult<Box<GpuFuture>> {
+    ) -> GraphicsResult<Box<GpuFuture>> {
         command_entry.record_single_time_buffer(|command_buffer, device| {
             let region = vk::BufferImageCopy::default()
                 .buffer_offset(0)
@@ -420,7 +420,7 @@ impl VulkanTexture {
         &self,
         command_entry: Arc<CommandEntry>,
         new_layout: vk::ImageLayout,
-    ) -> CrystalResult<Box<GpuFuture>> {
+    ) -> GraphicsResult<Box<GpuFuture>> {
         command_entry.record_single_time_buffer(|command_buffer, device| {
             let layout = *self.image.layout.read().unwrap();
 

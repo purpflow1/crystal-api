@@ -1,4 +1,4 @@
-use crystal_api::{errors::CrystalResult, object::Object, vulkan::VulkanEntry, *};
+use crystal_api::{errors::GraphicsResult, object::Object, vulkan::VulkanEntry, *};
 use rand::Rng;
 
 use std::{
@@ -61,7 +61,7 @@ pub struct Image2D {
 }
 
 impl Image2D {
-    pub fn new(path: &Path) -> CrystalResult<Self> {
+    pub fn new(path: &Path) -> GraphicsResult<Self> {
         let file = File::open(path).unwrap();
         let decoder = png::Decoder::new(file);
         let mut reader = decoder.read_info().unwrap();
@@ -100,7 +100,7 @@ struct Context {
 }
 
 impl Context {
-    pub fn new(settings: GraphicsApiInitSettings) -> CrystalResult<Self> {
+    pub fn new(settings: GraphicsApiInitSettings) -> GraphicsResult<Self> {
         let width = settings.width;
         let height = settings.height;
 
@@ -450,7 +450,7 @@ impl ApplicationHandler for Context {
     }
 }
 
-fn main() -> CrystalResult<()> {
+fn main() -> GraphicsResult<()> {
     let settings = GraphicsApiInitSettings::default()
         .msaa_samples(4)
         .width(1000)

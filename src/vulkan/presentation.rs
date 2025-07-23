@@ -8,7 +8,7 @@ use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
 use crate::{
     debug::log,
-    errors::{CrystalError, CrystalResult},
+    errors::{GraphicsError, GraphicsResult},
 };
 
 use super::devices::DeviceManager;
@@ -51,7 +51,7 @@ impl SwapchainInfo {
     fn new(
         device_manager: Arc<DeviceManager>,
         surface: Arc<PresentSurface>,
-    ) -> CrystalResult<Arc<Self>> {
+    ) -> GraphicsResult<Arc<Self>> {
         let queue_family_indices = [
             device_manager
                 .queues
@@ -77,7 +77,7 @@ impl SwapchainInfo {
             Some(&format) => format,
             None => {
                 log!("not found required swap surface format");
-                return Err(CrystalError::NotSupportedPresent);
+                return Err(GraphicsError::NotSupportedPresent);
             }
         };
 
@@ -130,7 +130,7 @@ impl SwapchainInfo {
     fn query_swap_chain_support(
         surface: Arc<PresentSurface>,
         physical_device: &vk::PhysicalDevice,
-    ) -> CrystalResult<SwapChainSupportDetails> {
+    ) -> GraphicsResult<SwapChainSupportDetails> {
         let formats = match unsafe {
             surface
                 .surface
@@ -139,7 +139,7 @@ impl SwapchainInfo {
             Ok(data) => data,
             Err(e) => {
                 log!("cannot get physical device surface formats: {}", e);
-                return Err(CrystalError::NotSupportedPresent);
+                return Err(GraphicsError::NotSupportedPresent);
             }
         };
 
@@ -151,7 +151,7 @@ impl SwapchainInfo {
             Ok(data) => data,
             Err(e) => {
                 log!("cannot get physical device surface capabilities: {}", e);
-                return Err(CrystalError::NotSupportedPresent);
+                return Err(GraphicsError::NotSupportedPresent);
             }
         };
 
@@ -163,12 +163,12 @@ impl SwapchainInfo {
             Ok(data) => data,
             Err(e) => {
                 log!("cannot get physical device surface present modes: {}", e);
-                return Err(CrystalError::NotSupportedPresent);
+                return Err(GraphicsError::NotSupportedPresent);
             }
         };
 
         if formats.is_empty() || present_modes.is_empty() {
-            return Err(CrystalError::NotSupportedPresent);
+            return Err(GraphicsError::NotSupportedPresent);
         }
 
         Ok(SwapChainSupportDetails {
@@ -178,7 +178,7 @@ impl SwapchainInfo {
         })
     }
 
-    pub fn update_extent(&self) -> CrystalResult<()> {
+    pub fn update_extent(&self) -> GraphicsResult<()> {
         let capabilities = match unsafe {
             self.surface
                 .surface
@@ -190,7 +190,7 @@ impl SwapchainInfo {
             Ok(data) => data,
             Err(e) => {
                 log!("cannot get physical device surface capabilities: {}", e);
-                return Err(CrystalError::NotSupportedDevice);
+                return Err(GraphicsError::NotSupportedDevice);
             }
         };
 
@@ -269,7 +269,7 @@ impl Swapchain {
     fn from_info(
         device_manager: Arc<DeviceManager>,
         swapchain_create_info: Arc<SwapchainInfo>,
-    ) -> CrystalResult<(
+    ) -> GraphicsResult<(
         ash::khr::swapchain::Device,
         vk::SwapchainKHR,
         Vec<vk::ImageView>,
@@ -290,7 +290,7 @@ impl Swapchain {
             Ok(swapchain_khr) => swapchain_khr,
             Err(e) => {
                 log!("cannot create swapchain: {}", e);
-                return Err(CrystalError::NotSupportedPresent);
+                return Err(GraphicsError::NotSupportedPresent);
             }
         };
 
@@ -298,7 +298,7 @@ impl Swapchain {
             Ok(images) => images,
             Err(e) => {
                 log!("cannot get swapchain images: {}", e);
-                return Err(CrystalError::NotSupportedPresent);
+                return Err(GraphicsError::NotSupportedPresent);
             }
         };
 
@@ -329,7 +329,7 @@ impl Swapchain {
                     Ok(image_view) => image_view,
                     Err(e) => {
                         log!("cannot create image view: {}", e);
-                        return Err(CrystalError::NotSupportedPresent);
+                        return Err(GraphicsError::NotSupportedPresent);
                     }
                 };
 
@@ -342,7 +342,7 @@ impl Swapchain {
     fn new(
         device_manager: Arc<DeviceManager>,
         surface: Arc<PresentSurface>,
-    ) -> CrystalResult<Arc<Self>> {
+    ) -> GraphicsResult<Arc<Self>> {
         let swapchain_create_info = SwapchainInfo::new(device_manager.clone(), surface)?;
         let (swapchain, swapchain_khr, swapchain_image_views) =
             Self::from_info(device_manager.clone(), swapchain_create_info.clone())?;
@@ -356,7 +356,7 @@ impl Swapchain {
         }))
     }
 
-    pub fn recreate(&self, extent: Option<vk::Extent2D>) -> CrystalResult<()> {
+    pub fn recreate(&self, extent: Option<vk::Extent2D>) -> GraphicsResult<()> {
         self.destroy();
 
         match extent {
@@ -414,7 +414,7 @@ impl Presentation {
         device_manager: Arc<DeviceManager>,
         surface: Arc<PresentSurface>,
         msaa_samples: u8,
-    ) -> CrystalResult<Arc<Self>> {
+    ) -> GraphicsResult<Arc<Self>> {
         let swapchain = Swapchain::new(device_manager.clone(), surface.clone())?;
 
         Ok(Arc::new(Presentation {

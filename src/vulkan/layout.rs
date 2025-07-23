@@ -10,7 +10,7 @@ use ash::vk;
 use crate::{
     Buffer, GpuSamplerSet, RenderTarget, Shader, ShaderStage,
     debug::log,
-    errors::{CrystalError, CrystalResult},
+    errors::{GraphicsError, GraphicsResult},
     mesh::{Attribute, VertexTexture},
     object::Object,
     traits,
@@ -46,7 +46,7 @@ impl Drop for LayoutDynamicData {
 }
 
 impl LayoutDynamicData {
-    fn update_data(&mut self) -> CrystalResult<usize> {
+    fn update_data(&mut self) -> GraphicsResult<usize> {
         let indices_to_clean: Vec<usize> = self
             .sampler_binding_data
             .iter()
@@ -67,7 +67,7 @@ impl LayoutDynamicData {
         Ok(result)
     }
 
-    fn add_textures(&mut self, sampler_set: Arc<GpuSamplerSet>) -> CrystalResult<()> {
+    fn add_textures(&mut self, sampler_set: Arc<GpuSamplerSet>) -> GraphicsResult<()> {
         let mut id_lock = sampler_set.id.lock().unwrap();
         if *id_lock != usize::MAX {
             self.sampler_binding_data
@@ -123,7 +123,7 @@ impl LayoutDynamicData {
                         }
                         Err(e) => {
                             log!("cannot create sampler: {}", e);
-                            return Err(CrystalError::ImageError);
+                            return Err(GraphicsError::ImageError);
                         }
                     }
                 }
@@ -155,7 +155,7 @@ impl LayoutDynamicData {
         Ok(())
     }
 
-    fn add_buffer(&mut self, binding: u32, buffer: Arc<dyn Buffer>) -> CrystalResult<()> {
+    fn add_buffer(&mut self, binding: u32, buffer: Arc<dyn Buffer>) -> GraphicsResult<()> {
         let buffer = buffer.as_vulkan().clone().unwrap();
 
         let size = buffer.info.size;
@@ -280,12 +280,12 @@ impl traits::Layout for VulkanLayout {
         Some(self)
     }
 
-    fn add_buffer(&self, binding: u32, buffer: Arc<dyn Buffer>) -> CrystalResult<()> {
+    fn add_buffer(&self, binding: u32, buffer: Arc<dyn Buffer>) -> GraphicsResult<()> {
         let mut lock = self.dynamic_data.lock().unwrap();
         lock.add_buffer(binding, buffer)
     }
 
-    fn register_samplers(&self, samplers: &[Arc<GpuSamplerSet>]) -> CrystalResult<()> {
+    fn register_samplers(&self, samplers: &[Arc<GpuSamplerSet>]) -> GraphicsResult<()> {
         let mut dynamic_data = self.dynamic_data.lock().unwrap();
 
         samplers
@@ -299,7 +299,7 @@ impl traits::Layout for VulkanLayout {
         render_target: Arc<dyn RenderTarget>,
         shaders: &[Shader],
         attributes: &[Attribute],
-    ) -> CrystalResult<Arc<dyn traits::Pipeline>> {
+    ) -> GraphicsResult<Arc<dyn traits::Pipeline>> {
         Ok(VulkanPipeline::from_render_target(
             self.device_manager.clone(),
             self,
@@ -312,7 +312,7 @@ impl traits::Layout for VulkanLayout {
     fn create_compute_pipeline(
         self: Arc<Self>,
         shader: &Shader,
-    ) -> CrystalResult<Arc<dyn traits::Pipeline>> {
+    ) -> GraphicsResult<Arc<dyn traits::Pipeline>> {
         Ok(VulkanPipeline::new_compute(
             self.device_manager.clone(),
             self,
@@ -330,7 +330,7 @@ impl VulkanLayout {
         storage_num: usize,
 
         double_buffering: bool,
-    ) -> CrystalResult<Arc<Self>> {
+    ) -> GraphicsResult<Arc<Self>> {
         let buffer_count = if double_buffering { 2 } else { 1 };
 
         let mut pool_sizes = vec![];
@@ -372,7 +372,7 @@ impl VulkanLayout {
             Ok(descriptor_pool) => descriptor_pool,
             Err(e) => {
                 log!("cannot create descriptor pool: {}", e);
-                return Err(CrystalError::DataError);
+                return Err(GraphicsError::DataError);
             }
         };
 
@@ -424,7 +424,7 @@ impl VulkanLayout {
             Ok(descriptor_set_layout) => descriptor_set_layout,
             Err(e) => {
                 log!("cannot create descriptor set layout: {}", e);
-                return Err(CrystalError::DataError);
+                return Err(GraphicsError::DataError);
             }
         };
 
@@ -437,7 +437,7 @@ impl VulkanLayout {
             Ok(descriptor_set_layout) => descriptor_set_layout,
             Err(e) => {
                 log!("cannot create descriptor set layout: {}", e);
-                return Err(CrystalError::DataError);
+                return Err(GraphicsError::DataError);
             }
         };
 
@@ -450,7 +450,7 @@ impl VulkanLayout {
             Ok(descriptor_set_layout) => descriptor_set_layout,
             Err(e) => {
                 log!("cannot create descriptor set layout: {}", e);
-                return Err(CrystalError::DataError);
+                return Err(GraphicsError::DataError);
             }
         };
 
@@ -479,7 +479,7 @@ impl VulkanLayout {
                 Ok(descriptor_sets) => descriptor_sets,
                 Err(e) => {
                     log!("cannot allocate uniform descriptor sets: {}", e);
-                    return Err(CrystalError::DataError);
+                    return Err(GraphicsError::DataError);
                 }
             }
         } else {
@@ -495,7 +495,7 @@ impl VulkanLayout {
                 Ok(descriptor_sets) => descriptor_sets,
                 Err(e) => {
                     log!("cannot allocate storage descriptor sets: {}", e);
-                    return Err(CrystalError::DataError);
+                    return Err(GraphicsError::DataError);
                 }
             }
         } else {
@@ -511,7 +511,7 @@ impl VulkanLayout {
                 Ok(descriptor_sets) => descriptor_sets,
                 Err(e) => {
                     log!("cannot allocate sampler descriptor sets: {}", e);
-                    return Err(CrystalError::DataError);
+                    return Err(GraphicsError::DataError);
                 }
             }
         } else {
@@ -536,7 +536,7 @@ impl VulkanLayout {
             Ok(layout) => layout,
             Err(e) => {
                 log!("cannot create pipeline layout: {}", e);
-                return Err(CrystalError::DataError);
+                return Err(GraphicsError::DataError);
             }
         };
 
@@ -577,7 +577,7 @@ impl VulkanLayout {
         &self,
         objects: &[Arc<Object>],
         command_buffer: &vk::CommandBuffer,
-    ) -> CrystalResult<()> {
+    ) -> GraphicsResult<()> {
         let mut dynamic_data = self.dynamic_data.lock().unwrap();
         let device_manager = dynamic_data.device_manager.clone();
 
@@ -682,7 +682,7 @@ impl VulkanLayout {
         dynamic_data: &mut MutexGuard<LayoutDynamicData>,
         mip_levels: u32,
         anisotropy_texels: f32,
-    ) -> CrystalResult<vk::Sampler> {
+    ) -> GraphicsResult<vk::Sampler> {
         match dynamic_data.samplers.get(&mip_levels) {
             Some(sampler) => return Ok(*sampler),
             None => (),
@@ -714,7 +714,7 @@ impl VulkanLayout {
             Ok(sampler) => sampler,
             Err(e) => {
                 log!("cannot create sampler: {}", e);
-                return Err(CrystalError::ImageError);
+                return Err(GraphicsError::ImageError);
             }
         };
 
@@ -781,7 +781,7 @@ impl VulkanPipeline {
         device_manager: Arc<DeviceManager>,
         layout: Arc<VulkanLayout>,
         shader: &Shader,
-    ) -> CrystalResult<Arc<Self>> {
+    ) -> GraphicsResult<Arc<Self>> {
         log!("creating compute pipeline");
 
         let stage = match shader.stage {
@@ -791,7 +791,7 @@ impl VulkanPipeline {
                     "wrong shader stage specified in compute pipeline: {:?}",
                     shader.stage
                 );
-                return Err(CrystalError::ShaderError);
+                return Err(GraphicsError::ShaderError);
             }
         };
 
@@ -805,7 +805,7 @@ impl VulkanPipeline {
             Ok(module) => module,
             Err(e) => {
                 log!("cannot create shader module: {}", e);
-                return Err(CrystalError::ShaderError);
+                return Err(GraphicsError::ShaderError);
             }
         };
 
@@ -830,7 +830,7 @@ impl VulkanPipeline {
             Ok(pipelines) => pipelines[0],
             Err(e) => {
                 log!("cannot create compute pipeline: {:?}", e);
-                return Err(CrystalError::ShaderError);
+                return Err(GraphicsError::ShaderError);
             }
         };
 
@@ -848,12 +848,12 @@ impl VulkanPipeline {
         shaders: &[Shader],
         attributes: &[Attribute],
         render_target: Arc<VulkanRenderTarget>,
-    ) -> CrystalResult<Arc<Self>> {
+    ) -> GraphicsResult<Arc<Self>> {
         log!("creating graphics pipeline");
 
         if shaders.is_empty() {
             log!("no shaders specified");
-            return Err(CrystalError::ShaderError);
+            return Err(GraphicsError::ShaderError);
         }
 
         let mut stages = Vec::new();
@@ -879,7 +879,7 @@ impl VulkanPipeline {
                 Ok(module) => module,
                 Err(e) => {
                     log!("cannot create shader module: {}", e);
-                    return Err(CrystalError::ShaderError);
+                    return Err(GraphicsError::ShaderError);
                 }
             };
 
@@ -1010,7 +1010,7 @@ impl VulkanPipeline {
             })),
             Err(es) => {
                 log!("cannot create graphics pipeline: {}", es.1);
-                Err(CrystalError::ShaderError)
+                Err(GraphicsError::ShaderError)
             }
         }
     }

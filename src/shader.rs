@@ -2,7 +2,7 @@ use std::{fs::File, io::Read};
 
 use crate::{
     debug::log,
-    errors::{CrystalError, CrystalResult},
+    errors::{GraphicsError, GraphicsResult},
 };
 
 #[derive(Debug)]
@@ -20,12 +20,12 @@ pub struct Shader {
 }
 
 impl Shader {
-    pub fn open(path: &str, stage: ShaderStage) -> CrystalResult<Self> {
+    pub fn open(path: &str, stage: ShaderStage) -> GraphicsResult<Self> {
         let mut file = match File::open(path) {
             Ok(file) => file,
             Err(e) => {
                 log!("cannot open file: {}", e);
-                return Err(CrystalError::ShaderError);
+                return Err(GraphicsError::ShaderError);
             }
         };
 
@@ -39,7 +39,7 @@ impl Shader {
             },
             Err(e) => {
                 log!("cannot read file: {}", e);
-                return Err(CrystalError::ShaderError);
+                return Err(GraphicsError::ShaderError);
             }
         };
 

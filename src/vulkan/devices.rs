@@ -7,7 +7,7 @@ use ash::{Instance, vk};
 
 use crate::{
     debug::log,
-    errors::{CrystalError, CrystalResult},
+    errors::{GraphicsError, GraphicsResult},
     vulkan::presentation::PresentSurface,
 };
 
@@ -63,22 +63,22 @@ impl Queue {
             .concat()
     }
 
-    pub fn wait_idle(&self) -> CrystalResult<()> {
+    pub fn wait_idle(&self) -> GraphicsResult<()> {
         match unsafe { self.device.queue_wait_idle(*self.handle.lock().unwrap()) } {
             Ok(()) => Ok(()),
             Err(e) => {
                 log!("queue wait idle error: {:?}", e);
-                Err(CrystalError::SyncError)
+                Err(GraphicsError::SyncError)
             }
         }
     }
 
-    pub fn submit(&self, submits: &[vk::SubmitInfo<'_>], fence: vk::Fence) -> CrystalResult<()> {
+    pub fn submit(&self, submits: &[vk::SubmitInfo<'_>], fence: vk::Fence) -> GraphicsResult<()> {
         let lock = self.handle.lock().unwrap();
 
         if let Err(e) = unsafe { self.device.queue_submit(*lock, submits, fence) } {
             log!("queue submit error: {:?}", e);
-            return Err(CrystalError::SyncError);
+            return Err(GraphicsError::SyncError);
         }
 
         Ok(())
@@ -88,12 +88,12 @@ impl Queue {
         &self,
         submits: &[vk::SubmitInfo<'_>],
         fence: vk::Fence,
-    ) -> CrystalResult<MutexGuard<vk::Queue>> {
+    ) -> GraphicsResult<MutexGuard<vk::Queue>> {
         let lock = self.handle.lock().unwrap();
 
         if let Err(e) = unsafe { self.device.queue_submit(*lock, submits, fence) } {
             log!("queue submit error: {:?}", e);
-            return Err(CrystalError::SyncError);
+            return Err(GraphicsError::SyncError);
         }
 
         Ok(lock)
@@ -122,7 +122,7 @@ impl Drop for DeviceManager {
 }
 
 impl DeviceManager {
-    pub fn wait_idle(&self) -> CrystalResult<()> {
+    pub fn wait_idle(&self) -> GraphicsResult<()> {
         let locks: Vec<MutexGuard<vk::Queue>> = self
             .queues
             .iter()
@@ -131,7 +131,7 @@ impl DeviceManager {
 
         if let Err(e) = unsafe { self.device.device_wait_idle() } {
             log!("cannot device wait idle: {:?}", e);
-            return Err(CrystalError::SyncError);
+            return Err(GraphicsError::SyncError);
         }
 
         drop(locks);
@@ -143,7 +143,7 @@ impl DeviceManager {
         &self,
         flags: vk::MemoryPropertyFlags,
         type_filter: u32,
-    ) -> CrystalResult<u32> {
+    ) -> GraphicsResult<u32> {
         for i in 0..self.memory_properties.memory_type_count {
             if (type_filter & (1 << i)) != 0
                 && (self.memory_properties.memory_types[i as usize].property_flags & flags) == flags
@@ -153,7 +153,7 @@ impl DeviceManager {
         }
 
         log!("cannot find suitable memory type");
-        Err(CrystalError::MemoryError)
+        Err(GraphicsError::MemoryError)
     }
 
     pub fn new(
@@ -161,7 +161,7 @@ impl DeviceManager {
         instance: Arc<Instance>,
         surface: Option<Arc<PresentSurface>>,
         extensions: &[*const i8],
-    ) -> CrystalResult<Arc<Self>> {
+    ) -> GraphicsResult<Arc<Self>> {
         let (physical_device, device_name, physical_device_extensions) =
             pick_physical_device(&instance, extensions)?;
 
@@ -173,7 +173,7 @@ impl DeviceManager {
         let queue_families = find_queue_families(instance.clone(), surface, physical_device);
 
         if queue_families.len() == 0 {
-            return Err(CrystalError::NotSupportedDevice);
+            return Err(GraphicsError::NotSupportedDevice);
         }
 
         let (logical_device, queues) = create_logical_device(
@@ -219,12 +219,12 @@ impl std::fmt::Debug for QueueFamilyInfo {
 fn pick_physical_device<'a>(
     instance: &Instance,
     extensions: &[*const i8],
-) -> CrystalResult<(vk::PhysicalDevice, String, PhysicalDeviceExtensions)> {
+) -> GraphicsResult<(vk::PhysicalDevice, String, PhysicalDeviceExtensions)> {
     let devices = match unsafe { instance.enumerate_physical_devices() } {
         Ok(devices) => devices,
         Err(e) => {
             log!("cannot enumerate physical devices: {}", e);
-            return Err(CrystalError::NotSupportedDevice);
+            return Err(GraphicsError::NotSupportedDevice);
         }
     };
 
@@ -303,7 +303,7 @@ fn pick_physical_device<'a>(
     let device = match picked_device {
         Some(device) => device,
         None => {
-            return Err(CrystalError::NotSupportedDevice);
+            return Err(GraphicsError::NotSupportedDevice);
         }
     };
 
@@ -387,7 +387,7 @@ fn create_logical_device(
     queue_families: &[(vk::QueueFlags, QueueFamilyInfo)],
     extensions: &[*const i8],
     features: vk::PhysicalDeviceFeatures,
-) -> CrystalResult<(Arc<ash::Device>, Vec<Arc<Queue>>)> {
+) -> GraphicsResult<(Arc<ash::Device>, Vec<Arc<Queue>>)> {
     let mut queues_create_infos = vec![];
 
     let priorities = vec![1.; 256];
@@ -409,7 +409,7 @@ fn create_logical_device(
     {
         Err(e) => {
             log!("cannot create logical device: {}", e);
-            return Err(CrystalError::NotSupportedDevice);
+            return Err(GraphicsError::NotSupportedDevice);
         }
         Ok(device) => Arc::new(device),
     };

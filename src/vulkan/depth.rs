@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use ash::vk;
 
-use crate::errors::CrystalResult;
+use crate::errors::GraphicsResult;
 
 use super::{devices::DeviceManager, images::Image};
 
@@ -53,7 +53,7 @@ impl DepthResources {
         width: u32,
         height: u32,
         samples: vk::SampleCountFlags,
-    ) -> CrystalResult<Self> {
+    ) -> GraphicsResult<Self> {
         let tiling = vk::ImageTiling::OPTIMAL;
         let features = vk::FormatFeatureFlags::DEPTH_STENCIL_ATTACHMENT;
 

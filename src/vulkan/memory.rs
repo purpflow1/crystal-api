@@ -7,7 +7,7 @@ use ash::vk;
 
 use crate::{
     debug::log,
-    errors::{CrystalError, CrystalResult},
+    errors::{GraphicsError, GraphicsResult},
     traits,
 };
 
@@ -29,7 +29,7 @@ pub struct BufferData {
 }
 
 impl BufferData {
-    fn new(device_manager: Arc<DeviceManager>, info: BufferInfo) -> CrystalResult<Self> {
+    fn new(device_manager: Arc<DeviceManager>, info: BufferInfo) -> GraphicsResult<Self> {
         let create_info = vk::BufferCreateInfo::default()
             .size(info.size)
             .usage(info.usage)
@@ -39,7 +39,7 @@ impl BufferData {
             Ok(buffer) => buffer,
             Err(e) => {
                 log!("cannot create vertex buffer: {}", e);
-                return Err(CrystalError::MemoryError);
+                return Err(GraphicsError::MemoryError);
             }
         };
 
@@ -61,7 +61,7 @@ impl BufferData {
             Ok(device_memory) => device_memory,
             Err(e) => {
                 log!("cannot allocate device memory: {}", e);
-                return Err(CrystalError::MemoryError);
+                return Err(GraphicsError::MemoryError);
             }
         };
 
@@ -73,7 +73,7 @@ impl BufferData {
             Ok(_) => (),
             Err(e) => {
                 log!("cannot bind buffer memory: {}", e);
-                return Err(CrystalError::MemoryError);
+                return Err(GraphicsError::MemoryError);
             }
         };
 
@@ -88,7 +88,7 @@ impl BufferData {
             Ok(ptr) => ptr as *mut u8,
             Err(e) => {
                 log!("cannot map memory: {}", e);
-                return Err(CrystalError::MemoryError);
+                return Err(GraphicsError::MemoryError);
             }
         };
 
@@ -155,7 +155,7 @@ impl BufferManager {
         device_manager: Arc<DeviceManager>,
         info: BufferInfo,
         sync: Option<Arc<Mutex<GpuSync>>>,
-    ) -> CrystalResult<Arc<Self>> {
+    ) -> GraphicsResult<Arc<Self>> {
         let buffer_data = (0..info.count)
             .map(|_| BufferData::new(device_manager.clone(), info.clone()).unwrap())
             .collect();

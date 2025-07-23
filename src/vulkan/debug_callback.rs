@@ -9,7 +9,7 @@ use ash::ext::debug_utils;
 use ash::{Entry, Instance};
 
 use crate::debug::log;
-use crate::errors::{CrystalError, CrystalResult};
+use crate::errors::{GraphicsError, GraphicsResult};
 
 pub struct DebugUtilsMessanger {
     _debug_utils: debug_utils::Instance,
@@ -49,7 +49,7 @@ unsafe extern "system" fn debug_callback(
 pub fn create_debug_utils_messanger(
     entry: &Entry,
     instance: &Instance,
-) -> CrystalResult<DebugUtilsMessanger> {
+) -> GraphicsResult<DebugUtilsMessanger> {
     let debug_utils = debug_utils::Instance::new(entry, instance);
     let debug_messanger_create_info = vk::DebugUtilsMessengerCreateInfoEXT::default()
         .message_severity(
@@ -70,7 +70,7 @@ pub fn create_debug_utils_messanger(
         Ok(messanger) => messanger,
         Err(e) => {
             log!("cannot create vulkan debug messanger: {}", e);
-            return Err(CrystalError::DebugError);
+            return Err(GraphicsError::DebugError);
         }
     };
 

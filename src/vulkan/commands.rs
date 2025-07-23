@@ -11,7 +11,7 @@ use ash::{
 
 use crate::{
     debug::log,
-    errors::{CrystalError, CrystalResult},
+    errors::{GraphicsError, GraphicsResult},
     vulkan::{devices::DeviceManager, presentation::Presentation},
 };
 
@@ -81,7 +81,7 @@ impl GpuFuture {
         Ok(())
     }
 
-    pub fn flush(self: Box<Self>, queue: Arc<Queue>) -> CrystalResult<Box<Self>> {
+    pub fn flush(self: Box<Self>, queue: Arc<Queue>) -> GraphicsResult<Box<Self>> {
         let mut command_buffer_lock = self.command_buffers.lock().unwrap();
         let sync_lock = self.sync.lock().unwrap();
 
@@ -104,7 +104,7 @@ impl GpuFuture {
                 Ok(f) => fence = f,
                 Err(e) => {
                     log!("failed to create one time fence: {:?}", e);
-                    return Err(CrystalError::SyncError);
+                    return Err(GraphicsError::SyncError);
                 }
             };
         }
@@ -228,7 +228,7 @@ impl CommandBuffer {
     fn from_handlers(
         pool: Arc<CommandPool>,
         handlers: Vec<vk::CommandBuffer>,
-    ) -> CrystalResult<Vec<Arc<Self>>> {
+    ) -> GraphicsResult<Vec<Arc<Self>>> {
         Ok(handlers
             .iter()
             .map(|handler| {
@@ -244,7 +244,7 @@ impl CommandBuffer {
         pool: Arc<CommandPool>,
         buffer_count: u32,
         level: vk::CommandBufferLevel,
-    ) -> CrystalResult<Vec<Arc<Self>>> {
+    ) -> GraphicsResult<Vec<Arc<Self>>> {
         let allocate_info = vk::CommandBufferAllocateInfo::default()
             .command_pool(pool.handler)
             .level(level)
@@ -266,7 +266,7 @@ impl CommandBuffer {
                 .collect(),
             Err(e) => {
                 log!("cannot allocate command buffers: {}", e);
-                return Err(CrystalError::TransferError);
+                return Err(GraphicsError::TransferError);
             }
         };
 
@@ -291,7 +291,7 @@ impl Drop for CommandPool {
 }
 
 impl CommandPool {
-    fn new(device_manager: Arc<DeviceManager>, queue: Arc<Queue>) -> CrystalResult<Arc<Self>> {
+    fn new(device_manager: Arc<DeviceManager>, queue: Arc<Queue>) -> GraphicsResult<Arc<Self>> {
         let create_info = vk::CommandPoolCreateInfo::default()
             .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER)
             .queue_family_index(queue.family_index);
@@ -304,7 +304,7 @@ impl CommandPool {
             Ok(command_pool) => command_pool,
             Err(e) => {
                 log!("cannot create command pool: {}", e);
-                return Err(CrystalError::TransferError);
+                return Err(GraphicsError::TransferError);
             }
         };
 
@@ -332,7 +332,7 @@ impl CommandEntry {
         device_manager: Arc<DeviceManager>,
         queue: Arc<Queue>,
         buffer_count: u32,
-    ) -> CrystalResult<Self> {
+    ) -> GraphicsResult<Self> {
         let command_pool = CommandPool::new(device_manager.clone(), queue.clone())?;
 
         let command_buffers = CommandBuffer::new(
@@ -349,11 +349,11 @@ impl CommandEntry {
         })
     }
 
-    pub fn wait(&self) -> CrystalResult<()> {
+    pub fn wait(&self) -> GraphicsResult<()> {
         self.queue.wait_idle()
     }
 
-    pub fn record_single_time_buffer<P>(&self, predicate: P) -> CrystalResult<Box<GpuFuture>>
+    pub fn record_single_time_buffer<P>(&self, predicate: P) -> GraphicsResult<Box<GpuFuture>>
     where
         P: Fn(&vk::CommandBuffer, Arc<ash::Device>),
     {
@@ -370,7 +370,7 @@ impl CommandEntry {
             Ok(buffers) => buffers[0],
             Err(e) => {
                 log!("cannot allocate command buffer: {}", e);
-                return Err(CrystalError::TransferError);
+                return Err(GraphicsError::TransferError);
             }
         };
 
@@ -385,7 +385,7 @@ impl CommandEntry {
             Ok(_) => (),
             Err(e) => {
                 log!("cannot begin command buffer: {}", e);
-                return Err(CrystalError::TransferError);
+                return Err(GraphicsError::TransferError);
             }
         }
 
@@ -399,7 +399,7 @@ impl CommandEntry {
             Ok(()) => (),
             Err(e) => {
                 log!("cannot begin command buffer: {}", e);
-                return Err(CrystalError::TransferError);
+                return Err(GraphicsError::TransferError);
             }
         }
 
@@ -418,7 +418,7 @@ impl CommandEntry {
         &self,
         sync: Arc<Mutex<GpuSync>>,
         predicate: P,
-    ) -> CrystalResult<Box<GpuFuture>>
+    ) -> GraphicsResult<Box<GpuFuture>>
     where
         P: Fn(&vk::CommandBuffer, Arc<ash::Device>, usize),
     {
@@ -434,7 +434,7 @@ impl CommandEntry {
             Ok(()) => {}
             Err(e) => {
                 log!("failed resetting command buffer: {}", e);
-                return Err(CrystalError::TransferError);
+                return Err(GraphicsError::TransferError);
             }
         };
 
@@ -448,7 +448,7 @@ impl CommandEntry {
             Ok(_) => {}
             Err(e) => {
                 log!("cannot begin command buffer: {}", e);
-                return Err(CrystalError::TransferError);
+                return Err(GraphicsError::TransferError);
             }
         };
 
@@ -466,7 +466,7 @@ impl CommandEntry {
             Ok(_) => {}
             Err(e) => {
                 log!("cannot end command buffer: {}", e);
-                return Err(CrystalError::TransferError);
+                return Err(GraphicsError::TransferError);
             }
         };
 
@@ -496,7 +496,7 @@ impl CommandManager {
     pub(crate) fn new(
         device_manager: Arc<DeviceManager>,
         buffer_count: u32,
-    ) -> CrystalResult<Arc<Self>> {
+    ) -> GraphicsResult<Arc<Self>> {
         let mut command_entries = BTreeMap::<CommandType, Arc<CommandEntry>>::new();
 
         if let Some(queue) = device_manager
