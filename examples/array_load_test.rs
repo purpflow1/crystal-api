@@ -1,5 +1,4 @@
 use crystal_api::{errors::CrystalResult, object::Object, vulkan::VulkanEntry, *};
-use sysinfo::{Pid, PidExt, ProcessExt, System, SystemExt};
 
 use std::{
     f32::consts::PI,
@@ -125,8 +124,6 @@ struct Context {
     scene: Scene,
 
     state: State,
-
-    system: System,
 }
 
 impl Context {
@@ -140,7 +137,6 @@ impl Context {
             window: None,
             graphics: None,
             obj_compute: None,
-            system: System::new_all(),
 
             settings,
             scene: Scene {
@@ -447,12 +443,6 @@ impl ApplicationHandler for Context {
         self.state.current_frame += 1;
 
         if DEBUG_OUTPUT && self.state.delta_time_sum.as_secs_f64() >= 1. {
-            let pid = Pid::from_u32(std::process::id());
-
-            self.system.refresh_process(pid);
-
-            let process = self.system.process(pid).unwrap();
-
             let gpu_debug = graphics.get_debug_data();
 
             macro_rules! as_mb {
@@ -464,8 +454,6 @@ impl ApplicationHandler for Context {
             println!("[DEBUG]");
             println!("FPS: {}", self.state.current_frame);
             println!("GPU mem:   {:.1} MB", as_mb!(gpu_debug.used_memory));
-            println!("RAM usage: {:.1} MB", process.memory() as f32 / 1024.);
-            println!("CPU usage: {:.1}%", process.cpu_usage());
             println!();
 
             let mem = self
