@@ -282,7 +282,17 @@ impl Swapchain {
 
         let mut info = swapchain_create_info.as_vk();
 
-        if device_manager.extensions.swapchain_compression {
+        if device_manager
+            .supported_extensions
+            .iter()
+            .find(|ext| {
+                ext.as_str()
+                    == vk::EXT_IMAGE_COMPRESSION_CONTROL_SWAPCHAIN_NAME
+                        .to_str()
+                        .unwrap()
+            })
+            .is_some()
+        {
             info = info.push_next(&mut compression_control);
         }
 

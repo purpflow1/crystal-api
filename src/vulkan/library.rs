@@ -183,80 +183,26 @@ impl VulkanEntry {
             }),
         );
 
-        let mut device_manager = None;
+        let device_manager =
+            DeviceManager::new(entry.clone(), instance.clone(), Some(surface.clone()))?;
 
-        for step in 0..=2 {
-            match step {
-                0 => {
-                    let device_extensions = [
-                        vk::KHR_SWAPCHAIN_NAME.as_ptr(),
-                        vk::EXT_IMAGE_COMPRESSION_CONTROL_NAME.as_ptr(),
-                        vk::EXT_IMAGE_COMPRESSION_CONTROL_SWAPCHAIN_NAME.as_ptr(),
-                    ];
+        let mut khr_swapchain_found = false;
 
-                    if let Ok(dm) = DeviceManager::new(
-                        entry.clone(),
-                        instance.clone(),
-                        Some(surface.clone()),
-                        &device_extensions,
-                    ) {
-                        device_manager = Some(dm);
-                        break;
-                    }
-                }
-                1 => {
-                    let device_extensions = [
-                        vk::KHR_SWAPCHAIN_NAME.as_ptr(),
-                        vk::EXT_IMAGE_COMPRESSION_CONTROL_SWAPCHAIN_NAME.as_ptr(),
-                    ];
+        log!("| picked device: [ {} ]", device_manager.device_name);
+        for extension in &device_manager.supported_extensions {
+            log!("|| {}", extension);
 
-                    if let Ok(dm) = DeviceManager::new(
-                        entry.clone(),
-                        instance.clone(),
-                        Some(surface.clone()),
-                        &device_extensions,
-                    ) {
-                        device_manager = Some(dm);
-                        break;
-                    }
-                }
-                2 => {
-                    let device_extensions = [vk::KHR_SWAPCHAIN_NAME.as_ptr()];
-
-                    if let Ok(dm) = DeviceManager::new(
-                        entry.clone(),
-                        instance.clone(),
-                        Some(surface.clone()),
-                        &device_extensions,
-                    ) {
-                        device_manager = Some(dm);
-                        break;
-                    }
-                }
-                _ => {}
+            if !khr_swapchain_found
+                && extension.as_str() == vk::KHR_SWAPCHAIN_NAME.to_str().unwrap()
+            {
+                khr_swapchain_found = true;
             }
         }
 
-        if device_manager.is_none() {
-            return Err(GraphicsError::NotSupportedDevice);
+        if !khr_swapchain_found {
+            log!("picked device has no swapchain support!");
+            return Err(GraphicsError::NotSupportedPresent);
         }
-
-        let device_manager = device_manager.unwrap();
-
-        log!("| picked device: [ {} ]", device_manager.device_name);
-        log!(
-            "| {} compression  = {}",
-            if !device_manager.extensions.swapchain_compression {
-                "WARN"
-            } else {
-                "----"
-            },
-            device_manager.extensions.swapchain_compression
-        );
-        log!(
-            "| ---- formats 4444 = {}",
-            device_manager.extensions.formats_4444
-        );
 
         let presentation =
             Presentation::new(device_manager.clone(), surface, settings.msaa_samples)?;

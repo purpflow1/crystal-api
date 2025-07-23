@@ -14,7 +14,6 @@
 
 ## Short-term goals
 - Adding raytracing support
-- Optimize device picking
 
 ---
 

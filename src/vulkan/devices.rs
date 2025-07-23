@@ -14,7 +14,7 @@ use crate::{
 #[derive(Clone, Default)]
 pub struct PhysicalDeviceExtensions {
     pub swapchain_compression: bool,
-    pub formats_4444: bool,
+    pub present_support: bool,
 }
 
 pub struct Queue {
@@ -109,7 +109,7 @@ pub struct DeviceManager {
     pub memory_properties: vk::PhysicalDeviceMemoryProperties,
     pub device_properties: vk::PhysicalDeviceProperties,
     pub queues: Vec<Arc<Queue>>,
-    pub extensions: PhysicalDeviceExtensions,
+    pub supported_extensions: Vec<String>,
 }
 
 impl Drop for DeviceManager {
@@ -160,10 +160,11 @@ impl DeviceManager {
         entry: Arc<ash::Entry>,
         instance: Arc<Instance>,
         surface: Option<Arc<PresentSurface>>,
-        extensions: &[*const i8],
     ) -> GraphicsResult<Arc<Self>> {
-        let (physical_device, device_name, physical_device_extensions) =
-            pick_physical_device(&instance, extensions)?;
+        let (physical_device, device_name) =
+            pick_physical_device(instance.clone(), surface.is_none())?;
+
+        let supported_extensions = query_extensions_support(instance.clone(), physical_device)?;
 
         let memory_properties =
             unsafe { instance.get_physical_device_memory_properties(physical_device) };
@@ -180,7 +181,7 @@ impl DeviceManager {
             instance.clone(),
             physical_device,
             &queue_families,
-            &extensions,
+            &supported_extensions,
             vk::PhysicalDeviceFeatures::default().sampler_anisotropy(true),
         )?;
 
@@ -193,7 +194,10 @@ impl DeviceManager {
             memory_properties,
             device_properties,
             queues,
-            extensions: physical_device_extensions,
+            supported_extensions: supported_extensions
+                .iter()
+                .map(|ext| ext.to_str().unwrap().to_string())
+                .collect(),
         }))
     }
 }
@@ -216,10 +220,48 @@ impl std::fmt::Debug for QueueFamilyInfo {
     }
 }
 
+fn query_extensions_support<'a>(
+    instance: Arc<Instance>,
+    device: vk::PhysicalDevice,
+) -> GraphicsResult<Vec<&'a CStr>> {
+    let mut supported_extensions = Vec::with_capacity(64);
+
+    let extensions = [
+        vk::EXT_IMAGE_COMPRESSION_CONTROL_NAME,
+        vk::EXT_IMAGE_COMPRESSION_CONTROL_SWAPCHAIN_NAME,
+        vk::KHR_SWAPCHAIN_NAME,
+    ];
+
+    let extension_props = match unsafe { instance.enumerate_device_extension_properties(device) } {
+        Ok(props) => props,
+        Err(e) => {
+            log!("cannot enumerate device extension properties: {}", e);
+            return Err(GraphicsError::ConnotInitLibrary);
+        }
+    };
+
+    let device_supported_extensions: Vec<&CStr> = extension_props
+        .iter()
+        .map(|ext| ext.extension_name_as_c_str().unwrap())
+        .collect();
+
+    for req_ext in &extensions {
+        if device_supported_extensions
+            .iter()
+            .find(|&ext| *ext == *req_ext)
+            .is_some()
+        {
+            supported_extensions.push(*req_ext)
+        }
+    }
+
+    Ok(supported_extensions)
+}
+
 fn pick_physical_device<'a>(
-    instance: &Instance,
-    extensions: &[*const i8],
-) -> GraphicsResult<(vk::PhysicalDevice, String, PhysicalDeviceExtensions)> {
+    instance: Arc<Instance>,
+    get_first: bool,
+) -> GraphicsResult<(vk::PhysicalDevice, String)> {
     let devices = match unsafe { instance.enumerate_physical_devices() } {
         Ok(devices) => devices,
         Err(e) => {
@@ -228,110 +270,44 @@ fn pick_physical_device<'a>(
         }
     };
 
-    let extensions: Vec<&str> = extensions
-        .iter()
-        .map(|ext| unsafe { CStr::from_ptr(*ext) }.to_str().unwrap())
-        .collect();
+    if devices.is_empty() {
+        log!("No devices found!");
+        return Err(GraphicsError::ConnotInitLibrary);
+    }
 
-    let mut picked_device = None;
-    let mut picked_device_type = None;
-    let mut device_name = "";
-    let mut device_supported_extensions = vec![];
-    #[allow(unused)]
-    let mut extension_props = vec![];
+    if get_first {
+        let device = devices[0];
 
-    'devloop: for device in devices {
         let props = unsafe { instance.get_physical_device_properties(device) };
-        device_name = unsafe { CStr::from_ptr(props.device_name.as_ptr()) }
+        let device_name = unsafe { CStr::from_ptr(props.device_name.as_ptr()) }
             .to_str()
             .unwrap();
-        let (api_version_maj, api_version_min, api_version_pat) = (
-            vk::api_version_major(props.api_version),
-            vk::api_version_minor(props.api_version),
-            vk::api_version_patch(props.api_version),
-        );
 
-        extension_props = match unsafe { instance.enumerate_device_extension_properties(device) } {
-            Ok(props) => props,
-            Err(e) => {
-                log!("cannot enumerate device extension properties: {}", e);
-                continue;
-            }
-        };
+        return Ok((device, device_name.to_string()));
+    }
 
-        device_supported_extensions = extension_props
-            .iter()
-            .map(|ext| ext.extension_name_as_c_str().unwrap().to_str().unwrap())
-            .collect();
+    let mut found = Err(GraphicsError::NotSupportedDevice);
 
-        for req_ext in &extensions {
-            if device_supported_extensions
-                .iter()
-                .find(|&ext| *ext == *req_ext)
-                .is_none()
-            {
-                let version_name = format!(
-                    "{}.{}.{}",
-                    api_version_maj, api_version_min, api_version_pat
-                );
-                log!(
-                    "{} with Vulkan API version {} does not have support for {}",
-                    device_name,
-                    version_name,
-                    req_ext
-                );
-                continue 'devloop;
-            }
-        }
+    for device in devices {
+        let props = unsafe { instance.get_physical_device_properties(device) };
+
+        let device_name = unsafe { CStr::from_ptr(props.device_name.as_ptr()) }
+            .to_str()
+            .unwrap()
+            .to_string();
 
         match props.device_type {
-            vk::PhysicalDeviceType::DISCRETE_GPU => {
-                picked_device = Some(device);
-                break;
+            vk::PhysicalDeviceType::DISCRETE_GPU => return Ok((device, device_name)),
+            vk::PhysicalDeviceType::INTEGRATED_GPU => found = Ok((device, device_name)),
+            _ => {
+                if found.is_err() {
+                    found = Ok((device, device_name))
+                }
             }
-            vk::PhysicalDeviceType::INTEGRATED_GPU => {
-                picked_device_type = Some(props.device_type);
-                picked_device = Some(device);
-            }
-            _ => match picked_device_type {
-                None => picked_device = Some(device),
-                Some(_) => (),
-            },
         }
     }
 
-    let device = match picked_device {
-        Some(device) => device,
-        None => {
-            return Err(GraphicsError::NotSupportedDevice);
-        }
-    };
-
-    let mut supported_extensions = PhysicalDeviceExtensions::default();
-
-    {
-        let compression_extension = vk::EXT_IMAGE_COMPRESSION_CONTROL_NAME.as_ptr();
-        let ext_name = unsafe { CStr::from_ptr(compression_extension) }
-            .to_str()
-            .unwrap();
-        supported_extensions.swapchain_compression = device_supported_extensions
-            .iter()
-            .find(|&dev_ext| *dev_ext == ext_name)
-            .is_some();
-    }
-
-    {
-        let formats_extension = vk::EXT_4444_FORMATS_NAME.as_ptr();
-        let ext_name = unsafe { CStr::from_ptr(formats_extension) }
-            .to_str()
-            .unwrap();
-        supported_extensions.formats_4444 = device_supported_extensions
-            .iter()
-            .find(|&dev_ext| *dev_ext == ext_name)
-            .is_some();
-    }
-
-    Ok((device, device_name.to_string(), supported_extensions))
+    return found;
 }
 
 fn find_queue_families(
@@ -385,7 +361,7 @@ fn create_logical_device(
     instance: Arc<Instance>,
     physical_device: vk::PhysicalDevice,
     queue_families: &[(vk::QueueFlags, QueueFamilyInfo)],
-    extensions: &[*const i8],
+    extensions: &[&CStr],
     features: vk::PhysicalDeviceFeatures,
 ) -> GraphicsResult<(Arc<ash::Device>, Vec<Arc<Queue>>)> {
     let mut queues_create_infos = vec![];
@@ -400,10 +376,12 @@ fn create_logical_device(
         )
     }
 
+    let extension_names: Vec<_> = extensions.iter().map(|ext| ext.as_ptr()).collect();
+
     let device_create_info = vk::DeviceCreateInfo::default()
         .queue_create_infos(&queues_create_infos)
         .enabled_features(&features)
-        .enabled_extension_names(extensions);
+        .enabled_extension_names(&extension_names);
 
     let device = match unsafe { instance.create_device(physical_device, &device_create_info, None) }
     {
