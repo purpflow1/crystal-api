@@ -82,7 +82,7 @@ impl Queue {
         &self,
         submits: &[vk::SubmitInfo<'_>],
         fence: vk::Fence,
-    ) -> GraphicsResult<MutexGuard<vk::Queue>> {
+    ) -> GraphicsResult<MutexGuard<'_, vk::Queue>> {
         let lock = self.handle.lock().unwrap();
 
         if let Err(e) = unsafe { self.device.queue_submit(*lock, submits, fence) } {
