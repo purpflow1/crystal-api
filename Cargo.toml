@@ -14,7 +14,7 @@ categories = [
     "rendering::engine",
 ]
 
-repository = "https://https://github.com/purpflow1/crystal-api"
+repository = "https://github.com/purpflow1/crystal-api"
 readme = "README.md"
 license-file = "LICENSE.txt"
 
