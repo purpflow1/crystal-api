@@ -19,9 +19,8 @@
 ---
 
 ## Installing
-There is no cargo crate for this repo for now, so you need to clone it:
 ```bash
-git clone https://github.com/purpflow1/crystal-api.git
+cargo add crystal-api
 ```
 
 ## Running
