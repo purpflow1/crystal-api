@@ -35,8 +35,7 @@ pub(crate) struct TimeState {
     delta_time: std::time::Duration,
 }
 
-/// # Vulkan API wrapper. Shouldn't be used directly, expect creation!
-pub struct VulkanEntry {
+pub(crate) struct VulkanEntry {
     command_manager: Arc<CommandManager>,
     device_manager: Arc<DeviceManager>,
     _debug_utils_messanger: Option<DebugUtilsMessanger>,
@@ -499,12 +498,7 @@ impl traits::GraphicsApi for VulkanEntry {
 }
 
 impl VulkanEntry {
-    /// Creates ```VulkanEntry``` with presentation support
-    /// ```rust
-    /// let graphics = VulkanEntry::with_presentation(&self.settings, &window)
-    ///     .expect("cannot create vulkan entry");
-    /// ```
-    pub fn with_presentation<T: HasWindowHandle + HasDisplayHandle>(
+    pub(crate) fn with_presentation<T: HasWindowHandle + HasDisplayHandle>(
         settings: &GraphicsApiInitSettings,
         window: &T,
     ) -> GraphicsResult<Arc<dyn traits::GraphicsApi>> {

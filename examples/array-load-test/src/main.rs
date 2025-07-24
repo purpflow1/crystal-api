@@ -162,8 +162,8 @@ impl ApplicationHandler for Context {
                 .unwrap()
         };
 
-        let graphics = VulkanEntry::with_presentation(&self.settings, &window)
-            .expect("cannot create vulkan entry");
+        let graphics = init_api_instance_with_presentation(&self.settings, &window)
+            .expect("cannot create entry");
 
         let shaders_obj = [
             Shader::open(

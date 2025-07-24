@@ -14,6 +14,6 @@ mod validation;
 pub(crate) use images::VulkanTexture;
 pub(crate) use layout::VulkanLayout;
 pub(crate) use layout::VulkanPipeline;
-pub use library::VulkanEntry;
+pub(crate) use library::VulkanEntry;
 pub(crate) use memory::BufferManager;
 pub(crate) use rendering::VulkanRenderTarget;

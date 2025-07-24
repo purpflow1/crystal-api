@@ -5,7 +5,8 @@
 - Vulkan API support
 - Synchronized in-frame and out-of-frame compute operations
 - Direct buffer access (no staging in buffer operations)
-- Multithreaded access to resources
+- Multithreaded access to resource
+- Unified app architecture
 
 ## Long-term goals
 - Adding _non-present_ **Crystal API** entry (for compute operations only)
