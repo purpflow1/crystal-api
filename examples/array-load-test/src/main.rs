@@ -185,7 +185,8 @@ impl ApplicationHandler for Context {
             .unwrap();
 
         let default_sampler = {
-            let file = File::open("resources/textures/default.png").unwrap();
+            let file =
+                File::open("examples/array-load-test/resources/textures/default.png").unwrap();
             let decoder = png::Decoder::new(file);
             let mut reader = decoder.read_info().unwrap();
 
@@ -207,7 +208,7 @@ impl ApplicationHandler for Context {
         };
 
         let test_sampler = {
-            let file = File::open("resources/textures/test.png").unwrap();
+            let file = File::open("examples/array-load-test/resources/textures/test.png").unwrap();
             let decoder = png::Decoder::new(file);
             let mut reader = decoder.read_info().unwrap();
 
@@ -299,7 +300,7 @@ impl ApplicationHandler for Context {
 
         let mesh = Arc::new(
             Mesh::from_buffer(BufReader::new(
-                File::open("resources/mishka/owo.obj").unwrap(),
+                File::open("examples/array-load-test/resources/mishka/owo.obj").unwrap(),
             ))
             .unwrap(),
         );
