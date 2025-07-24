@@ -32,7 +32,7 @@ cd crystal-api/
 
 To run debug scene from included example use:
 ```bash
-cargo run --example main
+cargo run --manifest-path=examples/array-load-test/Cargo.toml
 ```
 _!!! Khronos validation layers are required to run debug builds._
 
