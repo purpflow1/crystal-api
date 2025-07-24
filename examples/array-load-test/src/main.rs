@@ -206,7 +206,7 @@ impl ApplicationHandler for Context {
             graphics.create_sampler_set(&[(0, texture)]).unwrap()
         };
 
-        let _test_sampler = {
+        let test_sampler = {
             let file = File::open("resources/textures/test.png").unwrap();
             let decoder = png::Decoder::new(file);
             let mut reader = decoder.read_info().unwrap();
@@ -315,7 +315,7 @@ impl ApplicationHandler for Context {
 
         self.scene.objects.push(object.clone());
         layout_obj
-            .register_samplers(&[default_sampler, _test_sampler])
+            .register_samplers(&[default_sampler, test_sampler])
             .unwrap();
 
         self.graphics = Some(graphics);
