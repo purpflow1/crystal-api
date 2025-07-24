@@ -1,10 +1,13 @@
+/// Unified init settings
 #[derive(Default)]
+#[allow(missing_docs)]
 pub struct GraphicsApiInitSettings {
     pub msaa_samples: u8,
     pub width: u32,
     pub height: u32,
 }
 
+#[allow(missing_docs)]
 impl GraphicsApiInitSettings {
     pub fn msaa_samples(&self, msaa_samples: u8) -> Self {
         Self {
@@ -20,9 +23,4 @@ impl GraphicsApiInitSettings {
     pub fn height(&self, height: u32) -> Self {
         Self { height, ..*self }
     }
-}
-
-pub struct DebugData {
-    pub used_memory: u64,
-    pub aviable_memory: u64,
 }

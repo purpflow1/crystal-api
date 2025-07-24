@@ -21,8 +21,7 @@ pub struct BufferInfo {
     pub count: usize,
 }
 
-pub struct BufferData {
-    device_manager: Arc<DeviceManager>,
+pub(crate) struct BufferData {
     handler: vk::Buffer,
     memory: vk::DeviceMemory,
     mapped: *mut u8,
@@ -93,7 +92,6 @@ impl BufferData {
         };
 
         Ok(Self {
-            device_manager,
             handler: buffer,
             memory: device_memory,
             mapped,

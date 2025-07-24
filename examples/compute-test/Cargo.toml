@@ -1,0 +1,5 @@
+[package]
+name = "compute-test"
+version = "0.1.0"
+edition = "2024"
+authors = ["purpflow"]

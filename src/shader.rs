@@ -5,6 +5,7 @@ use crate::{
     errors::{GraphicsError, GraphicsResult},
 };
 
+#[allow(missing_docs)]
 #[derive(Debug)]
 pub enum ShaderStage {
     Vertex,
@@ -14,12 +15,20 @@ pub enum ShaderStage {
     Compute,
 }
 
+#[allow(missing_docs)]
 pub struct Shader {
     pub(crate) stage: ShaderStage,
     pub(crate) code: Vec<u32>,
 }
 
 impl Shader {
+    /// Opens shader with path and specified stage
+    /// ```rust
+    /// let shader = Shader::open(
+    ///    "shader.vert.spv",
+    ///    ShaderStage::Vertex,
+    ///).unwrap()
+    /// ```
     pub fn open(path: &str, stage: ShaderStage) -> GraphicsResult<Self> {
         let mut file = match File::open(path) {
             Ok(file) => file,

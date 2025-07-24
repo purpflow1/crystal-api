@@ -1,4 +1,4 @@
-use crystal_api::{errors::GraphicsResult, object::Object, vulkan::VulkanEntry, *};
+use crystal_api::{errors::GraphicsResult, object::Object, *};
 
 use std::{
     f32::consts::PI,
@@ -18,8 +18,7 @@ use winit::{
     window::Window,
 };
 
-const DEBUG_OUTPUT: bool = true;
-const OBJECT_DIMENTION: usize = 10;
+const OBJECT_DIMENTION: usize = 8;
 const DISTANCE: f32 = 2.;
 
 struct State {
@@ -37,30 +36,6 @@ pub struct Camera {
 impl Camera {
     fn calc_eye_matrix(&self) -> glam::Mat4 {
         self.proj * self.view
-    }
-}
-
-#[repr(C, align(16))]
-#[derive(Clone)]
-struct Vec3 {
-    x: f32,
-    y: f32,
-    z: f32,
-}
-
-#[repr(C, align(16))]
-#[derive(Clone)]
-struct Particle {
-    pos: Vec3,
-    vel: Vec3,
-}
-
-impl std::fmt::Debug for Particle {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_fmt(format_args!(
-            "({:.1}, {:.1}, {:.1}) ({:.1}, {:.1}, {:.1})",
-            self.pos.x, self.pos.y, self.pos.z, self.vel.x, self.vel.y, self.vel.z
-        ))
     }
 }
 
@@ -108,17 +83,12 @@ struct Scene {
     uniform: Option<Arc<dyn Buffer>>,
     transforms: Option<Arc<dyn Buffer>>,
 
-    compute_buffer_in: Option<Arc<dyn Buffer>>,
-    compute_buffer_out: Option<Arc<dyn Buffer>>,
-
     objects: Vec<Arc<Object>>,
 }
 
 struct Context {
     window: Option<Window>,
-    graphics: Option<Arc<VulkanEntry>>,
-
-    obj_compute: Option<Arc<Object>>,
+    graphics: Option<Arc<dyn GraphicsApi>>,
 
     settings: GraphicsApiInitSettings,
     scene: Scene,
@@ -136,7 +106,6 @@ impl Context {
         Ok(Self {
             window: None,
             graphics: None,
-            obj_compute: None,
 
             settings,
             scene: Scene {
@@ -162,8 +131,6 @@ impl Context {
                 light: None,
                 light_info: None,
                 transforms: None,
-                compute_buffer_in: None,
-                compute_buffer_out: None,
 
                 objects: vec![],
             },
@@ -199,20 +166,23 @@ impl ApplicationHandler for Context {
             .expect("cannot create vulkan entry");
 
         let shaders_obj = [
-            Shader::open("shaders/desc.vert.spv", ShaderStage::Vertex).unwrap(),
-            Shader::open("shaders/desc.frag.spv", ShaderStage::Fragment).unwrap(),
+            Shader::open(
+                "examples/array-load-test/shaders/desc.vert.spv",
+                ShaderStage::Vertex,
+            )
+            .unwrap(),
+            Shader::open(
+                "examples/array-load-test/shaders/desc.frag.spv",
+                ShaderStage::Fragment,
+            )
+            .unwrap(),
         ];
 
-        let shader_compute =
-            Shader::open("shaders/particles.comp.spv", ShaderStage::Compute).unwrap();
-
-        let render_target = graphics.get_viewport();
+        let render_target = graphics.get_presentation_render_target();
 
         let layout_obj = graphics
             .create_layout(true, 2, OBJECT_DIMENTION.pow(3), 1, 3)
             .unwrap();
-        let layout_compute = graphics.create_layout(true, 0, 0, 1, 2).unwrap();
-        // let layout_graph = graphics.create_layout(true, texture_num, sampler_num, uniform_num, storage_num)
 
         let default_sampler = {
             let file = File::open("resources/textures/default.png").unwrap();
@@ -276,31 +246,15 @@ impl ApplicationHandler for Context {
             .create_buffer(size_of::<u32>() as u64, false, false, true)
             .unwrap();
 
-        let compute_buffer_in = graphics
-            .create_buffer(size_of::<Particle>() as u64 * 256, false, false, true)
-            .unwrap();
-        let compute_buffer_out = graphics
-            .create_buffer(size_of::<Particle>() as u64 * 256, false, true, true)
-            .unwrap();
-
         layout_obj.add_buffer(0, uniform.clone()).unwrap();
         layout_obj.add_buffer(0, transform.clone()).unwrap();
         layout_obj.add_buffer(1, light.clone()).unwrap();
         layout_obj.add_buffer(2, light_info.clone()).unwrap();
-        layout_compute.add_buffer(0, uniform.clone()).unwrap();
-        layout_compute
-            .add_buffer(0, compute_buffer_in.clone())
-            .unwrap();
-        layout_compute
-            .add_buffer(1, compute_buffer_out.clone())
-            .unwrap();
 
         self.scene.uniform = Some(uniform);
         self.scene.transforms = Some(transform);
         self.scene.light = Some(light);
         self.scene.light_info = Some(light_info);
-        self.scene.compute_buffer_in = Some(compute_buffer_in);
-        self.scene.compute_buffer_out = Some(compute_buffer_out);
 
         self.scene
             .light
@@ -333,28 +287,6 @@ impl ApplicationHandler for Context {
             .unwrap()
             .get_memory_full()
             .copy_from_slice(&1u32.to_le_bytes());
-        self.scene
-            .compute_buffer_in
-            .as_ref()
-            .unwrap()
-            .get_memory_full()
-            .copy_from_slice(
-                &(1..=256)
-                    .map(|n| Particle {
-                        pos: Vec3 {
-                            x: 3. / n as f32 - 1.5,
-                            y: 4.,
-                            z: 3. / n as f32 - 1.5,
-                        },
-                        vel: Vec3 {
-                            x: 0.,
-                            y: -1.,
-                            z: 0.,
-                        },
-                    })
-                    .collect::<Vec<Particle>>()
-                    .as_bytes(),
-            );
 
         let pipeline_render = layout_obj
             .clone()
@@ -364,13 +296,6 @@ impl ApplicationHandler for Context {
                 &VertexTexture::get_attributes(),
             )
             .unwrap();
-
-        let pipeline_compute = layout_compute
-            .clone()
-            .create_compute_pipeline(&shader_compute)
-            .unwrap();
-
-        let obj_compute = Object::new_compute(pipeline_compute, [1, 1, 1]);
 
         let mesh = Arc::new(
             Mesh::from_buffer(BufReader::new(
@@ -395,7 +320,6 @@ impl ApplicationHandler for Context {
 
         self.graphics = Some(graphics);
         self.window = Some(window);
-        self.obj_compute = Some(obj_compute);
     }
 
     fn about_to_wait(&mut self, _event_loop: &winit::event_loop::ActiveEventLoop) {
@@ -442,47 +366,10 @@ impl ApplicationHandler for Context {
         self.state.delta_time_sum += graphics.get_delta_time();
         self.state.current_frame += 1;
 
-        if DEBUG_OUTPUT && self.state.delta_time_sum.as_secs_f64() >= 1. {
-            let gpu_debug = graphics.get_debug_data();
-
-            macro_rules! as_mb {
-                ($kb:expr) => {
-                    $kb as f32 / 1024. / 1024.
-                };
-            }
-
-            println!("[DEBUG]");
-            println!("FPS: {}", self.state.current_frame);
-            println!("GPU mem:   {:.1} MB", as_mb!(gpu_debug.used_memory));
-            println!();
-
-            let mem = self
-                .scene
-                .compute_buffer_out
-                .as_ref()
-                .unwrap()
-                .get_memory(0..8 * size_of::<f32>());
-
-            println!("{:?}\n", unsafe {
-                std::slice::from_raw_parts(mem.as_ptr() as *const Particle, 2)
-            });
-
-            self.state.delta_time_sum = Duration::ZERO;
-            self.state.current_frame = 0;
-        }
-
         self.graphics
-            .clone()
+            .as_ref()
             .unwrap()
-            .dispatch_any(
-                &self
-                    .scene
-                    .objects
-                    .clone()
-                    .into_iter()
-                    .chain([self.obj_compute.clone().unwrap()].into_iter())
-                    .collect::<Vec<Arc<Object>>>(),
-            )
+            .dispatch_any(&self.scene.objects)
             .unwrap();
     }
 
@@ -514,7 +401,7 @@ impl ApplicationHandler for Context {
                 self.graphics
                     .as_ref()
                     .unwrap()
-                    .recreate_resources(size.width, size.height)
+                    .resize_resources(size.width, size.height)
                     .unwrap();
             }
             WindowEvent::RedrawRequested => {

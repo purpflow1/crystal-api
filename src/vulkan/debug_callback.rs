@@ -11,7 +11,7 @@ use ash::{Entry, Instance};
 use crate::debug::log;
 use crate::errors::{GraphicsError, GraphicsResult};
 
-pub struct DebugUtilsMessanger {
+pub(crate) struct DebugUtilsMessanger {
     _debug_utils: debug_utils::Instance,
     _debug_utils_messanger: vk::DebugUtilsMessengerEXT,
 }
@@ -46,7 +46,7 @@ unsafe extern "system" fn debug_callback(
     0
 }
 
-pub fn create_debug_utils_messanger(
+pub(crate) fn create_debug_utils_messanger(
     entry: &Entry,
     instance: &Instance,
 ) -> GraphicsResult<DebugUtilsMessanger> {

@@ -18,12 +18,12 @@ use crate::{
 use super::{devices::Queue, sync::GpuSync};
 
 #[derive(Default, Clone, Copy)]
-pub struct PresentResult {
+pub(crate) struct PresentResult {
     pub suboptimal: bool,
     pub out_of_date: bool,
 }
 
-pub struct GpuFuture {
+pub(crate) struct GpuFuture {
     sync: Arc<Mutex<GpuSync>>,
     command_buffers: Mutex<Vec<Arc<CommandBuffer>>>,
 }
@@ -40,7 +40,7 @@ impl GpuFuture {
     }
 
     /// Transfers other's buffers to self
-    pub fn join(self: Box<Self>, other: Box<Self>) -> Box<Self> {
+    pub(crate) fn join(self: Box<Self>, other: Box<Self>) -> Box<Self> {
         let mut self_lock = self.command_buffers.lock().unwrap();
         let other_lock = other.command_buffers.lock().unwrap();
         other_lock
@@ -52,7 +52,7 @@ impl GpuFuture {
         self
     }
 
-    pub fn acquire_next_image(&self, presentation: &Presentation) -> VkResult<()> {
+    pub(crate) fn acquire_next_image(&self, presentation: &Presentation) -> VkResult<()> {
         let mut sync = self.sync.lock().unwrap();
 
         sync.flip();
@@ -81,7 +81,7 @@ impl GpuFuture {
         Ok(())
     }
 
-    pub fn flush(self: Box<Self>, queue: Arc<Queue>) -> GraphicsResult<Box<Self>> {
+    pub(crate) fn flush(self: Box<Self>, queue: Arc<Queue>) -> GraphicsResult<Box<Self>> {
         let mut command_buffer_lock = self.command_buffers.lock().unwrap();
         let sync_lock = self.sync.lock().unwrap();
 
@@ -134,7 +134,7 @@ impl GpuFuture {
         Ok(self)
     }
 
-    pub fn swapchain_present_and_flush(
+    pub(crate) fn swapchain_present_and_flush(
         &self,
         queue: Arc<Queue>,
         presentation: Arc<Presentation>,
@@ -207,7 +207,7 @@ impl GpuFuture {
     }
 }
 
-pub struct CommandBuffer {
+pub(crate) struct CommandBuffer {
     pool: Arc<CommandPool>,
     handler: vk::CommandBuffer,
 }
@@ -316,7 +316,7 @@ impl CommandPool {
     }
 }
 
-pub struct CommandEntry {
+pub(crate) struct CommandEntry {
     device_manager: Arc<DeviceManager>,
     command_pool: Arc<CommandPool>,
     command_buffers: Vec<Arc<CommandBuffer>>,
@@ -324,7 +324,7 @@ pub struct CommandEntry {
 }
 
 impl CommandEntry {
-    pub fn now(&self, sync: Arc<Mutex<GpuSync>>) -> Box<GpuFuture> {
+    pub(crate) fn now(&self, sync: Arc<Mutex<GpuSync>>) -> Box<GpuFuture> {
         GpuFuture::buffers(sync, vec![])
     }
 
@@ -349,11 +349,14 @@ impl CommandEntry {
         })
     }
 
-    pub fn wait(&self) -> GraphicsResult<()> {
+    pub(crate) fn wait(&self) -> GraphicsResult<()> {
         self.queue.wait_idle()
     }
 
-    pub fn record_single_time_buffer<P>(&self, predicate: P) -> GraphicsResult<Box<GpuFuture>>
+    pub(crate) fn record_single_time_buffer<P>(
+        &self,
+        predicate: P,
+    ) -> GraphicsResult<Box<GpuFuture>>
     where
         P: Fn(&vk::CommandBuffer, Arc<ash::Device>),
     {
@@ -414,7 +417,7 @@ impl CommandEntry {
         ))
     }
 
-    pub fn record_command_buffer<P>(
+    pub(crate) fn record_command_buffer<P>(
         &self,
         sync: Arc<Mutex<GpuSync>>,
         predicate: P,
@@ -480,15 +483,13 @@ impl CommandEntry {
 }
 
 #[derive(PartialEq, Eq, PartialOrd, Ord)]
-pub enum CommandType {
+pub(crate) enum CommandType {
     Graphics,
     Transfer,
     Compute,
 }
 
-pub struct CommandManager {
-    pub device_manager: Arc<DeviceManager>,
-
+pub(crate) struct CommandManager {
     pub command_entries: BTreeMap<CommandType, Arc<CommandEntry>>,
 }
 
@@ -544,9 +545,6 @@ impl CommandManager {
             );
         }
 
-        Ok(Arc::new(Self {
-            device_manager,
-            command_entries,
-        }))
+        Ok(Arc::new(Self { command_entries }))
     }
 }

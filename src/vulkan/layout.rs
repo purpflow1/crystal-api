@@ -2,7 +2,7 @@ use std::{
     collections::BTreeMap,
     ffi::CString,
     iter::zip,
-    sync::{Arc, Mutex, MutexGuard},
+    sync::{Arc, Mutex},
 };
 
 use ash::vk;
@@ -676,52 +676,6 @@ impl VulkanLayout {
 
         Ok(())
     }
-
-    fn get_sampler(
-        &self,
-        dynamic_data: &mut MutexGuard<LayoutDynamicData>,
-        mip_levels: u32,
-        anisotropy_texels: f32,
-    ) -> GraphicsResult<vk::Sampler> {
-        match dynamic_data.samplers.get(&mip_levels) {
-            Some(sampler) => return Ok(*sampler),
-            None => (),
-        };
-
-        let sampler_info = vk::SamplerCreateInfo::default()
-            .mag_filter(vk::Filter::LINEAR)
-            .min_filter(vk::Filter::LINEAR)
-            .address_mode_u(vk::SamplerAddressMode::REPEAT)
-            .address_mode_v(vk::SamplerAddressMode::REPEAT)
-            .address_mode_w(vk::SamplerAddressMode::REPEAT)
-            .anisotropy_enable(true)
-            .anisotropy_enable(anisotropy_texels > 1.)
-            .max_anisotropy(anisotropy_texels)
-            .border_color(vk::BorderColor::INT_OPAQUE_BLACK)
-            .unnormalized_coordinates(false)
-            .compare_enable(false)
-            .compare_op(vk::CompareOp::ALWAYS)
-            .mipmap_mode(vk::SamplerMipmapMode::LINEAR)
-            .mip_lod_bias(0.)
-            .min_lod(0.)
-            .max_lod(mip_levels as f32);
-
-        let sampler = match unsafe {
-            self.device_manager
-                .device
-                .create_sampler(&sampler_info, None)
-        } {
-            Ok(sampler) => sampler,
-            Err(e) => {
-                log!("cannot create sampler: {}", e);
-                return Err(GraphicsError::ImageError);
-            }
-        };
-
-        dynamic_data.samplers.insert(mip_levels, sampler);
-
-        Ok(sampler)
-    }
 }
 
 #[derive(Clone)]
@@ -743,7 +697,7 @@ impl Drop for ShaderStageInfo {
 }
 
 impl ShaderStageInfo {
-    pub fn as_vk<'a>(&self) -> vk::PipelineShaderStageCreateInfo<'a> {
+    pub(crate) fn as_vk<'a>(&self) -> vk::PipelineShaderStageCreateInfo<'a> {
         vk::PipelineShaderStageCreateInfo {
             stage: self.stage,
             module: self.module,
@@ -757,7 +711,6 @@ pub struct VulkanPipeline {
     device_manager: Arc<DeviceManager>,
     pub(crate) layout: Arc<VulkanLayout>,
     pub handle: vk::Pipeline,
-    stages: Vec<Arc<ShaderStageInfo>>,
 }
 
 impl Drop for VulkanPipeline {
@@ -838,7 +791,6 @@ impl VulkanPipeline {
             device_manager,
             layout,
             handle: pipeline,
-            stages: vec![shader_stage_info],
         }))
     }
 
@@ -1006,7 +958,6 @@ impl VulkanPipeline {
                 device_manager,
                 layout,
                 handle: pipeline[0],
-                stages,
             })),
             Err(es) => {
                 log!("cannot create graphics pipeline: {}", es.1);

@@ -5,25 +5,30 @@ use std::{
 
 use crate::errors::GraphicsResult;
 
+/// Used to setup vertex shader attributes
 pub struct Attribute {
-    pub size: usize,
-    pub offset: usize,
+    pub(crate) size: usize,
+    pub(crate) offset: usize,
 }
 
 type Vec3 = [f32; 3];
 type Vec2 = [f32; 2];
+
+/// Index type
 pub type Index = u32;
 
+/// Textured vertex struct
 #[repr(C, align(16))]
 #[derive(Clone, Copy, Default)]
 pub struct VertexTexture {
-    pub pos: Vec3,
-    pub nor: Vec3,
-    pub uv: Vec2,
-    pub col: Vec3,
+    pos: Vec3,
+    nor: Vec3,
+    uv: Vec2,
+    col: Vec3,
 }
 
 impl VertexTexture {
+    /// Gets list of vertex attributes used in shaders
     pub fn get_attributes() -> Vec<Attribute> {
         vec![
             Attribute {
@@ -46,12 +51,14 @@ impl VertexTexture {
     }
 }
 
+/// Mesh struct stores the mesh data in CPU memory
 pub struct Mesh {
     pub(crate) vertices: Vec<VertexTexture>,
     pub(crate) indices: Vec<Index>,
 }
 
 impl Mesh {
+    /// Creates screen space plane mesh may be used for post-processing
     pub fn screen_space_plane() -> Self {
         let vertices = vec![
             VertexTexture {
@@ -78,6 +85,7 @@ impl Mesh {
         }
     }
 
+    /// Creates the mesh from buffer with ```.obj``` format
     pub fn from_buffer<T>(buffer: BufReader<T>) -> GraphicsResult<Self>
     where
         BufReader<T>: BufRead,

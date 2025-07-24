@@ -6,7 +6,7 @@ use crate::errors::GraphicsResult;
 
 use super::{devices::DeviceManager, images::Image};
 
-pub fn find_depth_format(
+pub(crate) fn find_depth_format(
     device_manager: Arc<DeviceManager>,
     tiling: vk::ImageTiling,
     features: vk::FormatFeatureFlags,
@@ -43,12 +43,12 @@ pub fn find_depth_format(
     depth_format
 }
 
-pub struct DepthResources {
+pub(crate) struct DepthResources {
     pub image: Arc<Image>,
 }
 
 impl DepthResources {
-    pub fn new(
+    pub(crate) fn new(
         device_manager: Arc<DeviceManager>,
         width: u32,
         height: u32,

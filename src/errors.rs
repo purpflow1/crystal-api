@@ -1,25 +1,37 @@
 use std::fmt::{Debug, Display};
 
+/// ## Unified error enum
 #[derive(Debug)]
 pub enum GraphicsError {
+    /// Happens on unexpected library error
     ConnotInitLibrary,
+    /// Happens on software missing support
     NotSupportedSystem,
+    /// Happens on hardware missing support
     NotSupportedDevice,
+    /// Happens on hardware missing support or window server missing capability
     NotSupportedPresent,
 
+    /// Happens on image present error
     PresentError,
+    /// Happens on unified transfer/compute error
     TransferError,
+    /// Happens on rendering error
     RenderingError,
 
+    /// Happens on GPU sync error
     SyncError,
+    /// Happens on shader compilation/capability error
     ShaderError,
+    /// Happens on GPU memory error
     MemoryError,
+    /// Happens on unified shader data error
     DataError,
+    /// Happens on image error
     ImageError,
 
+    /// Happens on debug error
     DebugError,
-
-    OutOfDate,
 }
 
 impl Display for GraphicsError {
@@ -28,4 +40,5 @@ impl Display for GraphicsError {
     }
 }
 
+/// Type contains ```Result``` enum with ```GraphicsError``` on ```Err```
 pub type GraphicsResult<T> = Result<T, GraphicsError>;

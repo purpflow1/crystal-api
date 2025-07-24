@@ -11,12 +11,6 @@ use crate::{
     vulkan::presentation::PresentSurface,
 };
 
-#[derive(Clone, Default)]
-pub struct PhysicalDeviceExtensions {
-    pub swapchain_compression: bool,
-    pub present_support: bool,
-}
-
 pub struct Queue {
     pub device: Arc<ash::Device>,
     pub flags: vk::QueueFlags,
@@ -224,13 +218,16 @@ fn query_extensions_support<'a>(
     instance: Arc<Instance>,
     device: vk::PhysicalDevice,
 ) -> GraphicsResult<Vec<&'a CStr>> {
-    let mut supported_extensions = Vec::with_capacity(64);
-
     let extensions = [
+        vk::KHR_SWAPCHAIN_NAME,
+        vk::KHR_ACCELERATION_STRUCTURE_NAME,
+        vk::KHR_RAY_TRACING_PIPELINE_NAME,
+        vk::KHR_DEFERRED_HOST_OPERATIONS_NAME,
         vk::EXT_IMAGE_COMPRESSION_CONTROL_NAME,
         vk::EXT_IMAGE_COMPRESSION_CONTROL_SWAPCHAIN_NAME,
-        vk::KHR_SWAPCHAIN_NAME,
     ];
+
+    let mut supported_extensions = Vec::with_capacity(extensions.len());
 
     let extension_props = match unsafe { instance.enumerate_device_extension_properties(device) } {
         Ok(props) => props,
@@ -245,13 +242,9 @@ fn query_extensions_support<'a>(
         .map(|ext| ext.extension_name_as_c_str().unwrap())
         .collect();
 
-    for req_ext in &extensions {
-        if device_supported_extensions
-            .iter()
-            .find(|&ext| *ext == *req_ext)
-            .is_some()
-        {
-            supported_extensions.push(*req_ext)
+    for sup_ext in &device_supported_extensions {
+        if let Some(ext) = extensions.iter().find(|&req_ext| *req_ext == *sup_ext) {
+            supported_extensions.push(*ext)
         }
     }
 
@@ -376,12 +369,19 @@ fn create_logical_device(
         )
     }
 
+    let mut accel_feature =
+        vk::PhysicalDeviceAccelerationStructureFeaturesKHR::default().acceleration_structure(true);
+    let mut rt_pipeline_feature =
+        vk::PhysicalDeviceRayTracingPipelineFeaturesKHR::default().ray_tracing_pipeline(true);
+
     let extension_names: Vec<_> = extensions.iter().map(|ext| ext.as_ptr()).collect();
 
     let device_create_info = vk::DeviceCreateInfo::default()
         .queue_create_infos(&queues_create_infos)
         .enabled_features(&features)
-        .enabled_extension_names(&extension_names);
+        .enabled_extension_names(&extension_names)
+        .push_next(&mut rt_pipeline_feature)
+        .push_next(&mut accel_feature);
 
     let device = match unsafe { instance.create_device(physical_device, &device_create_info, None) }
     {

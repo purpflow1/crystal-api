@@ -5,7 +5,9 @@ use std::{
 
 use crate::traits;
 
+/// ```AsBytes``` represents a memory region as slice of bytes
 pub trait AsBytes {
+    /// ```as_bytes``` represents a memory region as slice of bytes
     fn as_bytes(&self) -> &[u8];
 }
 
@@ -25,12 +27,14 @@ impl<T> AsBytes for &[T] {
     }
 }
 
+/// ## Used for textures bindings in shaders
 pub struct GpuSamplerSet {
     pub(crate) id: Mutex<usize>,
-    pub textures: Vec<(u32, Arc<dyn traits::Texture>)>,
+    pub(crate) textures: Vec<(u32, Arc<dyn traits::Texture>)>,
 }
 
 impl GpuSamplerSet {
+    /// Creates new GpuSamplerSet from textures and its bindings
     pub fn from_textures(textures: &[(u32, Arc<dyn traits::Texture>)]) -> Arc<Self> {
         Arc::new(Self {
             id: Mutex::new(usize::MAX),

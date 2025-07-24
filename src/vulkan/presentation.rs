@@ -13,7 +13,7 @@ use crate::{
 
 use super::devices::DeviceManager;
 
-pub struct SwapChainSupportDetails {
+pub(crate) struct SwapChainSupportDetails {
     pub formats: Vec<SurfaceFormatKHR>,
     pub present_modes: Vec<PresentModeKHR>,
     pub capabilities: SurfaceCapabilitiesKHR,
@@ -33,7 +33,7 @@ impl Drop for PresentSurface {
     }
 }
 
-pub struct SwapchainInfo {
+pub(crate) struct SwapchainInfo {
     device_manager: Arc<DeviceManager>,
     surface: Arc<PresentSurface>,
 
@@ -178,7 +178,7 @@ impl SwapchainInfo {
         })
     }
 
-    pub fn update_extent(&self) -> GraphicsResult<()> {
+    pub(crate) fn update_extent(&self) -> GraphicsResult<()> {
         let capabilities = match unsafe {
             self.surface
                 .surface
@@ -199,7 +199,7 @@ impl SwapchainInfo {
         Ok(())
     }
 
-    pub fn as_vk<'a>(&'a self) -> vk::SwapchainCreateInfoKHR<'a> {
+    pub(crate) fn as_vk<'a>(&'a self) -> vk::SwapchainCreateInfoKHR<'a> {
         let mut swapchain_create_info = vk::SwapchainCreateInfoKHR::default()
             .surface(self.surface.surface_khr)
             .min_image_count(self.image_count)
@@ -225,7 +225,7 @@ impl SwapchainInfo {
     }
 }
 
-pub struct Swapchain {
+pub(crate) struct Swapchain {
     device_manager: Arc<DeviceManager>,
     pub swapchain_info: Arc<SwapchainInfo>,
 
@@ -262,7 +262,7 @@ impl Swapchain {
         }
     }
 
-    pub fn extent(&self) -> vk::Extent2D {
+    pub(crate) fn extent(&self) -> vk::Extent2D {
         *self.swapchain_info.extent.read().unwrap()
     }
 
@@ -366,7 +366,7 @@ impl Swapchain {
         }))
     }
 
-    pub fn recreate(&self, extent: Option<vk::Extent2D>) -> GraphicsResult<()> {
+    pub(crate) fn recreate(&self, extent: Option<vk::Extent2D>) -> GraphicsResult<()> {
         self.destroy();
 
         match extent {
@@ -387,15 +387,13 @@ impl Swapchain {
     }
 }
 
-pub struct Presentation {
-    device_manager: Arc<DeviceManager>,
+pub(crate) struct Presentation {
     pub swapchain: Arc<Swapchain>,
-
     pub msaa_samples: u8,
 }
 
 impl Presentation {
-    pub fn create_surface<T: HasWindowHandle + HasDisplayHandle>(
+    pub(crate) fn create_surface<T: HasWindowHandle + HasDisplayHandle>(
         entry: &Entry,
         instance: &ash::Instance,
         window: &T,
@@ -420,7 +418,7 @@ impl Presentation {
         })
     }
 
-    pub fn new(
+    pub(crate) fn new(
         device_manager: Arc<DeviceManager>,
         surface: Arc<PresentSurface>,
         msaa_samples: u8,
@@ -428,9 +426,7 @@ impl Presentation {
         let swapchain = Swapchain::new(device_manager.clone(), surface.clone())?;
 
         Ok(Arc::new(Presentation {
-            device_manager,
             swapchain,
-
             msaa_samples,
         }))
     }

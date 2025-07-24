@@ -13,7 +13,7 @@ use crate::{
 use super::devices::DeviceManager;
 
 #[derive(Default)]
-pub struct Barriers {
+pub(crate) struct Barriers {
     pub semaphore_image: Vec<vk::Semaphore>,
     pub semaphore_render: Vec<vk::Semaphore>,
     pub semaphore_transfer: Vec<vk::Semaphore>,

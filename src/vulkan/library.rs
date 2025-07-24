@@ -21,21 +21,21 @@ use super::{
 };
 
 use crate::{
-    AsBytes, Buffer, GpuSamplerSet, GraphicsApiInitSettings, Texture,
+    AsBytes, Buffer, GpuSamplerSet, GraphicsApi, GraphicsApiInitSettings, Texture,
     debug::log,
     errors::{GraphicsError, GraphicsResult},
     mesh::{Index, Mesh, VertexTexture},
     object::{MeshBuffer, Object},
-    settings::DebugData,
     traits::{self, Layout},
     vulkan::VulkanLayout,
 };
 
-pub struct TimeState {
+pub(crate) struct TimeState {
     timer: std::time::Instant,
     delta_time: std::time::Duration,
 }
 
+/// # Vulkan API wrapper. Shouldn't be used directly, expect creation!
 pub struct VulkanEntry {
     command_manager: Arc<CommandManager>,
     device_manager: Arc<DeviceManager>,
@@ -46,7 +46,7 @@ pub struct VulkanEntry {
     present_result: Mutex<PresentResult>,
     time_state: Mutex<TimeState>,
 
-    pub render_targets: BTreeMap<u16, Arc<VulkanRenderTarget>>,
+    render_targets: BTreeMap<u16, Arc<VulkanRenderTarget>>,
 }
 
 impl Drop for VulkanEntry {
@@ -61,7 +61,7 @@ impl Drop for VulkanEntry {
 
         if !self.present_result.lock().unwrap().out_of_date {
             let now = graphics.now(
-                self.get_viewport()
+                self.get_presentation_render_target()
                     .clone()
                     .as_vulkan()
                     .unwrap()
@@ -73,253 +73,8 @@ impl Drop for VulkanEntry {
     }
 }
 
-impl VulkanEntry {
-    pub fn with_presentation<T: HasWindowHandle + HasDisplayHandle>(
-        settings: &GraphicsApiInitSettings,
-        window: &T,
-    ) -> GraphicsResult<Arc<Self>> {
-        let mut instance_extensions = vec![
-            #[cfg(debug_assertions)]
-            vk::EXT_DEBUG_UTILS_NAME.as_ptr(),
-        ];
-
-        let mut required_extensions = match ash_window::enumerate_required_extensions(
-            window.display_handle().unwrap().as_raw(),
-        ) {
-            Ok(ext) => ext.to_vec(),
-            Err(e) => {
-                log!("cannot enumerate required display extensions: {}", e);
-                return Err(GraphicsError::ConnotInitLibrary);
-            }
-        };
-        instance_extensions.append(&mut required_extensions);
-
-        #[cfg(debug_assertions)]
-        unsafe {
-            std::env::set_var("VK_LOADER_LAYERS_DISABLE", "~implicit~")
-        };
-
-        let entry = match unsafe { ash::Entry::load() } {
-            Ok(entry) => Arc::new(entry),
-            Err(e) => {
-                log!("cannot load vulkan entry: {}", e);
-                return GraphicsResult::Err(GraphicsError::ConnotInitLibrary);
-            }
-        };
-
-        let app_info = vk::ApplicationInfo::default().api_version(vk::API_VERSION_1_3);
-        let mut create_info = vk::InstanceCreateInfo::default()
-            .application_info(&app_info)
-            .enabled_extension_names(&instance_extensions);
-
-        #[cfg(debug_assertions)]
-        let layers;
-        #[cfg(debug_assertions)]
-        let layers_pp: Vec<*const i8>;
-
-        #[cfg(debug_assertions)]
-        {
-            layers = get_supported_validation_layers(&entry);
-            if layers.is_empty() {
-                log!(
-                    "No validation layers found! Vulkan SDK should be installed for proper debug. Visit https://vulkan.lunarg.com/"
-                );
-                return Err(GraphicsError::ConnotInitLibrary);
-            }
-
-            layers_pp = layers.iter().map(|x| x.as_ptr()).collect();
-
-            create_info.pp_enabled_layer_names = layers_pp.as_ptr();
-            create_info.enabled_layer_count = layers_pp.len() as u32;
-        }
-
-        let instance = match unsafe { entry.create_instance(&create_info, None) } {
-            Err(e) => {
-                log!("cannot create vulkan instance: {}", e);
-
-                #[cfg(debug_assertions)]
-                {
-                    log!("| [layers]");
-
-                    layers.iter().for_each(|x| {
-                        let layer_bytes = &unsafe { *(x.as_ptr() as *const [u8; 256]) };
-                        let layer = CStr::from_bytes_until_nul(layer_bytes)
-                            .unwrap()
-                            .to_str()
-                            .unwrap();
-                        log!("| {}", layer);
-                    });
-
-                    log!("| [extensions]");
-
-                    instance_extensions.iter().for_each(|x| {
-                        let ext_bytes = &unsafe { *(*x as *const [u8; 256]) };
-                        let ext = CStr::from_bytes_until_nul(ext_bytes)
-                            .unwrap()
-                            .to_str()
-                            .unwrap();
-                        log!("| {}", ext);
-                    });
-                }
-
-                return GraphicsResult::Err(GraphicsError::ConnotInitLibrary);
-            }
-            Ok(instance) => Arc::new(instance),
-        };
-
-        #[cfg(debug_assertions)]
-        let debug_utils_messanger = {
-            log!("creating debug utils");
-            create_debug_utils_messanger(&entry, &instance)?
-        };
-
-        let surface = Presentation::create_surface(
-            &entry,
-            &instance,
-            window,
-            Some(vk::Extent2D {
-                width: settings.width,
-                height: settings.height,
-            }),
-        );
-
-        let device_manager =
-            DeviceManager::new(entry.clone(), instance.clone(), Some(surface.clone()))?;
-
-        let mut khr_swapchain_found = false;
-
-        log!("| picked device: [ {} ]", device_manager.device_name);
-        for extension in &device_manager.supported_extensions {
-            log!("|| {}", extension);
-
-            if !khr_swapchain_found
-                && extension.as_str() == vk::KHR_SWAPCHAIN_NAME.to_str().unwrap()
-            {
-                khr_swapchain_found = true;
-            }
-        }
-
-        if !khr_swapchain_found {
-            log!("picked device has no swapchain support!");
-            return Err(GraphicsError::NotSupportedPresent);
-        }
-
-        let presentation =
-            Presentation::new(device_manager.clone(), surface, settings.msaa_samples)?;
-
-        let command_manager = CommandManager::new(
-            device_manager.clone(),
-            presentation.swapchain.swapchain_info.image_count,
-        )?;
-
-        let viewport_render_target = VulkanRenderTarget::new(
-            device_manager.clone(),
-            presentation.swapchain.swapchain_info.surface_format.format,
-            vk::Extent2D {
-                width: settings.width,
-                height: settings.height,
-            },
-            presentation
-                .swapchain
-                .swapchain_image_views
-                .read()
-                .unwrap()
-                .clone(),
-            presentation.msaa_samples,
-        )?;
-
-        let mut render_targets = BTreeMap::new();
-
-        render_targets.insert(0, viewport_render_target);
-
-        Ok(Arc::new(Self {
-            device_manager: device_manager.clone(),
-            command_manager,
-
-            #[cfg(debug_assertions)]
-            _debug_utils_messanger: Some(debug_utils_messanger),
-            #[cfg(not(debug_assertions))]
-            _debug_utils_messanger: None,
-
-            presentation,
-
-            present_result: Mutex::new(PresentResult::default()),
-            time_state: Mutex::new(TimeState {
-                timer: std::time::Instant::now(),
-                delta_time: std::time::Duration::ZERO,
-            }),
-
-            render_targets,
-        }))
-    }
-
-    pub fn recreate_resources(&self, width: u32, height: u32) -> GraphicsResult<()> {
-        self.command_manager
-            .command_entries
-            .get(&CommandType::Graphics)
-            .clone()
-            .unwrap()
-            .wait()?;
-
-        self.presentation
-            .swapchain
-            .recreate(Some(vk::Extent2D { width, height }))?;
-        self.get_viewport().as_vulkan().unwrap().update_resources(
-            self.presentation.swapchain.extent(),
-            self.presentation
-                .swapchain
-                .swapchain_image_views
-                .read()
-                .unwrap()
-                .clone(),
-        )
-    }
-
-    pub fn dispatch_compute(self: Arc<Self>, objects: &[Arc<Object>]) -> GraphicsResult<()> {
-        let compute = self
-            .command_manager
-            .command_entries
-            .get(&CommandType::Compute)
-            .unwrap()
-            .clone();
-
-        let sync = GpuSync::no_sync(self.device_manager.clone());
-
-        let now = compute.now(sync.clone());
-
-        let future = now.join(
-            compute
-                .record_single_time_buffer(|command_buffer, device| unsafe {
-                    for object in objects {
-                        let pipeline = object.pipeline.clone().as_vulkan().unwrap();
-                        let groups = object.groups.unwrap();
-
-                        device.cmd_bind_pipeline(
-                            *command_buffer,
-                            vk::PipelineBindPoint::COMPUTE,
-                            pipeline.handle,
-                        );
-                        device.cmd_bind_descriptor_sets(
-                            *command_buffer,
-                            vk::PipelineBindPoint::COMPUTE,
-                            pipeline.layout.pipeline_layout,
-                            0,
-                            &pipeline.layout.get_descriptor_sets(),
-                            &[],
-                        );
-
-                        device.cmd_dispatch(*command_buffer, groups[0], groups[1], groups[2]);
-                    }
-                })
-                .unwrap(),
-        );
-
-        future.flush(compute.queue.clone()).unwrap();
-
-        Ok(())
-    }
-
-    pub fn dispatch_any(self: Arc<Self>, objects: &[Arc<Object>]) -> GraphicsResult<()> {
+impl traits::GraphicsApi for VulkanEntry {
+    fn dispatch_any(&self, objects: &[Arc<Object>]) -> GraphicsResult<()> {
         let graphics = self
             .command_manager
             .command_entries
@@ -334,14 +89,8 @@ impl VulkanEntry {
             .unwrap()
             .clone();
 
-        #[cfg(debug_assertions)]
-        self.get_debug_data();
-
-        let render_target_dyn = self.get_viewport();
-        let render_target = render_target_dyn
-            .clone()
-            .as_vulkan()
-            .expect("fatal: wrong type of RenderTarget, expected: VulkanRenderTarget");
+        let render_target_dyn = self.get_presentation_render_target();
+        let render_target = render_target_dyn.clone().as_vulkan().unwrap();
 
         let sync = render_target.sync.clone();
         let graphics_now = graphics.now(sync.clone());
@@ -517,8 +266,8 @@ impl VulkanEntry {
         let presentation = self.presentation.clone();
 
         compute.queue.wait_idle().unwrap();
-
         compute_future.flush(compute.queue.clone()).unwrap();
+
         let result =
             graphics_future.swapchain_present_and_flush(graphics.queue.clone(), presentation);
 
@@ -528,11 +277,80 @@ impl VulkanEntry {
         Ok(())
     }
 
-    pub fn get_delta_time(&self) -> std::time::Duration {
-        self.time_state.lock().unwrap().delta_time
+    fn dispatch_compute(&self, objects: &[Arc<Object>]) -> GraphicsResult<()> {
+        let compute = self
+            .command_manager
+            .command_entries
+            .get(&CommandType::Compute)
+            .unwrap()
+            .clone();
+
+        let sync = GpuSync::no_sync(self.device_manager.clone());
+
+        let now = compute.now(sync.clone());
+
+        let future = now.join(
+            compute
+                .record_single_time_buffer(|command_buffer, device| unsafe {
+                    for object in objects {
+                        let pipeline = object.pipeline.clone().as_vulkan().unwrap();
+                        let groups = object.groups.unwrap();
+
+                        device.cmd_bind_pipeline(
+                            *command_buffer,
+                            vk::PipelineBindPoint::COMPUTE,
+                            pipeline.handle,
+                        );
+                        device.cmd_bind_descriptor_sets(
+                            *command_buffer,
+                            vk::PipelineBindPoint::COMPUTE,
+                            pipeline.layout.pipeline_layout,
+                            0,
+                            &pipeline.layout.get_descriptor_sets(),
+                            &[],
+                        );
+
+                        device.cmd_dispatch(*command_buffer, groups[0], groups[1], groups[2]);
+                    }
+                })
+                .unwrap(),
+        );
+
+        future.flush(compute.queue.clone()).unwrap();
+
+        Ok(())
     }
 
-    pub fn create_layout(
+    fn resize_resources(&self, width: u32, height: u32) -> GraphicsResult<()> {
+        self.command_manager
+            .command_entries
+            .get(&CommandType::Graphics)
+            .clone()
+            .unwrap()
+            .wait()?;
+
+        self.presentation
+            .swapchain
+            .recreate(Some(vk::Extent2D { width, height }))?;
+        self.get_presentation_render_target()
+            .as_vulkan()
+            .unwrap()
+            .update_resources(
+                self.presentation.swapchain.extent(),
+                self.presentation
+                    .swapchain
+                    .swapchain_image_views
+                    .read()
+                    .unwrap()
+                    .clone(),
+            )
+    }
+
+    fn get_presentation_render_target(&self) -> Arc<dyn crate::RenderTarget> {
+        self.render_targets[&0].clone()
+    }
+
+    fn create_layout(
         &self,
         double_buffering: bool,
         texture_num: usize,
@@ -555,68 +373,51 @@ impl VulkanEntry {
         )?)
     }
 
-    pub fn create_texture(
+    fn create_buffer(
         &self,
-        buffer: Arc<dyn traits::Buffer>,
-        data: [u32; 3],
-        anisotropy_texels: f32,
-    ) -> GraphicsResult<Arc<dyn Texture>> {
-        log!(
-            "creating texture [ width = {}, height = {} ]",
-            data[0],
-            data[1],
-        );
+        size: u64,
+        uniform: bool,
+        transfer: bool,
+        enable_sync: bool,
+    ) -> GraphicsResult<Arc<dyn Buffer>> {
+        let mut usage = vk::BufferUsageFlags::STORAGE_BUFFER;
 
-        Ok(VulkanTexture::new(
-            self.device_manager.clone(),
-            self.command_manager.clone(),
-            buffer.clone().as_vulkan().unwrap(),
-            data,
-            anisotropy_texels,
-        )?)
-    }
-
-    pub fn create_sampler_set(
-        &self,
-        textures: &[(u32, Arc<dyn Texture>)],
-    ) -> GraphicsResult<Arc<GpuSamplerSet>> {
-        log!(
-            "creating sampler [ bindings = {:?} ]",
-            textures
-                .iter()
-                .map(|(binding, _)| *binding)
-                .collect::<Vec<_>>()
-        );
-
-        Ok(GpuSamplerSet::from_textures(textures))
-    }
-
-    pub fn get_viewport(&self) -> Arc<dyn traits::RenderTarget> {
-        self.render_targets[&0].clone()
-    }
-
-    pub fn get_debug_data(&self) -> DebugData {
-        let mut budget_props = vk::PhysicalDeviceMemoryBudgetPropertiesEXT::default();
-        let mut mem_props =
-            vk::PhysicalDeviceMemoryProperties2::default().push_next(&mut budget_props);
-        unsafe {
-            self.device_manager
-                .instance
-                .get_physical_device_memory_properties2(
-                    self.device_manager.physical_device,
-                    &mut mem_props,
-                )
+        if uniform {
+            usage = vk::BufferUsageFlags::UNIFORM_BUFFER;
         }
 
-        let debug_data = DebugData {
-            used_memory: budget_props.heap_usage[0],
-            aviable_memory: budget_props.heap_budget[0],
+        if transfer {
+            usage |= vk::BufferUsageFlags::TRANSFER_DST | vk::BufferUsageFlags::TRANSFER_SRC
+        }
+
+        let buffer_info = BufferInfo {
+            size,
+            usage,
+            properties: vk::MemoryPropertyFlags::HOST_VISIBLE
+                | vk::MemoryPropertyFlags::HOST_COHERENT,
+            count: 1,
         };
 
-        debug_data
+        let render_target = self
+            .get_presentation_render_target()
+            .clone()
+            .as_vulkan()
+            .unwrap();
+
+        let buffer_manager = BufferManager::new(
+            self.device_manager.clone(),
+            buffer_info,
+            if enable_sync {
+                Some(render_target.sync.clone())
+            } else {
+                None
+            },
+        )?;
+
+        Ok(buffer_manager)
     }
 
-    pub fn create_buffer_mesh(&self, mesh: Arc<Mesh>) -> GraphicsResult<Arc<MeshBuffer>> {
+    fn create_buffer_mesh(&self, mesh: Arc<Mesh>) -> GraphicsResult<Arc<MeshBuffer>> {
         let vertex_size = (mesh.vertices.len() * size_of::<VertexTexture>()) as u64;
         let index_size = (mesh.indices.len() * size_of::<Index>()) as u64;
         log!(
@@ -656,43 +457,249 @@ impl VulkanEntry {
         }))
     }
 
-    pub fn create_buffer(
+    fn create_sampler_set(
         &self,
-        size: u64,
-        uniform: bool,
-        transfer: bool,
-        enable_sync: bool,
-    ) -> GraphicsResult<Arc<dyn traits::Buffer>> {
-        let mut usage = vk::BufferUsageFlags::STORAGE_BUFFER;
+        textures: &[(u32, Arc<dyn Texture>)],
+    ) -> GraphicsResult<Arc<GpuSamplerSet>> {
+        log!(
+            "creating sampler [ bindings = {:?} ]",
+            textures
+                .iter()
+                .map(|(binding, _)| *binding)
+                .collect::<Vec<_>>()
+        );
 
-        if uniform {
-            usage = vk::BufferUsageFlags::UNIFORM_BUFFER;
-        }
+        Ok(GpuSamplerSet::from_textures(textures))
+    }
 
-        if transfer {
-            usage |= vk::BufferUsageFlags::TRANSFER_DST | vk::BufferUsageFlags::TRANSFER_SRC
-        }
+    fn create_texture(
+        &self,
+        buffer: Arc<dyn Buffer>,
+        data: [u32; 3],
+        anisotropy_texels: f32,
+    ) -> GraphicsResult<Arc<dyn Texture>> {
+        log!(
+            "creating texture [ width = {}, height = {} ]",
+            data[0],
+            data[1],
+        );
 
-        let buffer_info = BufferInfo {
-            size,
-            usage,
-            properties: vk::MemoryPropertyFlags::HOST_VISIBLE
-                | vk::MemoryPropertyFlags::HOST_COHERENT,
-            count: 1,
+        Ok(VulkanTexture::new(
+            self.device_manager.clone(),
+            self.command_manager.clone(),
+            buffer.clone().as_vulkan().unwrap(),
+            data,
+            anisotropy_texels,
+        )?)
+    }
+
+    fn get_delta_time(&self) -> std::time::Duration {
+        self.time_state.lock().unwrap().delta_time
+    }
+}
+
+impl VulkanEntry {
+    /// Creates ```VulkanEntry``` with presentation support
+    /// ```rust
+    /// let graphics = VulkanEntry::with_presentation(&self.settings, &window)
+    ///     .expect("cannot create vulkan entry");
+    /// ```
+    pub fn with_presentation<T: HasWindowHandle + HasDisplayHandle>(
+        settings: &GraphicsApiInitSettings,
+        window: &T,
+    ) -> GraphicsResult<Arc<dyn traits::GraphicsApi>> {
+        let mut instance_extensions = vec![
+            #[cfg(debug_assertions)]
+            vk::EXT_DEBUG_UTILS_NAME.as_ptr(),
+        ];
+
+        let mut required_extensions = match ash_window::enumerate_required_extensions(
+            window.display_handle().unwrap().as_raw(),
+        ) {
+            Ok(ext) => ext.to_vec(),
+            Err(e) => {
+                log!("cannot enumerate required display extensions: {}", e);
+                return Err(GraphicsError::ConnotInitLibrary);
+            }
+        };
+        instance_extensions.append(&mut required_extensions);
+
+        #[cfg(debug_assertions)]
+        unsafe {
+            std::env::set_var("VK_LOADER_LAYERS_DISABLE", "~implicit~")
         };
 
-        let render_target = self.get_viewport().clone().as_vulkan().unwrap();
+        let entry = match unsafe { ash::Entry::load() } {
+            Ok(entry) => Arc::new(entry),
+            Err(e) => {
+                log!("cannot load vulkan entry: {}", e);
+                return GraphicsResult::Err(GraphicsError::ConnotInitLibrary);
+            }
+        };
 
-        let buffer_manager = BufferManager::new(
-            self.device_manager.clone(),
-            buffer_info,
-            if enable_sync {
-                Some(render_target.sync.clone())
-            } else {
-                None
-            },
+        let app_info = vk::ApplicationInfo::default().api_version(vk::API_VERSION_1_3);
+        let mut create_info = vk::InstanceCreateInfo::default()
+            .application_info(&app_info)
+            .enabled_extension_names(&instance_extensions);
+
+        #[cfg(debug_assertions)]
+        let layers;
+        #[cfg(debug_assertions)]
+        let layers_pp: Vec<*const i8>;
+
+        #[cfg(debug_assertions)]
+        {
+            layers = get_supported_validation_layers(&entry);
+            if layers.is_empty() {
+                log!(
+                    "No validation layers found! Vulkan SDK should be installed for proper debug. Visit https://vulkan.lunarg.com/"
+                );
+                return Err(GraphicsError::ConnotInitLibrary);
+            }
+
+            layers_pp = layers.iter().map(|x| x.as_ptr()).collect();
+
+            create_info.pp_enabled_layer_names = layers_pp.as_ptr();
+            create_info.enabled_layer_count = layers_pp.len() as u32;
+        }
+
+        let instance = match unsafe { entry.create_instance(&create_info, None) } {
+            Err(e) => {
+                log!("cannot create vulkan instance: {}", e);
+
+                #[cfg(debug_assertions)]
+                {
+                    log!("| [layers]");
+
+                    layers.iter().for_each(|x| {
+                        let layer_bytes = &unsafe { *(x.as_ptr() as *const [u8; 256]) };
+                        let layer = CStr::from_bytes_until_nul(layer_bytes)
+                            .unwrap()
+                            .to_str()
+                            .unwrap();
+                        log!("| {}", layer);
+                    });
+
+                    log!("| [extensions]");
+
+                    instance_extensions.iter().for_each(|x| {
+                        let ext_bytes = &unsafe { *(*x as *const [u8; 256]) };
+                        let ext = CStr::from_bytes_until_nul(ext_bytes)
+                            .unwrap()
+                            .to_str()
+                            .unwrap();
+                        log!("| {}", ext);
+                    });
+                }
+
+                return GraphicsResult::Err(GraphicsError::ConnotInitLibrary);
+            }
+            Ok(instance) => Arc::new(instance),
+        };
+
+        #[cfg(debug_assertions)]
+        let debug_utils_messanger = {
+            log!("creating debug utils");
+            create_debug_utils_messanger(&entry, &instance)?
+        };
+
+        let surface = Presentation::create_surface(
+            &entry,
+            &instance,
+            window,
+            Some(vk::Extent2D {
+                width: settings.width,
+                height: settings.height,
+            }),
+        );
+
+        let device_manager =
+            DeviceManager::new(entry.clone(), instance.clone(), Some(surface.clone()))?;
+
+        let mut khr_swapchain_found = false;
+
+        log!("| picked device: [ {} ]", device_manager.device_name);
+        for extension in &device_manager.supported_extensions {
+            log!("|| {}", extension);
+
+            if !khr_swapchain_found
+                && extension.as_str() == vk::KHR_SWAPCHAIN_NAME.to_str().unwrap()
+            {
+                khr_swapchain_found = true;
+            }
+        }
+
+        if !khr_swapchain_found {
+            log!("picked device has no swapchain support!");
+            return Err(GraphicsError::NotSupportedPresent);
+        }
+
+        let presentation =
+            Presentation::new(device_manager.clone(), surface, settings.msaa_samples)?;
+
+        let command_manager = CommandManager::new(
+            device_manager.clone(),
+            presentation.swapchain.swapchain_info.image_count,
         )?;
 
-        Ok(buffer_manager)
+        let viewport_render_target = VulkanRenderTarget::new(
+            device_manager.clone(),
+            presentation.swapchain.swapchain_info.surface_format.format,
+            vk::Extent2D {
+                width: settings.width,
+                height: settings.height,
+            },
+            presentation
+                .swapchain
+                .swapchain_image_views
+                .read()
+                .unwrap()
+                .clone(),
+            presentation.msaa_samples,
+        )?;
+
+        let mut render_targets = BTreeMap::new();
+
+        render_targets.insert(0, viewport_render_target);
+
+        Ok(Arc::new(Self {
+            device_manager: device_manager.clone(),
+            command_manager,
+
+            #[cfg(debug_assertions)]
+            _debug_utils_messanger: Some(debug_utils_messanger),
+            #[cfg(not(debug_assertions))]
+            _debug_utils_messanger: None,
+
+            presentation,
+
+            present_result: Mutex::new(PresentResult::default()),
+            time_state: Mutex::new(TimeState {
+                timer: std::time::Instant::now(),
+                delta_time: std::time::Duration::ZERO,
+            }),
+
+            render_targets,
+        }))
+    }
+
+    #[allow(dead_code)]
+    fn print_debug(&self) {
+        let mut budget_props = vk::PhysicalDeviceMemoryBudgetPropertiesEXT::default();
+        let mut mem_props =
+            vk::PhysicalDeviceMemoryProperties2::default().push_next(&mut budget_props);
+        unsafe {
+            self.device_manager
+                .instance
+                .get_physical_device_memory_properties2(
+                    self.device_manager.physical_device,
+                    &mut mem_props,
+                )
+        }
+
+        println!(
+            "{} {}",
+            budget_props.heap_usage[0], budget_props.heap_budget[0]
+        );
     }
 }
