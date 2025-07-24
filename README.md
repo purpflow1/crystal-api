@@ -24,18 +24,8 @@ cargo add crystal-api
 ```
 
 ## Running
-First of all, `cd` to the cloned directory:
-```bash
-cd crystal-api/
-```
-
 To run debug scene from included example use:
 ```bash
 cargo run --manifest-path=examples/array-load-test/Cargo.toml
 ```
 _!!! Khronos validation layers are required to run debug builds._
-
-To build release _rlib_ use:
-```bash
-cargo build --release
-```
