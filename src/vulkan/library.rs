@@ -511,6 +511,8 @@ impl VulkanEntry {
         let mut instance_extensions = vec![
             #[cfg(debug_assertions)]
             vk::EXT_DEBUG_UTILS_NAME.as_ptr(),
+            #[cfg(target_vendor = "apple")]
+            vk::KHR_PORTABILITY_ENUMERATION_NAME.as_ptr(),
         ];
 
         let mut required_extensions = match ash_window::enumerate_required_extensions(
@@ -537,8 +539,15 @@ impl VulkanEntry {
             }
         };
 
+        let flags = if cfg!(target_vendor = "apple") {
+            vk::InstanceCreateFlags::ENUMERATE_PORTABILITY_KHR
+        } else {
+            vk::InstanceCreateFlags::empty()
+        };
+
         let app_info = vk::ApplicationInfo::default().api_version(vk::API_VERSION_1_3);
         let mut create_info = vk::InstanceCreateInfo::default()
+            .flags(flags)
             .application_info(&app_info)
             .enabled_extension_names(&instance_extensions);
 

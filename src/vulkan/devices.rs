@@ -374,7 +374,11 @@ fn create_logical_device(
     let mut rt_pipeline_feature =
         vk::PhysicalDeviceRayTracingPipelineFeaturesKHR::default().ray_tracing_pipeline(true);
 
-    let extension_names: Vec<_> = extensions.iter().map(|ext| ext.as_ptr()).collect();
+    let extension_names: Vec<_> = extensions
+        .iter()
+        .map(|ext| ext.as_ptr())
+        .chain([vk::KHR_PORTABILITY_SUBSET_NAME.as_ptr()].into_iter())
+        .collect();
 
     let device_create_info = vk::DeviceCreateInfo::default()
         .queue_create_infos(&queues_create_infos)
