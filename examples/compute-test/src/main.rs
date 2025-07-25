@@ -27,7 +27,7 @@ struct Particle {
     vel: Vector,
 }
 
-const PARTICLE_NUM: u64 = 256;
+const PARTICLE_NUM: u64 = 1024 * 1024;
 
 fn main() -> GraphicsResult<()> {
     let api = init_api_instance()?;
@@ -73,16 +73,16 @@ fn main() -> GraphicsResult<()> {
     let shader = Shader::from_bytes(binary_result.as_binary_u8(), ShaderStage::Compute)?;
     let pipeline = layout.create_compute_pipeline(&shader)?;
 
-    let object = Object::new_compute(pipeline, [1, 1, 1]);
+    let object = Object::new_compute(pipeline, [PARTICLE_NUM as u32 / 256, 1, 1]);
 
     buffer_uniform
         .get_memory_full()
         .copy_from_slice(vec![Uniform { time: 0.5 }].as_bytes());
 
     let vel = Vector {
-        x: 0.,
+        x: 0.1,
         y: -0.5,
-        z: 0.,
+        z: 2.3,
     };
     let input: Vec<_> = (0..PARTICLE_NUM)
         .map(|x| Particle {
@@ -99,11 +99,13 @@ fn main() -> GraphicsResult<()> {
         .get_memory_full()
         .copy_from_slice(input.as_bytes());
 
+    let now = std::time::Instant::now();
     api.dispatch_compute(&[object])?;
+    println!("dispatch ended in {:.2} secs", now.elapsed().as_secs_f32());
 
     let out = buffer_out.get_memory_full();
 
-    for offset in (0..out.len() / 32).step_by(size_of::<Particle>()) {
+    for offset in (0..4 * size_of::<Particle>()).step_by(size_of::<Particle>()) {
         let ptr = (&out[offset]) as *const u8 as *const Particle;
         let particle = unsafe { ptr.read() };
         println!(
