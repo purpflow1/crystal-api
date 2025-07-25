@@ -37,10 +37,10 @@ pub(crate) struct TimeState {
 
 pub(crate) struct VulkanEntry {
     command_manager: Arc<CommandManager>,
-    device_manager: Arc<DeviceManager>,
     _debug_utils_messanger: Option<DebugUtilsMessanger>,
+    device_manager: Arc<DeviceManager>,
 
-    presentation: Arc<Presentation>,
+    presentation: Option<Arc<Presentation>>,
 
     present_result: Mutex<PresentResult>,
     time_state: Mutex<TimeState>,
@@ -58,7 +58,7 @@ impl Drop for VulkanEntry {
 
         graphics.wait().unwrap();
 
-        if !self.present_result.lock().unwrap().out_of_date {
+        if self.presentation.is_some() && !self.present_result.lock().unwrap().out_of_date {
             let now = graphics.now(
                 self.get_presentation_render_target()
                     .clone()
@@ -67,7 +67,8 @@ impl Drop for VulkanEntry {
                     .sync
                     .clone(),
             );
-            now.acquire_next_image(&self.presentation).unwrap();
+            now.acquire_next_image(self.presentation.as_ref().unwrap())
+                .unwrap();
         }
     }
 }
@@ -96,14 +97,16 @@ impl traits::GraphicsApi for VulkanEntry {
 
         let present_result = *self.present_result.lock().unwrap();
 
+        let presentation = self.presentation.as_ref().unwrap();
+
         if present_result.out_of_date {
-            self.presentation.swapchain.recreate(None)?;
+            presentation.swapchain.recreate(None)?;
         }
 
         if present_result.suboptimal {
             render_target.update_resources(
-                self.presentation.swapchain.extent(),
-                self.presentation
+                presentation.swapchain.extent(),
+                presentation
                     .swapchain
                     .swapchain_image_views
                     .read()
@@ -119,12 +122,12 @@ impl traits::GraphicsApi for VulkanEntry {
         timer.timer = std::time::Instant::now();
         drop(timer);
 
-        match graphics_now.acquire_next_image(&self.presentation) {
+        match graphics_now.acquire_next_image(&presentation) {
             Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
-                self.presentation.swapchain.recreate(None)?;
+                presentation.swapchain.recreate(None)?;
                 render_target.update_resources(
-                    self.presentation.swapchain.extent(),
-                    self.presentation
+                    presentation.swapchain.extent(),
+                    presentation
                         .swapchain
                         .swapchain_image_views
                         .read()
@@ -200,11 +203,11 @@ impl traits::GraphicsApi for VulkanEntry {
                             width: render_target
                                 .extent()
                                 .width
-                                .min(self.presentation.swapchain.extent().width),
+                                .min(presentation.swapchain.extent().width),
                             height: render_target
                                 .extent()
                                 .height
-                                .min(self.presentation.swapchain.extent().height),
+                                .min(presentation.swapchain.extent().height),
                         },
                     })
                     .clear_values(clear_values);
@@ -262,13 +265,11 @@ impl traits::GraphicsApi for VulkanEntry {
             },
         )?);
 
-        let presentation = self.presentation.clone();
-
         compute.queue.wait_idle().unwrap();
         compute_future.flush(compute.queue.clone()).unwrap();
 
-        let result =
-            graphics_future.swapchain_present_and_flush(graphics.queue.clone(), presentation);
+        let result = graphics_future
+            .swapchain_present_and_flush(graphics.queue.clone(), presentation.clone());
 
         let mut result_lock = self.present_result.lock().unwrap();
         *result_lock = result;
@@ -316,6 +317,7 @@ impl traits::GraphicsApi for VulkanEntry {
         );
 
         future.flush(compute.queue.clone()).unwrap();
+        compute.queue.wait_idle().unwrap();
 
         Ok(())
     }
@@ -328,15 +330,17 @@ impl traits::GraphicsApi for VulkanEntry {
             .unwrap()
             .wait()?;
 
-        self.presentation
+        let presentation = self.presentation.as_ref().unwrap();
+
+        presentation
             .swapchain
             .recreate(Some(vk::Extent2D { width, height }))?;
         self.get_presentation_render_target()
             .as_vulkan()
             .unwrap()
             .update_resources(
-                self.presentation.swapchain.extent(),
-                self.presentation
+                presentation.swapchain.extent(),
+                presentation
                     .swapchain
                     .swapchain_image_views
                     .read()
@@ -379,6 +383,14 @@ impl traits::GraphicsApi for VulkanEntry {
         transfer: bool,
         enable_sync: bool,
     ) -> GraphicsResult<Arc<dyn Buffer>> {
+        log!(
+            "creating buffer [ size = {}, uniform = {}, transfer = {}, synced = {} ]",
+            size,
+            uniform,
+            transfer,
+            enable_sync
+        );
+
         let mut usage = vk::BufferUsageFlags::STORAGE_BUFFER;
 
         if uniform {
@@ -397,21 +409,22 @@ impl traits::GraphicsApi for VulkanEntry {
             count: 1,
         };
 
-        let render_target = self
-            .get_presentation_render_target()
-            .clone()
-            .as_vulkan()
-            .unwrap();
-
-        let buffer_manager = BufferManager::new(
-            self.device_manager.clone(),
-            buffer_info,
+        let sync = if self.presentation.is_some() {
+            let render_target = self
+                .get_presentation_render_target()
+                .clone()
+                .as_vulkan()
+                .unwrap();
             if enable_sync {
                 Some(render_target.sync.clone())
             } else {
                 None
-            },
-        )?;
+            }
+        } else {
+            None
+        };
+
+        let buffer_manager = BufferManager::new(self.device_manager.clone(), buffer_info, sync)?;
 
         Ok(buffer_manager)
     }
@@ -498,6 +511,132 @@ impl traits::GraphicsApi for VulkanEntry {
 }
 
 impl VulkanEntry {
+    pub(crate) fn no_presentation() -> GraphicsResult<Arc<dyn traits::GraphicsApi>> {
+        let instance_extensions = vec![
+            #[cfg(debug_assertions)]
+            vk::EXT_DEBUG_UTILS_NAME.as_ptr(),
+            #[cfg(target_vendor = "apple")]
+            vk::KHR_PORTABILITY_ENUMERATION_NAME.as_ptr(),
+        ];
+
+        #[cfg(debug_assertions)]
+        unsafe {
+            std::env::set_var("VK_LOADER_LAYERS_DISABLE", "~implicit~")
+        };
+
+        let entry = match unsafe { ash::Entry::load() } {
+            Ok(entry) => Arc::new(entry),
+            Err(e) => {
+                log!("cannot load vulkan entry: {}", e);
+                return GraphicsResult::Err(GraphicsError::ConnotInitLibrary);
+            }
+        };
+
+        let flags = if cfg!(target_vendor = "apple") {
+            vk::InstanceCreateFlags::ENUMERATE_PORTABILITY_KHR
+        } else {
+            vk::InstanceCreateFlags::empty()
+        };
+
+        let app_info = vk::ApplicationInfo::default().api_version(vk::API_VERSION_1_3);
+        let mut create_info = vk::InstanceCreateInfo::default()
+            .flags(flags)
+            .application_info(&app_info)
+            .enabled_extension_names(&instance_extensions);
+
+        #[cfg(debug_assertions)]
+        let layers;
+        #[cfg(debug_assertions)]
+        let layers_pp: Vec<*const i8>;
+
+        #[cfg(debug_assertions)]
+        {
+            layers = get_supported_validation_layers(&entry);
+            if layers.is_empty() {
+                log!(
+                    "No validation layers found!
+                    Vulkan SDK should be installed for proper debug.
+                    Visit https://vulkan.lunarg.com/"
+                );
+                return Err(GraphicsError::ConnotInitLibrary);
+            }
+
+            layers_pp = layers.iter().map(|x| x.as_ptr()).collect();
+
+            create_info.pp_enabled_layer_names = layers_pp.as_ptr();
+            create_info.enabled_layer_count = layers_pp.len() as u32;
+        }
+
+        let instance = match unsafe { entry.create_instance(&create_info, None) } {
+            Err(e) => {
+                log!("cannot create vulkan instance: {}", e);
+
+                #[cfg(debug_assertions)]
+                {
+                    log!("| [layers]");
+
+                    layers.iter().for_each(|x| {
+                        let layer_bytes = &unsafe { *(x.as_ptr() as *const [u8; 256]) };
+                        let layer = CStr::from_bytes_until_nul(layer_bytes)
+                            .unwrap()
+                            .to_str()
+                            .unwrap();
+                        log!("| {}", layer);
+                    });
+
+                    log!("| [extensions]");
+
+                    instance_extensions.iter().for_each(|x| {
+                        let ext_bytes = &unsafe { *(*x as *const [u8; 256]) };
+                        let ext = CStr::from_bytes_until_nul(ext_bytes)
+                            .unwrap()
+                            .to_str()
+                            .unwrap();
+                        log!("| {}", ext);
+                    });
+                }
+
+                return GraphicsResult::Err(GraphicsError::ConnotInitLibrary);
+            }
+            Ok(instance) => Arc::new(instance),
+        };
+
+        #[cfg(debug_assertions)]
+        let debug_utils_messanger = {
+            log!("creating debug utils");
+            create_debug_utils_messanger(&entry, &instance)?
+        };
+
+        let device_manager = DeviceManager::new(entry.clone(), instance.clone(), None)?;
+
+        log!("| picked device: [ {} ]", device_manager.device_name);
+        for extension in &device_manager.supported_extensions {
+            log!("|| {}", extension);
+        }
+
+        let command_manager = CommandManager::new(device_manager.clone(), 1)?;
+
+        Ok(Arc::new(Self {
+            device_manager: device_manager.clone(),
+            command_manager,
+
+            #[cfg(debug_assertions)]
+            _debug_utils_messanger: Some(debug_utils_messanger),
+            #[cfg(not(debug_assertions))]
+            _debug_utils_messanger: None,
+
+            presentation: None,
+
+            present_result: Mutex::new(PresentResult::default()),
+            time_state: Mutex::new(TimeState {
+                timer: std::time::Instant::now(),
+                delta_time: std::time::Duration::ZERO,
+            }),
+
+            render_targets: BTreeMap::new(),
+        }))
+    }
+
     pub(crate) fn with_presentation<T: HasWindowHandle + HasDisplayHandle>(
         settings: &GraphicsApiInitSettings,
         window: &T,
@@ -555,7 +694,9 @@ impl VulkanEntry {
             layers = get_supported_validation_layers(&entry);
             if layers.is_empty() {
                 log!(
-                    "No validation layers found! Vulkan SDK should be installed for proper debug. Visit https://vulkan.lunarg.com/"
+                    "No validation layers found!
+                    Vulkan SDK should be installed for proper debug.
+                    Visit https://vulkan.lunarg.com/"
                 );
                 return Err(GraphicsError::ConnotInitLibrary);
             }
@@ -674,7 +815,7 @@ impl VulkanEntry {
             #[cfg(not(debug_assertions))]
             _debug_utils_messanger: None,
 
-            presentation,
+            presentation: Some(presentation),
 
             present_result: Mutex::new(PresentResult::default()),
             time_state: Mutex::new(TimeState {

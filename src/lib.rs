@@ -40,3 +40,11 @@ pub fn init_api_instance_with_presentation<T: HasWindowHandle + HasDisplayHandle
 ) -> GraphicsResult<Arc<dyn traits::GraphicsApi>> {
     VulkanEntry::with_presentation(settings, window)
 }
+
+/// Creates api instance for compute operations
+/// ```rust
+/// let graphics = init_api_instance().expect("cannot create entry");
+/// ```
+pub fn init_api_instance() -> GraphicsResult<Arc<dyn traits::GraphicsApi>> {
+    VulkanEntry::no_presentation()
+}

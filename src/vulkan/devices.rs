@@ -158,7 +158,16 @@ impl DeviceManager {
         let (physical_device, device_name) =
             pick_physical_device(instance.clone(), surface.is_none())?;
 
-        let supported_extensions = query_extensions_support(instance.clone(), physical_device)?;
+        let mut supported_extensions = query_extensions_support(instance.clone(), physical_device)?;
+
+        if surface.is_none()
+            && let Some((idx, _)) = supported_extensions
+                .iter()
+                .enumerate()
+                .find(|(_, ext)| **ext == vk::KHR_SWAPCHAIN_NAME)
+        {
+            supported_extensions.swap_remove(idx);
+        }
 
         let memory_properties =
             unsafe { instance.get_physical_device_memory_properties(physical_device) };

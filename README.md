@@ -8,24 +8,18 @@
 - Multithreaded access to resource
 - Unified app architecture
 
-## Long-term goals
-- Adding _non-present_ **Crystal API** entry (for compute operations only)
+## Goals
 - Adding **Metal API** support
 - Adding **DirectX** support
-
-## Short-term goals
 - Adding raytracing support
 
 ---
 
-## Installing
-```bash
-cargo add crystal-api
-```
-
-## Running
-To run debug scene from included example use:
+## Running examples
+To run debug scene from included example in
+[github](https://github.com/purpflow1/crystal-api) use:
 ```bash
 cargo run --manifest-path=examples/array-load-test/Cargo.toml
 ```
-_!!! Khronos validation layers are required to run debug builds._
+_Khronos validation layers are required to run debug builds!_
+_Visit https://vulkan.lunarg.com._
