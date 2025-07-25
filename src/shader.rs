@@ -1,9 +1,4 @@
-use std::{fs::File, io::Read};
-
-use crate::{
-    debug::log,
-    errors::{GraphicsError, GraphicsResult},
-};
+use crate::errors::GraphicsResult;
 
 #[allow(missing_docs)]
 #[derive(Debug)]
@@ -22,50 +17,36 @@ pub struct Shader {
 }
 
 impl Shader {
-    /// Opens shader with path and specified stage
+    /// Creates new shader from words and specified stage
     /// ```rust
-    /// let shader = Shader::open(
-    ///    "shader.vert.spv",
-    ///    ShaderStage::Vertex,
-    ///).unwrap()
+    /// let shader = Shader::from_words(words, ShaderStage::Vertex).unwrap()
     /// ```
-    pub fn open(path: &str, stage: ShaderStage) -> GraphicsResult<Self> {
-        let mut file = match File::open(path) {
-            Ok(file) => file,
-            Err(e) => {
-                log!("cannot open file: {}", e);
-                return Err(GraphicsError::ShaderError);
-            }
-        };
+    pub fn from_words(words: &[u32], stage: ShaderStage) -> GraphicsResult<Self> {
+        Ok(Shader {
+            stage,
+            code: words.to_vec(),
+        })
+    }
 
-        let size = file.metadata().unwrap().len() as usize;
-
-        let mut shader_code_bytes = Vec::<u8>::with_capacity(size);
-
-        match file.read_to_end(&mut shader_code_bytes) {
-            Ok(_) => unsafe {
-                shader_code_bytes.set_len(size);
-            },
-            Err(e) => {
-                log!("cannot read file: {}", e);
-                return Err(GraphicsError::ShaderError);
-            }
-        };
-
+    /// Creates new shader from bytes and specified stage
+    /// ```rust
+    /// let shader = Shader::from_bytes(bytes, ShaderStage::Vertex).unwrap()
+    /// ```
+    pub fn from_bytes(bytes: &[u8], stage: ShaderStage) -> GraphicsResult<Self> {
         let shader_code = unsafe {
-            let ptr = std::alloc::alloc(std::alloc::Layout::from_size_align_unchecked(size, 0x10))
-                as *mut u8;
+            let ptr = std::alloc::alloc(std::alloc::Layout::from_size_align_unchecked(
+                bytes.len(),
+                0x10,
+            )) as *mut u8;
 
             if ptr.is_null() {
                 panic!("Failed to allocate memory");
             }
 
-            std::slice::from_raw_parts_mut(ptr, size).copy_from_slice(std::slice::from_raw_parts(
-                shader_code_bytes.as_ptr(),
-                shader_code_bytes.len(),
-            ));
+            std::slice::from_raw_parts_mut(ptr, bytes.len())
+                .copy_from_slice(std::slice::from_raw_parts(bytes.as_ptr(), bytes.len()));
 
-            let len = size / 4;
+            let len = bytes.len() / 4;
 
             Vec::from_raw_parts(ptr as *mut u32, len, len)
         };

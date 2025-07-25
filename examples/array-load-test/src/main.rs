@@ -3,7 +3,7 @@ use crystal_api::{errors::GraphicsResult, object::Object, *};
 use std::{
     f32::consts::PI,
     fs::File,
-    io::BufReader,
+    io::{BufReader, Read},
     path::Path,
     sync::Arc,
     time::{Duration, Instant},
@@ -165,17 +165,41 @@ impl ApplicationHandler for Context {
         let graphics = init_api_instance_with_presentation(&self.settings, &window)
             .expect("cannot create entry");
 
+        println!("compiling GLSL shader...");
+        let file_name1 = "examples/array-load-test/shaders/desc.vert";
+        let file_name2 = "examples/array-load-test/shaders/desc.frag";
+        let mut source1 = String::new();
+        let mut source2 = String::new();
+        let mut reader = BufReader::new(File::open(file_name1).unwrap());
+        reader.read_to_string(&mut source1).unwrap();
+        let mut reader = BufReader::new(File::open(file_name2).unwrap());
+        reader.read_to_string(&mut source2).unwrap();
+
+        let compiler = shaderc::Compiler::new().unwrap();
+        let mut options = shaderc::CompileOptions::new().unwrap();
+        options.add_macro_definition("EP", Some("main"));
+        let binary_result1 = compiler
+            .compile_into_spirv(
+                source1.as_str(),
+                shaderc::ShaderKind::Vertex,
+                file_name1,
+                "main",
+                Some(&options),
+            )
+            .unwrap();
+        let binary_result2 = compiler
+            .compile_into_spirv(
+                source2.as_str(),
+                shaderc::ShaderKind::Fragment,
+                file_name2,
+                "main",
+                Some(&options),
+            )
+            .unwrap();
+
         let shaders_obj = [
-            Shader::open(
-                "examples/array-load-test/shaders/desc.vert.spv",
-                ShaderStage::Vertex,
-            )
-            .unwrap(),
-            Shader::open(
-                "examples/array-load-test/shaders/desc.frag.spv",
-                ShaderStage::Fragment,
-            )
-            .unwrap(),
+            Shader::from_bytes(binary_result1.as_binary_u8(), ShaderStage::Vertex).unwrap(),
+            Shader::from_bytes(binary_result2.as_binary_u8(), ShaderStage::Fragment).unwrap(),
         ];
 
         let render_target = graphics.get_presentation_render_target();

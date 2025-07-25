@@ -1,3 +1,8 @@
+use std::{
+    fs::File,
+    io::{BufReader, Read},
+};
+
 use crystal_api::{
     AsBytes, Shader, ShaderStage, errors::GraphicsResult, init_api_instance, object::Object,
 };
@@ -46,10 +51,26 @@ fn main() -> GraphicsResult<()> {
     layout.add_buffer(0, buffer_in.clone())?;
     layout.add_buffer(1, buffer_out.clone())?;
 
-    let shader = Shader::open(
-        "examples/compute-test/shaders/particles.comp.spv",
-        ShaderStage::Compute,
-    )?;
+    println!("compiling GLSL shader...");
+    let file_name = "examples/compute-test/shaders/particles.comp";
+    let mut source = String::new();
+    let mut reader = BufReader::new(File::open(file_name).unwrap());
+    reader.read_to_string(&mut source).unwrap();
+
+    let compiler = shaderc::Compiler::new().unwrap();
+    let mut options = shaderc::CompileOptions::new().unwrap();
+    options.add_macro_definition("EP", Some("main"));
+    let binary_result = compiler
+        .compile_into_spirv(
+            source.as_str(),
+            shaderc::ShaderKind::Compute,
+            file_name,
+            "main",
+            Some(&options),
+        )
+        .unwrap();
+
+    let shader = Shader::from_bytes(binary_result.as_binary_u8(), ShaderStage::Compute)?;
     let pipeline = layout.create_compute_pipeline(&shader)?;
 
     let object = Object::new_compute(pipeline, [1, 1, 1]);

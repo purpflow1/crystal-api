@@ -7,6 +7,7 @@ authors = ["purpflow"]
 [dependencies]
 crystal-api = { path = "../../../crystal-api" }
 
+shaderc = "0.9.1"
 winit = { version = "0.30.10", features = ["rwh_06"] }
 glam = "0.30.3"
 png = "0.17.16"

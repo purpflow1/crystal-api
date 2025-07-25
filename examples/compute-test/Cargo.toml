@@ -6,3 +6,4 @@ authors = ["purpflow"]
 
 [dependencies]
 crystal-api = { path = "../../../crystal-api" }
+shaderc = "0.9.1"
