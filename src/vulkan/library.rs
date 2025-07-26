@@ -385,7 +385,13 @@ impl traits::GraphicsApi for VulkanEntry {
     ) -> GraphicsResult<Arc<dyn Buffer>> {
         log!(
             "creating buffer [ size = {}, uniform = {}, transfer = {}, synced = {} ]",
-            size,
+            if size >= 1024 * 1024 {
+                format!("{:.1} MB", size as f32 / 1024. / 1024.)
+            } else if size >= 1024 {
+                format!("{:.1} KB", size as f32 / 1024.)
+            } else {
+                format!("{} B", size)
+            },
             uniform,
             transfer,
             enable_sync
