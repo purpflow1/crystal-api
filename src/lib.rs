@@ -4,8 +4,9 @@
 //! # Crystal API
 //! Crystal API is a unified wrapper for GPU APIs designed for the best capability
 //! with any solutions in apps development
-//!
-mod debug;
+
+/// Debug module
+pub mod debug;
 /// Errors module
 pub mod errors;
 mod gpu_data;

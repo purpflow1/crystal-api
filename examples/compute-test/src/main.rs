@@ -4,7 +4,11 @@ use std::{
 };
 
 use crystal_api::{
-    AsBytes, Shader, ShaderStage, errors::GraphicsResult, init_api_instance, object::Object,
+    AsBytes, Shader, ShaderStage,
+    debug::{LoggingLevel, set_internal_logging_level},
+    errors::GraphicsResult,
+    init_api_instance,
+    object::Object,
 };
 
 #[repr(C, align(16))]
@@ -30,6 +34,8 @@ struct Particle {
 const PARTICLE_NUM: u64 = 1024 * 1024;
 
 fn main() -> GraphicsResult<()> {
+    set_internal_logging_level(LoggingLevel::Console);
+
     let api = init_api_instance()?;
     let layout = api.create_layout(false, 0, 0, 1, 2)?;
 

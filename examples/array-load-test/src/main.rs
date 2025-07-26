@@ -1,4 +1,9 @@
-use crystal_api::{errors::GraphicsResult, object::Object, *};
+use crystal_api::{
+    debug::{LoggingLevel, set_internal_logging_level},
+    errors::GraphicsResult,
+    object::Object,
+    *,
+};
 
 use std::{
     f32::consts::PI,
@@ -443,6 +448,8 @@ impl ApplicationHandler for Context {
 }
 
 fn main() -> GraphicsResult<()> {
+    set_internal_logging_level(LoggingLevel::Console);
+
     let settings = GraphicsApiInitSettings::default()
         .msaa_samples(4)
         .width(1000)

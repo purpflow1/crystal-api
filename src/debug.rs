@@ -1,10 +1,33 @@
+/// Represents internal wrapper logging level
+#[derive(Clone, Copy)]
+pub enum LoggingLevel {
+    /// Console output only
+    Console,
+    /// No logging
+    None,
+}
+
+pub(crate) static LOGGING_LEVEL: RwLock<LoggingLevel> = RwLock::new(LoggingLevel::None);
+
+/// Sets logging level
+pub fn set_internal_logging_level(logging_level: LoggingLevel) {
+    *LOGGING_LEVEL.write().unwrap() = logging_level
+}
+
+pub(crate) fn get_logging_level() -> LoggingLevel {
+    *LOGGING_LEVEL.read().unwrap()
+}
+
 macro_rules! log {
     ($($arg:tt)*) => {{
-        #[cfg(debug_assertions)]
-        println!($($arg)*);
-        #[cfg(not(debug_assertions))]
-        println!($($arg)*);
+        use crate::debug::{get_logging_level, LoggingLevel};
+        match get_logging_level() {
+            LoggingLevel::Console => println!($($arg)*),
+            _ => ()
+        }
     }};
 }
+
+use std::sync::RwLock;
 
 pub(crate) use log;
