@@ -44,8 +44,6 @@ pub(crate) struct VulkanEntry {
 
     present_result: Mutex<PresentResult>,
     time_state: Mutex<TimeState>,
-
-    render_targets: BTreeMap<u16, Arc<VulkanRenderTarget>>,
 }
 
 impl Drop for VulkanEntry {
@@ -61,7 +59,7 @@ impl Drop for VulkanEntry {
         if self.presentation.is_some() && !self.present_result.lock().unwrap().out_of_date {
             let now = graphics.now(
                 self.get_presentation_render_target()
-                    .clone()
+                    .unwrap()
                     .as_vulkan()
                     .unwrap()
                     .sync
@@ -74,7 +72,191 @@ impl Drop for VulkanEntry {
 }
 
 impl traits::GraphicsApi for VulkanEntry {
-    fn dispatch_any(&self, objects: &[Arc<Object>]) -> GraphicsResult<()> {
+    #[allow(unused)]
+    fn dispatch_render_target(
+        &self,
+        objects: &[Arc<Object>],
+        render_target_dyn: Arc<dyn crate::RenderTarget>,
+    ) -> GraphicsResult<()> {
+        unimplemented!("unsafe to use");
+        let graphics = self
+            .command_manager
+            .command_entries
+            .get(&CommandType::Graphics)
+            .unwrap()
+            .clone();
+
+        let compute = self
+            .command_manager
+            .command_entries
+            .get(&CommandType::Compute)
+            .unwrap()
+            .clone();
+
+        let render_target = render_target_dyn.as_vulkan().unwrap();
+
+        let sync = render_target.sync.clone();
+        let graphics_now = graphics.now(sync.clone());
+
+        let present_result = *self.present_result.lock().unwrap();
+
+        let presentation = self.presentation.as_ref().unwrap();
+
+        if present_result.out_of_date {
+            presentation.swapchain.recreate(None)?;
+        }
+
+        if present_result.suboptimal {
+            render_target.update_resources(
+                presentation.swapchain.extent(),
+                presentation
+                    .swapchain
+                    .swapchain_image_views
+                    .read()
+                    .unwrap()
+                    .clone(),
+            )?;
+        }
+
+        sync.lock().unwrap().wait_render().unwrap();
+
+        let mut timer = self.time_state.lock().unwrap();
+        timer.delta_time = timer.timer.elapsed();
+        timer.timer = std::time::Instant::now();
+        drop(timer);
+
+        let compute_now = compute.now(sync.clone());
+
+        let compute_future = compute_now.join(
+            compute
+                .record_command_buffer(sync.clone(), |command_buffer, device, _n_pass| unsafe {
+                    for object in objects {
+                        if object.groups.is_none() {
+                            continue;
+                        }
+
+                        let pipeline = object.pipeline.clone().as_vulkan().unwrap();
+                        let groups = object.groups.unwrap();
+
+                        device.cmd_bind_pipeline(
+                            *command_buffer,
+                            vk::PipelineBindPoint::COMPUTE,
+                            pipeline.handle,
+                        );
+                        device.cmd_bind_descriptor_sets(
+                            *command_buffer,
+                            vk::PipelineBindPoint::COMPUTE,
+                            pipeline.layout.pipeline_layout,
+                            0,
+                            &pipeline.layout.get_descriptor_sets(),
+                            &[],
+                        );
+                        device.cmd_dispatch(*command_buffer, groups[0], groups[1], groups[2]);
+                    }
+                })
+                .unwrap(),
+        );
+
+        let graphics_future = graphics_now.join(graphics.record_command_buffer(
+            sync.clone(),
+            |command_buffer, device, n_pass| {
+                let color = 0.5f32;
+                let mut clear_color = vk::ClearColorValue::default();
+                let clear_depth_stencil =
+                    vk::ClearDepthStencilValue::default().depth(1.).stencil(0);
+                unsafe {
+                    clear_color.float32[0] = color;
+                    clear_color.float32[1] = color;
+                    clear_color.float32[2] = color;
+                    clear_color.float32[3] = 1.0f32
+                };
+                let clear_value_color = vk::ClearValue { color: clear_color };
+                let clear_value_stencil = vk::ClearValue {
+                    depth_stencil: clear_depth_stencil,
+                };
+                let clear_values = &[clear_value_color, clear_value_stencil];
+
+                let render_pass_begin = vk::RenderPassBeginInfo::default()
+                    .render_pass(render_target.render_pass)
+                    .framebuffer(*render_target.framebuffers[n_pass].read().unwrap())
+                    .render_area(vk::Rect2D {
+                        offset: vk::Offset2D::default().x(0).y(0),
+                        extent: vk::Extent2D {
+                            width: render_target
+                                .extent()
+                                .width
+                                .min(presentation.swapchain.extent().width),
+                            height: render_target
+                                .extent()
+                                .height
+                                .min(presentation.swapchain.extent().height),
+                        },
+                    })
+                    .clear_values(clear_values);
+
+                unsafe {
+                    device.cmd_begin_render_pass(
+                        *command_buffer,
+                        &render_pass_begin,
+                        vk::SubpassContents::INLINE,
+                    )
+                }
+
+                let viewport = vk::Viewport::default()
+                    .width(render_target.extent().width as f32)
+                    .height(render_target.extent().height as f32)
+                    .max_depth(1.);
+                let viewports = &[viewport];
+                unsafe { device.cmd_set_viewport(*command_buffer, 0, viewports) }
+                let scissor = vk::Rect2D::default().extent(render_target.extent());
+                let scissors = &[scissor];
+                unsafe { device.cmd_set_scissor(*command_buffer, 0, scissors) }
+
+                let mut layout_objects =
+                    BTreeMap::<u64, (Arc<VulkanLayout>, Vec<Arc<Object>>)>::new();
+
+                objects.iter().for_each(|object| {
+                    if object.groups.is_none() {
+                        let layout = object.pipeline.clone().as_vulkan().unwrap().layout.clone();
+
+                        let raw = object
+                            .pipeline
+                            .clone()
+                            .as_vulkan()
+                            .unwrap()
+                            .layout
+                            .pipeline_layout
+                            .as_raw();
+
+                        match layout_objects.get_mut(&raw) {
+                            Some((_, objects)) => {
+                                objects.push(object.clone());
+                            }
+                            None => {
+                                layout_objects.insert(raw, (layout, vec![object.clone()]));
+                            }
+                        }
+                    }
+                });
+
+                for (_, (layout, objects)) in layout_objects {
+                    layout.render(&objects, command_buffer).unwrap();
+                }
+
+                unsafe { device.cmd_end_render_pass(*command_buffer) }
+            },
+        )?);
+
+        compute.queue.wait_idle().unwrap();
+
+        compute_future.flush(compute.queue.clone()).unwrap();
+
+        graphics_future.flush(graphics.queue.clone())?;
+
+        Ok(())
+    }
+
+    fn dispatch_and_present(&self, objects: &[Arc<Object>]) -> GraphicsResult<()> {
         let graphics = self
             .command_manager
             .command_entries
@@ -90,7 +272,7 @@ impl traits::GraphicsApi for VulkanEntry {
             .clone();
 
         let render_target_dyn = self.get_presentation_render_target();
-        let render_target = render_target_dyn.clone().as_vulkan().unwrap();
+        let render_target = render_target_dyn.unwrap().as_vulkan().unwrap();
 
         let sync = render_target.sync.clone();
         let graphics_now = graphics.now(sync.clone());
@@ -336,6 +518,7 @@ impl traits::GraphicsApi for VulkanEntry {
             .swapchain
             .recreate(Some(vk::Extent2D { width, height }))?;
         self.get_presentation_render_target()
+            .unwrap()
             .as_vulkan()
             .unwrap()
             .update_resources(
@@ -349,8 +532,39 @@ impl traits::GraphicsApi for VulkanEntry {
             )
     }
 
-    fn get_presentation_render_target(&self) -> Arc<dyn crate::RenderTarget> {
-        self.render_targets[&0].clone()
+    fn get_presentation_render_target(&self) -> Option<Arc<dyn crate::RenderTarget>> {
+        if let Some(presentation) = self.presentation.clone() {
+            Some(presentation.render_target.clone())
+        } else {
+            None
+        }
+    }
+
+    #[allow(unused)]
+    fn create_render_target(
+        &self,
+        textures: &[Arc<dyn Texture>],
+        msaa_samples: u8,
+    ) -> GraphicsResult<Arc<dyn crate::RenderTarget>> {
+        unimplemented!("unsafe to use now");
+
+        let images: Vec<_> = textures
+            .iter()
+            .map(|tex| tex.clone().as_vulkan().unwrap().image.clone())
+            .collect();
+
+        let extent = vk::Extent2D {
+            width: images[0].extent.width,
+            height: images[0].extent.height,
+        };
+
+        Ok(VulkanRenderTarget::new(
+            self.device_manager.clone(),
+            images[0].format,
+            extent,
+            images.iter().map(|img| img.image_view).collect(),
+            msaa_samples,
+        )?)
     }
 
     fn create_layout(
@@ -418,7 +632,7 @@ impl traits::GraphicsApi for VulkanEntry {
         let sync = if self.presentation.is_some() {
             let render_target = self
                 .get_presentation_render_target()
-                .clone()
+                .unwrap()
                 .as_vulkan()
                 .unwrap();
             if enable_sync {
@@ -478,6 +692,7 @@ impl traits::GraphicsApi for VulkanEntry {
     fn create_sampler_set(
         &self,
         textures: &[(u32, Arc<dyn Texture>)],
+        layouts: &[Arc<dyn Layout>],
     ) -> GraphicsResult<Arc<GpuSamplerSet>> {
         log!(
             "creating sampler [ bindings = {:?} ]",
@@ -487,26 +702,51 @@ impl traits::GraphicsApi for VulkanEntry {
                 .collect::<Vec<_>>()
         );
 
-        Ok(GpuSamplerSet::from_textures(textures))
+        let sampler = GpuSamplerSet::from_textures(textures);
+
+        layouts
+            .iter()
+            .for_each(|layout| layout.register_samplers(&[sampler.clone()]).unwrap());
+
+        Ok(sampler)
     }
 
     fn create_texture(
         &self,
-        buffer: Arc<dyn Buffer>,
-        data: [u32; 3],
+        extent: [u32; 2],
         anisotropy_texels: f32,
     ) -> GraphicsResult<Arc<dyn Texture>> {
         log!(
             "creating texture [ width = {}, height = {} ]",
-            data[0],
-            data[1],
+            extent[0],
+            extent[1],
         );
 
         Ok(VulkanTexture::new(
             self.device_manager.clone(),
             self.command_manager.clone(),
+            extent,
+            anisotropy_texels,
+        )?)
+    }
+
+    fn create_texture_staged(
+        &self,
+        buffer: Arc<dyn Buffer>,
+        extent: [u32; 2],
+        anisotropy_texels: f32,
+    ) -> GraphicsResult<Arc<dyn Texture>> {
+        log!(
+            "creating texture [ width = {}, height = {} ]",
+            extent[0],
+            extent[1],
+        );
+
+        Ok(VulkanTexture::new_staged(
+            self.device_manager.clone(),
+            self.command_manager.clone(),
             buffer.clone().as_vulkan().unwrap(),
-            data,
+            extent,
             anisotropy_texels,
         )?)
     }
@@ -638,8 +878,6 @@ impl VulkanEntry {
                 timer: std::time::Instant::now(),
                 delta_time: std::time::Duration::ZERO,
             }),
-
-            render_targets: BTreeMap::new(),
         }))
     }
 
@@ -792,26 +1030,6 @@ impl VulkanEntry {
             presentation.swapchain.swapchain_info.image_count,
         )?;
 
-        let viewport_render_target = VulkanRenderTarget::new(
-            device_manager.clone(),
-            presentation.swapchain.swapchain_info.surface_format.format,
-            vk::Extent2D {
-                width: settings.width,
-                height: settings.height,
-            },
-            presentation
-                .swapchain
-                .swapchain_image_views
-                .read()
-                .unwrap()
-                .clone(),
-            presentation.msaa_samples,
-        )?;
-
-        let mut render_targets = BTreeMap::new();
-
-        render_targets.insert(0, viewport_render_target);
-
         Ok(Arc::new(Self {
             device_manager: device_manager.clone(),
             command_manager,
@@ -828,8 +1046,6 @@ impl VulkanEntry {
                 timer: std::time::Instant::now(),
                 delta_time: std::time::Duration::ZERO,
             }),
-
-            render_targets,
         }))
     }
 

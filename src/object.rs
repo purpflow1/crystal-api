@@ -75,6 +75,21 @@ impl Object {
         })
     }
 
+    /// Creates array of graphics objects with mesh
+    pub fn with_mesh_array(
+        pipeline: Arc<dyn Pipeline>,
+        mesh: Arc<MeshBuffer>,
+        array: u32,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            pipeline,
+            mesh_buffer: Some(mesh),
+            sampler: None,
+            groups: None,
+            array,
+        })
+    }
+
     /// Creates array of graphics objects with mesh and textures
     pub fn with_mesh_sampled_array(
         pipeline: Arc<dyn Pipeline>,

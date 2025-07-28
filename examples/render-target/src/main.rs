@@ -9,7 +9,6 @@ use std::{
     f32::consts::PI,
     fs::File,
     io::{BufReader, Read},
-    path::Path,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -23,7 +22,7 @@ use winit::{
     window::Window,
 };
 
-const OBJECT_DIMENTION: usize = 8;
+const OBJECT_DIMENTION: usize = 2;
 const DISTANCE: f32 = 2.;
 
 struct State {
@@ -51,39 +50,8 @@ struct Uniform {
     time: f32,
 }
 
-#[repr(C, align(16))]
-#[derive(Clone)]
-struct Light(glam::Vec3);
-
-pub struct Image2D {
-    pub width: u32,
-    pub height: u32,
-    pub channels: u32,
-    pub pixels: Vec<u8>,
-}
-
-impl Image2D {
-    pub fn new(path: &Path) -> GraphicsResult<Self> {
-        let file = File::open(path).unwrap();
-        let decoder = png::Decoder::new(file);
-        let mut reader = decoder.read_info().unwrap();
-        let mut pixels = vec![0; reader.output_buffer_size()];
-        let info = reader.next_frame(&mut pixels).unwrap();
-
-        Ok(Self {
-            width: info.width,
-            height: info.height,
-            channels: info.bit_depth as u32,
-            pixels,
-        })
-    }
-}
-
 struct Scene {
     camera: Camera,
-
-    light: Option<Arc<dyn Buffer>>,
-    light_info: Option<Arc<dyn Buffer>>,
 
     uniform: Option<Arc<dyn Buffer>>,
     transforms: Option<Arc<dyn Buffer>>,
@@ -94,6 +62,7 @@ struct Scene {
 struct Context {
     window: Option<Window>,
     graphics: Option<Arc<dyn GraphicsApi>>,
+    render_target_cube: Option<Arc<dyn RenderTarget>>,
 
     settings: GraphicsApiInitSettings,
     scene: Scene,
@@ -111,6 +80,7 @@ impl Context {
         Ok(Self {
             window: None,
             graphics: None,
+            render_target_cube: None,
 
             settings,
             scene: Scene {
@@ -133,8 +103,6 @@ impl Context {
                 },
 
                 uniform: None,
-                light: None,
-                light_info: None,
                 transforms: None,
 
                 objects: vec![],
@@ -171,14 +139,18 @@ impl ApplicationHandler for Context {
             .expect("cannot create entry");
 
         println!("compiling GLSL shader...");
-        let file_name1 = "examples/array-load-test/shaders/desc.vert";
-        let file_name2 = "examples/array-load-test/shaders/desc.frag";
+        let file_name1 = "examples/render-target/shaders/desc.vert";
+        let file_name2 = "examples/render-target/shaders/desc.frag";
+        let file_name3 = "examples/render-target/shaders/textured.frag";
         let mut source1 = String::new();
         let mut source2 = String::new();
+        let mut source3 = String::new();
         let mut reader = BufReader::new(File::open(file_name1).unwrap());
         reader.read_to_string(&mut source1).unwrap();
         let mut reader = BufReader::new(File::open(file_name2).unwrap());
         reader.read_to_string(&mut source2).unwrap();
+        let mut reader = BufReader::new(File::open(file_name3).unwrap());
+        reader.read_to_string(&mut source3).unwrap();
 
         let compiler = shaderc::Compiler::new().unwrap();
         let mut options = shaderc::CompileOptions::new().unwrap();
@@ -201,58 +173,34 @@ impl ApplicationHandler for Context {
                 Some(&options),
             )
             .unwrap();
+        let binary_result3 = compiler
+            .compile_into_spirv(
+                source3.as_str(),
+                shaderc::ShaderKind::Fragment,
+                file_name3,
+                "main",
+                Some(&options),
+            )
+            .unwrap();
 
         let shaders_obj = [
             Shader::from_bytes(binary_result1.as_binary_u8(), ShaderStage::Vertex).unwrap(),
             Shader::from_bytes(binary_result2.as_binary_u8(), ShaderStage::Fragment).unwrap(),
         ];
 
+        let shaders_textured = [
+            Shader::from_bytes(binary_result1.as_binary_u8(), ShaderStage::Vertex).unwrap(),
+            Shader::from_bytes(binary_result3.as_binary_u8(), ShaderStage::Fragment).unwrap(),
+        ];
+
         let render_target = graphics.get_presentation_render_target().unwrap();
 
-        let layout_obj = graphics
-            .create_layout(true, 2, OBJECT_DIMENTION.pow(3), 1, 3)
+        let render_target_texture = graphics.create_texture([1000, 1000], 1.0).unwrap();
+        let render_target_cube = graphics
+            .create_render_target(&[render_target_texture.clone()], 4)
             .unwrap();
 
-        let default_sampler = {
-            let file =
-                File::open("examples/array-load-test/resources/textures/default.png").unwrap();
-            let decoder = png::Decoder::new(file);
-            let mut reader = decoder.read_info().unwrap();
-
-            let size = reader.output_buffer_size();
-            let buffer = graphics
-                .create_buffer(size as u64 * 2, false, true, false)
-                .unwrap();
-
-            let info = reader.next_frame(buffer.get_memory(0..size)).unwrap();
-
-            let texture = graphics
-                .create_texture_staged(buffer, [info.width, info.height], 1.0)
-                .unwrap();
-            graphics
-                .create_sampler_set(&[(0, texture)], &[layout_obj.clone()])
-                .unwrap()
-        };
-
-        let test_sampler = {
-            let file = File::open("examples/array-load-test/resources/textures/test.png").unwrap();
-            let decoder = png::Decoder::new(file);
-            let mut reader = decoder.read_info().unwrap();
-
-            let size = reader.output_buffer_size();
-            let buffer = graphics
-                .create_buffer(size as u64 * 2, false, true, false)
-                .unwrap();
-
-            let info = reader.next_frame(buffer.get_memory(0..size)).unwrap();
-
-            let texture = graphics
-                .create_texture_staged(buffer, [info.width, info.height], 1.0)
-                .unwrap();
-            graphics
-                .create_sampler_set(&[(0, texture)], &[layout_obj.clone()])
-                .unwrap()
-        };
+        let layout_obj = graphics.create_layout(true, 1, 1, 1, 3).unwrap();
 
         let uniform = graphics
             .create_buffer(size_of::<Uniform>() as u64, true, false, true)
@@ -265,87 +213,69 @@ impl ApplicationHandler for Context {
                 true,
             )
             .unwrap();
-        let light = graphics
-            .create_buffer(size_of::<Light>() as u64 * 3, false, false, true)
-            .unwrap();
-        let light_info = graphics
-            .create_buffer(size_of::<u32>() as u64, false, false, true)
-            .unwrap();
 
         layout_obj.add_buffer(0, uniform.clone()).unwrap();
         layout_obj.add_buffer(0, transform.clone()).unwrap();
-        layout_obj.add_buffer(1, light.clone()).unwrap();
-        layout_obj.add_buffer(2, light_info.clone()).unwrap();
 
         self.scene.uniform = Some(uniform);
         self.scene.transforms = Some(transform);
-        self.scene.light = Some(light);
-        self.scene.light_info = Some(light_info);
-
-        self.scene
-            .light
-            .as_ref()
-            .unwrap()
-            .get_memory_full()
-            .copy_from_slice(
-                vec![
-                    Light(glam::Vec3 {
-                        x: 1.,
-                        y: 1.,
-                        z: 1.,
-                    }),
-                    Light(glam::Vec3 {
-                        x: 0.,
-                        y: 3.,
-                        z: 0.,
-                    }),
-                    Light(glam::Vec3 {
-                        x: 0.,
-                        y: 0.,
-                        z: 0.,
-                    }),
-                ]
-                .as_bytes(),
-            );
-        self.scene
-            .light_info
-            .as_ref()
-            .unwrap()
-            .get_memory_full()
-            .copy_from_slice(&1u32.to_le_bytes());
 
         let pipeline_render = layout_obj
             .clone()
             .create_graphics_pipeline(
-                render_target.clone(),
+                render_target_cube.clone(),
                 &shaders_obj,
                 &VertexTexture::get_attributes(),
             )
             .unwrap();
 
-        let mesh = Arc::new(
+        let pipeline_textured = layout_obj
+            .clone()
+            .create_graphics_pipeline(
+                render_target.clone(),
+                &shaders_textured,
+                &VertexTexture::get_attributes(),
+            )
+            .unwrap();
+
+        let mishka_mesh = Arc::new(
             Mesh::from_buffer(BufReader::new(
-                File::open("examples/array-load-test/resources/mishka/owo.obj").unwrap(),
+                File::open("examples/render-target/resources/mishka/owo.obj").unwrap(),
             ))
             .unwrap(),
         );
 
-        let mesh_buffer = graphics.create_buffer_mesh(mesh).unwrap();
+        let cube_mesh = Arc::new(
+            Mesh::from_buffer(BufReader::new(
+                File::open("examples/render-target/resources/objects/cube.obj").unwrap(),
+            ))
+            .unwrap(),
+        );
 
-        let object = Object::with_mesh_sampled_array(
-            pipeline_render.clone(),
-            mesh_buffer.clone(),
-            default_sampler.clone(),
+        let mishka_mesh_buffer = graphics.create_buffer_mesh(mishka_mesh).unwrap();
+        let cube_mesh_buffer = graphics.create_buffer_mesh(cube_mesh).unwrap();
+
+        let mishka_object = Object::with_mesh(pipeline_render.clone(), mishka_mesh_buffer.clone());
+
+        let texture_sampler = graphics
+            .create_sampler_set(&[(0, render_target_texture)], &[layout_obj])
+            .unwrap();
+
+        let cube_object = Object::with_mesh_sampled_array(
+            pipeline_textured.clone(),
+            cube_mesh_buffer.clone(),
+            texture_sampler,
             OBJECT_DIMENTION.pow(3) as u32,
         );
 
-        self.scene.objects.push(object.clone());
-        layout_obj
-            .register_samplers(&[default_sampler, test_sampler])
-            .unwrap();
+        self.scene.objects.push(cube_object.clone());
+        self.scene.objects.push(mishka_object.clone());
 
         self.graphics = Some(graphics);
         self.window = Some(window);
+        self.render_target_cube = Some(render_target_cube);
+
+        println!("[end init]");
     }
 
     fn about_to_wait(&mut self, _event_loop: &winit::event_loop::ActiveEventLoop) {
@@ -359,7 +289,7 @@ impl ApplicationHandler for Context {
             (1..=OBJECT_DIMENTION).for_each(|j| {
                 (1..=OBJECT_DIMENTION).for_each(|k| {
                     let transform = glam::Mat4::from_scale_rotation_translation(
-                        glam::Vec3::new(0.3, 0.3, 0.3),
+                        glam::Vec3::new(1., 1., 1.),
                         rotation_matrix,
                         glam::Vec3::new(i as f32, j as f32, k as f32) * DISTANCE,
                     );
@@ -395,7 +325,16 @@ impl ApplicationHandler for Context {
         self.graphics
             .as_ref()
             .unwrap()
-            .dispatch_and_present(&self.scene.objects)
+            .dispatch_render_target(
+                &[self.scene.objects[1].clone()],
+                self.render_target_cube.clone().unwrap(),
+            )
+            .unwrap();
+
+        self.graphics
+            .as_ref()
+            .unwrap()
+            .dispatch_and_present(&[self.scene.objects[0].clone()])
             .unwrap();
     }
 

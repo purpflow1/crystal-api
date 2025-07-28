@@ -9,6 +9,7 @@ use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use crate::{
     debug::log,
     errors::{GraphicsError, GraphicsResult},
+    vulkan::VulkanRenderTarget,
 };
 
 use super::devices::DeviceManager;
@@ -389,7 +390,7 @@ impl Swapchain {
 
 pub(crate) struct Presentation {
     pub swapchain: Arc<Swapchain>,
-    pub msaa_samples: u8,
+    pub render_target: Arc<VulkanRenderTarget>,
 }
 
 impl Presentation {
@@ -425,9 +426,24 @@ impl Presentation {
     ) -> GraphicsResult<Arc<Self>> {
         let swapchain = Swapchain::new(device_manager.clone(), surface.clone())?;
 
+        let extent = swapchain.swapchain_info.extent.read().unwrap();
+
+        let render_target = VulkanRenderTarget::new(
+            device_manager.clone(),
+            swapchain.swapchain_info.surface_format.format,
+            vk::Extent2D {
+                width: extent.width,
+                height: extent.height,
+            },
+            swapchain.swapchain_image_views.read().unwrap().clone(),
+            msaa_samples,
+        )?;
+
+        drop(extent);
+
         Ok(Arc::new(Presentation {
             swapchain,
-            msaa_samples,
+            render_target,
         }))
     }
 }

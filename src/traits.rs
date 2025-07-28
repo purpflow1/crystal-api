@@ -12,15 +12,22 @@ use crate::{
 /// ```GraphicsApi``` is the main trait used for creation of graphics resources and using this wrapper
 pub trait GraphicsApi: Sync + Send {
     /// Executes all operations permitted with objects passed in this method
-    fn dispatch_any(&self, objects: &[Arc<Object>]) -> GraphicsResult<()>;
+    fn dispatch_and_present(&self, objects: &[Arc<Object>]) -> GraphicsResult<()>;
+    /// Executes all operations permitted with objects passed in this method
+    /// for specified render target
+    fn dispatch_render_target(
+        &self,
+        objects: &[Arc<Object>],
+        render_target: Arc<dyn RenderTarget>,
+    ) -> GraphicsResult<()>;
     /// Executes all compute operations permitted with objects passed in this method
     fn dispatch_compute(&self, objects: &[Arc<Object>]) -> GraphicsResult<()>;
 
     /// Resizes resources
     fn resize_resources(&self, width: u32, height: u32) -> GraphicsResult<()>;
 
-    /// Returns ```RenderTarget``` created on presentation init. Panics if API was initialized without presentation
-    fn get_presentation_render_target(&self) -> Arc<dyn RenderTarget>;
+    /// Returns ```RenderTarget``` created on presentation init
+    fn get_presentation_render_target(&self) -> Option<Arc<dyn crate::RenderTarget>>;
     /// Creates shader layout
     fn create_layout(
         &self,
@@ -44,14 +51,27 @@ pub trait GraphicsApi: Sync + Send {
     fn create_sampler_set(
         &self,
         textures: &[(u32, Arc<dyn Texture>)],
+        layouts: &[Arc<dyn Layout>],
     ) -> GraphicsResult<Arc<GpuSamplerSet>>;
-    /// Creates texture
-    fn create_texture(
+    /// Creates texture from buffers
+    fn create_texture_staged(
         &self,
         buffer: Arc<dyn Buffer>,
-        data: [u32; 3],
+        extent: [u32; 2],
         anisotropy_texels: f32,
     ) -> GraphicsResult<Arc<dyn Texture>>;
+    /// Creates empty texture
+    fn create_texture(
+        &self,
+        extent: [u32; 2],
+        anisotropy_texels: f32,
+    ) -> GraphicsResult<Arc<dyn Texture>>;
+    /// Creates render target from textures
+    fn create_render_target(
+        &self,
+        textures: &[Arc<dyn Texture>],
+        msaa_samples: u8,
+    ) -> GraphicsResult<Arc<dyn RenderTarget>>;
 
     /// Returns the duration of previous frame
     fn get_delta_time(&self) -> std::time::Duration;

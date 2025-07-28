@@ -601,6 +601,10 @@ impl VulkanLayout {
             if let Some(sampler) = &object.sampler {
                 let id = *sampler.id.lock().unwrap();
 
+                if id == usize::MAX {
+                    panic!("fatal: object sampler has not been registered!");
+                }
+
                 unsafe {
                     device_manager.device.cmd_bind_descriptor_sets(
                         *command_buffer,

@@ -19,6 +19,7 @@ pub struct Image {
     pub image: vk::Image,
     pub image_view: vk::ImageView,
     pub image_memory: vk::DeviceMemory,
+    pub format: vk::Format,
     pub layout: RwLock<vk::ImageLayout>,
     pub extent: vk::Extent3D,
     pub mip_levels: u32,
@@ -54,7 +55,6 @@ impl Image {
         anisotropy_texels: f32,
     ) -> GraphicsResult<Arc<Self>> {
         let extent = vk::Extent3D::default().width(width).height(height).depth(1);
-        let layout = vk::ImageLayout::UNDEFINED;
 
         let mip_levels = if generate_mips {
             (height as f32).max(width as f32).log2().floor() as u32
@@ -74,7 +74,7 @@ impl Image {
             .array_layers(1)
             .format(format)
             .tiling(tiling)
-            .initial_layout(layout)
+            .initial_layout(vk::ImageLayout::UNDEFINED)
             .usage(usage)
             .sharing_mode(vk::SharingMode::EXCLUSIVE)
             .samples(samples)
@@ -150,9 +150,10 @@ impl Image {
         Ok(Arc::new(Self {
             device_manager,
             image_memory,
+            format,
             image,
             image_view,
-            layout: RwLock::new(layout),
+            layout: RwLock::new(vk::ImageLayout::UNDEFINED),
             extent,
             mip_levels,
             anisotropy_texels,
@@ -174,16 +175,10 @@ impl VulkanTexture {
     pub(crate) fn new(
         device_manager: Arc<DeviceManager>,
         command_manager: Arc<CommandManager>,
-        buffer: Arc<BufferManager>,
-        data: [u32; 3],
+        extent: [u32; 2],
         anisotropy_texels: f32,
     ) -> GraphicsResult<Arc<Self>> {
-        let format = match data[2] {
-            1 => vk::Format::R8_SRGB,
-            2 => vk::Format::R8G8_SRGB,
-            3 => vk::Format::R8G8B8_SRGB,
-            _ => vk::Format::R8G8B8A8_SRGB,
-        };
+        let format = vk::Format::R8G8B8A8_SRGB;
 
         let format_properties = unsafe {
             device_manager
@@ -203,8 +198,73 @@ impl VulkanTexture {
 
         let image = Image::new(
             device_manager.clone(),
-            data[0],
-            data[1],
+            extent[0],
+            extent[1],
+            vk::SampleCountFlags::TYPE_1,
+            format,
+            vk::ImageTiling::OPTIMAL,
+            vk::ImageAspectFlags::COLOR,
+            vk::ImageUsageFlags::TRANSFER_SRC
+                | vk::ImageUsageFlags::TRANSFER_DST
+                | vk::ImageUsageFlags::SAMPLED
+                | vk::ImageUsageFlags::COLOR_ATTACHMENT,
+            vk::MemoryPropertyFlags::DEVICE_LOCAL,
+            false,
+            anisotropy_texels,
+        )?;
+
+        let texture = Arc::new(Self { image });
+
+        let command_entry = command_manager
+            .command_entries
+            .get(&CommandType::Transfer)
+            .clone()
+            .unwrap();
+
+        let future = texture.transition_image_layout(
+            command_entry.clone(),
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+        )?;
+
+        let future = future.join(texture.transition_image_layout(
+            command_entry.clone(),
+            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+        )?);
+
+        future.flush(command_entry.queue.clone())?;
+
+        Ok(texture)
+    }
+
+    pub(crate) fn new_staged(
+        device_manager: Arc<DeviceManager>,
+        command_manager: Arc<CommandManager>,
+        buffer: Arc<BufferManager>,
+        extent: [u32; 2],
+        anisotropy_texels: f32,
+    ) -> GraphicsResult<Arc<Self>> {
+        let format = vk::Format::R8G8B8A8_SRGB;
+
+        let format_properties = unsafe {
+            device_manager
+                .instance
+                .get_physical_device_format_properties(device_manager.physical_device, format)
+        };
+
+        if format_properties.optimal_tiling_features
+            & vk::FormatFeatureFlags::SAMPLED_IMAGE_FILTER_LINEAR
+            != vk::FormatFeatureFlags::SAMPLED_IMAGE_FILTER_LINEAR
+        {
+            panic!(
+                "fatal: no suitable device for image linear filtering with format: {:?}",
+                format
+            );
+        }
+
+        let image = Image::new(
+            device_manager.clone(),
+            extent[0],
+            extent[1],
             vk::SampleCountFlags::TYPE_1,
             format,
             vk::ImageTiling::OPTIMAL,
