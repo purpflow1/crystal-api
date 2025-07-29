@@ -15,6 +15,7 @@ pub struct Object {
     pub(crate) mesh_buffer: Option<Arc<MeshBuffer>>,
     pub(crate) sampler: Option<Arc<GpuSamplerSet>>,
     pub(crate) groups: Option<[u32; 3]>,
+    pub(crate) index: u32,
     pub(crate) array: u32,
 }
 
@@ -24,12 +25,13 @@ unsafe impl Send for Object {}
 #[allow(dead_code)]
 impl Object {
     /// Creates compute object
-    pub fn new_compute(pipeline: Arc<dyn Pipeline>, groups: [u32; 3]) -> Arc<Self> {
+    pub fn compute(pipeline: Arc<dyn Pipeline>, groups: [u32; 3]) -> Arc<Self> {
         Arc::new(Self {
             pipeline,
             mesh_buffer: None,
             sampler: None,
             groups: Some(groups),
+            index: 0,
             array: 0,
         })
     }
@@ -45,23 +47,26 @@ impl Object {
             mesh_buffer: None,
             sampler: Some(sampler),
             groups: Some(groups),
-            array: 1,
+            index: 0,
+            array: 0,
         })
     }
 
     /// Creates graphics object with mesh only
-    pub fn with_mesh(pipeline: Arc<dyn Pipeline>, mesh: Arc<MeshBuffer>) -> Arc<Self> {
+    pub fn with_mesh(index: u32, pipeline: Arc<dyn Pipeline>, mesh: Arc<MeshBuffer>) -> Arc<Self> {
         Arc::new(Self {
             pipeline,
             mesh_buffer: Some(mesh),
             sampler: None,
             groups: None,
+            index,
             array: 1,
         })
     }
 
     /// Creates graphics object with mesh and textures
     pub fn with_mesh_sampled(
+        index: u32,
         pipeline: Arc<dyn Pipeline>,
         mesh: Arc<MeshBuffer>,
         sampler: Arc<GpuSamplerSet>,
@@ -71,12 +76,14 @@ impl Object {
             mesh_buffer: Some(mesh),
             sampler: Some(sampler),
             groups: None,
+            index,
             array: 1,
         })
     }
 
     /// Creates array of graphics objects with mesh
     pub fn with_mesh_array(
+        index: u32,
         pipeline: Arc<dyn Pipeline>,
         mesh: Arc<MeshBuffer>,
         array: u32,
@@ -86,12 +93,14 @@ impl Object {
             mesh_buffer: Some(mesh),
             sampler: None,
             groups: None,
+            index,
             array,
         })
     }
 
     /// Creates array of graphics objects with mesh and textures
     pub fn with_mesh_sampled_array(
+        index: u32,
         pipeline: Arc<dyn Pipeline>,
         mesh: Arc<MeshBuffer>,
         sampler: Arc<GpuSamplerSet>,
@@ -102,6 +111,7 @@ impl Object {
             mesh_buffer: Some(mesh),
             sampler: Some(sampler),
             groups: None,
+            index,
             array,
         })
     }

@@ -437,6 +437,7 @@ impl Presentation {
             },
             swapchain.swapchain_image_views.read().unwrap().clone(),
             msaa_samples,
+            true,
         )?;
 
         drop(extent);

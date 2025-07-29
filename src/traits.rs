@@ -13,13 +13,6 @@ use crate::{
 pub trait GraphicsApi: Sync + Send {
     /// Executes all operations permitted with objects passed in this method
     fn dispatch_and_present(&self, objects: &[Arc<Object>]) -> GraphicsResult<()>;
-    /// Executes all operations permitted with objects passed in this method
-    /// for specified render target
-    fn dispatch_render_target(
-        &self,
-        objects: &[Arc<Object>],
-        render_target: Arc<dyn RenderTarget>,
-    ) -> GraphicsResult<()>;
     /// Executes all compute operations permitted with objects passed in this method
     fn dispatch_compute(&self, objects: &[Arc<Object>]) -> GraphicsResult<()>;
 
@@ -54,24 +47,12 @@ pub trait GraphicsApi: Sync + Send {
         layouts: &[Arc<dyn Layout>],
     ) -> GraphicsResult<Arc<GpuSamplerSet>>;
     /// Creates texture from buffers
-    fn create_texture_staged(
+    fn create_texture(
         &self,
         buffer: Arc<dyn Buffer>,
         extent: [u32; 2],
         anisotropy_texels: f32,
     ) -> GraphicsResult<Arc<dyn Texture>>;
-    /// Creates empty texture
-    fn create_texture(
-        &self,
-        extent: [u32; 2],
-        anisotropy_texels: f32,
-    ) -> GraphicsResult<Arc<dyn Texture>>;
-    /// Creates render target from textures
-    fn create_render_target(
-        &self,
-        textures: &[Arc<dyn Texture>],
-        msaa_samples: u8,
-    ) -> GraphicsResult<Arc<dyn RenderTarget>>;
 
     /// Returns the duration of previous frame
     fn get_delta_time(&self) -> std::time::Duration;
@@ -83,6 +64,14 @@ pub trait RenderTarget: Sync + Send {
     fn as_vulkan(self: Arc<Self>) -> Option<Arc<vulkan::VulkanRenderTarget>> {
         None
     }
+
+    /// Creates child render target from textures
+    fn create_render_target(
+        &self,
+        extent: [u32; 2],
+        anisotropy_texels: f32,
+        msaa_samples: u8,
+    ) -> GraphicsResult<(Arc<dyn RenderTarget>, Arc<dyn Texture>)>;
 }
 
 /// Contains resources used to mapping GPU memory in shaders

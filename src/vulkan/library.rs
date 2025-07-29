@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, VecDeque},
     ffi::CStr,
     sync::{Arc, Mutex},
 };
@@ -15,7 +15,6 @@ use super::{
     layout,
     memory::{BufferInfo, BufferManager},
     presentation::Presentation,
-    rendering::VulkanRenderTarget,
     sync::GpuSync,
     validation::get_supported_validation_layers,
 };
@@ -72,190 +71,6 @@ impl Drop for VulkanEntry {
 }
 
 impl traits::GraphicsApi for VulkanEntry {
-    #[allow(unused)]
-    fn dispatch_render_target(
-        &self,
-        objects: &[Arc<Object>],
-        render_target_dyn: Arc<dyn crate::RenderTarget>,
-    ) -> GraphicsResult<()> {
-        unimplemented!("unsafe to use");
-        let graphics = self
-            .command_manager
-            .command_entries
-            .get(&CommandType::Graphics)
-            .unwrap()
-            .clone();
-
-        let compute = self
-            .command_manager
-            .command_entries
-            .get(&CommandType::Compute)
-            .unwrap()
-            .clone();
-
-        let render_target = render_target_dyn.as_vulkan().unwrap();
-
-        let sync = render_target.sync.clone();
-        let graphics_now = graphics.now(sync.clone());
-
-        let present_result = *self.present_result.lock().unwrap();
-
-        let presentation = self.presentation.as_ref().unwrap();
-
-        if present_result.out_of_date {
-            presentation.swapchain.recreate(None)?;
-        }
-
-        if present_result.suboptimal {
-            render_target.update_resources(
-                presentation.swapchain.extent(),
-                presentation
-                    .swapchain
-                    .swapchain_image_views
-                    .read()
-                    .unwrap()
-                    .clone(),
-            )?;
-        }
-
-        sync.lock().unwrap().wait_render().unwrap();
-
-        let mut timer = self.time_state.lock().unwrap();
-        timer.delta_time = timer.timer.elapsed();
-        timer.timer = std::time::Instant::now();
-        drop(timer);
-
-        let compute_now = compute.now(sync.clone());
-
-        let compute_future = compute_now.join(
-            compute
-                .record_command_buffer(sync.clone(), |command_buffer, device, _n_pass| unsafe {
-                    for object in objects {
-                        if object.groups.is_none() {
-                            continue;
-                        }
-
-                        let pipeline = object.pipeline.clone().as_vulkan().unwrap();
-                        let groups = object.groups.unwrap();
-
-                        device.cmd_bind_pipeline(
-                            *command_buffer,
-                            vk::PipelineBindPoint::COMPUTE,
-                            pipeline.handle,
-                        );
-                        device.cmd_bind_descriptor_sets(
-                            *command_buffer,
-                            vk::PipelineBindPoint::COMPUTE,
-                            pipeline.layout.pipeline_layout,
-                            0,
-                            &pipeline.layout.get_descriptor_sets(),
-                            &[],
-                        );
-                        device.cmd_dispatch(*command_buffer, groups[0], groups[1], groups[2]);
-                    }
-                })
-                .unwrap(),
-        );
-
-        let graphics_future = graphics_now.join(graphics.record_command_buffer(
-            sync.clone(),
-            |command_buffer, device, n_pass| {
-                let color = 0.5f32;
-                let mut clear_color = vk::ClearColorValue::default();
-                let clear_depth_stencil =
-                    vk::ClearDepthStencilValue::default().depth(1.).stencil(0);
-                unsafe {
-                    clear_color.float32[0] = color;
-                    clear_color.float32[1] = color;
-                    clear_color.float32[2] = color;
-                    clear_color.float32[3] = 1.0f32
-                };
-                let clear_value_color = vk::ClearValue { color: clear_color };
-                let clear_value_stencil = vk::ClearValue {
-                    depth_stencil: clear_depth_stencil,
-                };
-                let clear_values = &[clear_value_color, clear_value_stencil];
-
-                let render_pass_begin = vk::RenderPassBeginInfo::default()
-                    .render_pass(render_target.render_pass)
-                    .framebuffer(*render_target.framebuffers[n_pass].read().unwrap())
-                    .render_area(vk::Rect2D {
-                        offset: vk::Offset2D::default().x(0).y(0),
-                        extent: vk::Extent2D {
-                            width: render_target
-                                .extent()
-                                .width
-                                .min(presentation.swapchain.extent().width),
-                            height: render_target
-                                .extent()
-                                .height
-                                .min(presentation.swapchain.extent().height),
-                        },
-                    })
-                    .clear_values(clear_values);
-
-                unsafe {
-                    device.cmd_begin_render_pass(
-                        *command_buffer,
-                        &render_pass_begin,
-                        vk::SubpassContents::INLINE,
-                    )
-                }
-
-                let viewport = vk::Viewport::default()
-                    .width(render_target.extent().width as f32)
-                    .height(render_target.extent().height as f32)
-                    .max_depth(1.);
-                let viewports = &[viewport];
-                unsafe { device.cmd_set_viewport(*command_buffer, 0, viewports) }
-                let scissor = vk::Rect2D::default().extent(render_target.extent());
-                let scissors = &[scissor];
-                unsafe { device.cmd_set_scissor(*command_buffer, 0, scissors) }
-
-                let mut layout_objects =
-                    BTreeMap::<u64, (Arc<VulkanLayout>, Vec<Arc<Object>>)>::new();
-
-                objects.iter().for_each(|object| {
-                    if object.groups.is_none() {
-                        let layout = object.pipeline.clone().as_vulkan().unwrap().layout.clone();
-
-                        let raw = object
-                            .pipeline
-                            .clone()
-                            .as_vulkan()
-                            .unwrap()
-                            .layout
-                            .pipeline_layout
-                            .as_raw();
-
-                        match layout_objects.get_mut(&raw) {
-                            Some((_, objects)) => {
-                                objects.push(object.clone());
-                            }
-                            None => {
-                                layout_objects.insert(raw, (layout, vec![object.clone()]));
-                            }
-                        }
-                    }
-                });
-
-                for (_, (layout, objects)) in layout_objects {
-                    layout.render(&objects, command_buffer).unwrap();
-                }
-
-                unsafe { device.cmd_end_render_pass(*command_buffer) }
-            },
-        )?);
-
-        compute.queue.wait_idle().unwrap();
-
-        compute_future.flush(compute.queue.clone()).unwrap();
-
-        graphics_future.flush(graphics.queue.clone())?;
-
-        Ok(())
-    }
-
     fn dispatch_and_present(&self, objects: &[Arc<Object>]) -> GraphicsResult<()> {
         let graphics = self
             .command_manager
@@ -272,9 +87,9 @@ impl traits::GraphicsApi for VulkanEntry {
             .clone();
 
         let render_target_dyn = self.get_presentation_render_target();
-        let render_target = render_target_dyn.unwrap().as_vulkan().unwrap();
+        let render_target_root = render_target_dyn.unwrap().as_vulkan().unwrap();
 
-        let sync = render_target.sync.clone();
+        let sync = render_target_root.sync.clone();
         let graphics_now = graphics.now(sync.clone());
 
         let present_result = *self.present_result.lock().unwrap();
@@ -286,7 +101,7 @@ impl traits::GraphicsApi for VulkanEntry {
         }
 
         if present_result.suboptimal {
-            render_target.update_resources(
+            render_target_root.update_resources(
                 presentation.swapchain.extent(),
                 presentation
                     .swapchain
@@ -307,7 +122,7 @@ impl traits::GraphicsApi for VulkanEntry {
         match graphics_now.acquire_next_image(&presentation) {
             Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
                 presentation.swapchain.recreate(None)?;
-                render_target.update_resources(
+                render_target_root.update_resources(
                     presentation.swapchain.extent(),
                     presentation
                         .swapchain
@@ -357,7 +172,145 @@ impl traits::GraphicsApi for VulkanEntry {
                 .unwrap(),
         );
 
-        let graphics_future = graphics_now.join(graphics.record_command_buffer(
+        const DEEP: usize = 16;
+        const WIDE: usize = 32;
+
+        let mut render_targets_levels = VecDeque::with_capacity(DEEP);
+        let mut currents = Vec::with_capacity(WIDE);
+
+        currents.push(render_target_root.clone());
+
+        for _level in 0..16 {
+            let mut render_targets = Vec::with_capacity(WIDE);
+            let c = currents.clone();
+            currents.clear();
+
+            for current in c {
+                render_targets.push(current.clone());
+                let children = current.children.lock().unwrap();
+                for child in &*children {
+                    currents.push(child.clone());
+                }
+            }
+
+            render_targets_levels.push_front(render_targets);
+        }
+
+        compute.queue.wait_idle().unwrap();
+        compute_future
+            .flush_transfer(compute.queue.clone())
+            .unwrap();
+
+        for render_targets in render_targets_levels {
+            for render_target in render_targets {
+                let graphics = &render_target.command_entry;
+
+                let graphics_future = graphics.record_command_buffer(
+                    render_target.sync.clone(),
+                    |command_buffer, device, _n_pass| {
+                        let color = 0.1f32;
+                        let mut clear_color = vk::ClearColorValue::default();
+                        let clear_depth_stencil =
+                            vk::ClearDepthStencilValue::default().depth(1.).stencil(0);
+                        unsafe {
+                            clear_color.float32[0] = color;
+                            clear_color.float32[1] = color;
+                            clear_color.float32[2] = color;
+                            clear_color.float32[3] = 1.0f32
+                        };
+                        let clear_value_color = vk::ClearValue { color: clear_color };
+                        let clear_value_stencil = vk::ClearValue {
+                            depth_stencil: clear_depth_stencil,
+                        };
+                        let clear_values = &[clear_value_color, clear_value_stencil];
+
+                        let render_pass_begin = vk::RenderPassBeginInfo::default()
+                            .render_pass(render_target.render_pass)
+                            .framebuffer(*render_target.framebuffers[0].read().unwrap())
+                            .render_area(vk::Rect2D {
+                                offset: vk::Offset2D::default().x(0).y(0),
+                                extent: vk::Extent2D {
+                                    width: render_target
+                                        .extent()
+                                        .width
+                                        .min(presentation.swapchain.extent().width),
+                                    height: render_target
+                                        .extent()
+                                        .height
+                                        .min(presentation.swapchain.extent().height),
+                                },
+                            })
+                            .clear_values(clear_values);
+
+                        unsafe {
+                            device.cmd_begin_render_pass(
+                                *command_buffer,
+                                &render_pass_begin,
+                                vk::SubpassContents::INLINE,
+                            )
+                        }
+
+                        let viewport = vk::Viewport::default()
+                            .width(render_target.extent().width as f32)
+                            .height(render_target.extent().height as f32)
+                            .max_depth(1.);
+                        let viewports = &[viewport];
+                        unsafe { device.cmd_set_viewport(*command_buffer, 0, viewports) }
+                        let scissor = vk::Rect2D::default().extent(render_target.extent());
+                        let scissors = &[scissor];
+                        unsafe { device.cmd_set_scissor(*command_buffer, 0, scissors) }
+
+                        let mut layout_objects =
+                            BTreeMap::<u64, (Arc<VulkanLayout>, Vec<Arc<Object>>)>::new();
+
+                        objects.iter().for_each(|object| {
+                            let raw = object
+                                .pipeline
+                                .clone()
+                                .as_vulkan()
+                                .unwrap()
+                                .layout
+                                .pipeline_layout
+                                .as_raw();
+
+                            if object.groups.is_none()
+                                && let Some(obj_render_target) = object
+                                    .pipeline
+                                    .clone()
+                                    .as_vulkan()
+                                    .unwrap()
+                                    .render_target
+                                    .clone()
+                                && obj_render_target.render_pass.as_raw()
+                                    == render_target.render_pass.as_raw()
+                            {
+                                let layout =
+                                    object.pipeline.clone().as_vulkan().unwrap().layout.clone();
+
+                                match layout_objects.get_mut(&raw) {
+                                    Some((_, objects)) => {
+                                        objects.push(object.clone());
+                                    }
+                                    None => {
+                                        layout_objects.insert(raw, (layout, vec![object.clone()]));
+                                    }
+                                }
+                            }
+                        });
+
+                        layout_objects.iter().for_each(|(_, (layout, objects))| {
+                            layout.render(&objects, command_buffer).unwrap()
+                        });
+
+                        unsafe { device.cmd_end_render_pass(*command_buffer) }
+                    },
+                )?;
+
+                graphics_future.flush_graphics(graphics.queue.clone())?;
+            }
+        }
+
+        let present_future = graphics_now.join(graphics.record_command_buffer(
             sync.clone(),
             |command_buffer, device, n_pass| {
                 let color = 0.5f32;
@@ -377,16 +330,16 @@ impl traits::GraphicsApi for VulkanEntry {
                 let clear_values = &[clear_value_color, clear_value_stencil];
 
                 let render_pass_begin = vk::RenderPassBeginInfo::default()
-                    .render_pass(render_target.render_pass)
-                    .framebuffer(*render_target.framebuffers[n_pass].read().unwrap())
+                    .render_pass(render_target_root.render_pass)
+                    .framebuffer(*render_target_root.framebuffers[n_pass].read().unwrap())
                     .render_area(vk::Rect2D {
                         offset: vk::Offset2D::default().x(0).y(0),
                         extent: vk::Extent2D {
-                            width: render_target
+                            width: render_target_root
                                 .extent()
                                 .width
                                 .min(presentation.swapchain.extent().width),
-                            height: render_target
+                            height: render_target_root
                                 .extent()
                                 .height
                                 .min(presentation.swapchain.extent().height),
@@ -403,12 +356,12 @@ impl traits::GraphicsApi for VulkanEntry {
                 }
 
                 let viewport = vk::Viewport::default()
-                    .width(render_target.extent().width as f32)
-                    .height(render_target.extent().height as f32)
+                    .width(render_target_root.extent().width as f32)
+                    .height(render_target_root.extent().height as f32)
                     .max_depth(1.);
                 let viewports = &[viewport];
                 unsafe { device.cmd_set_viewport(*command_buffer, 0, viewports) }
-                let scissor = vk::Rect2D::default().extent(render_target.extent());
+                let scissor = vk::Rect2D::default().extent(render_target_root.extent());
                 let scissors = &[scissor];
                 unsafe { device.cmd_set_scissor(*command_buffer, 0, scissors) }
 
@@ -416,7 +369,17 @@ impl traits::GraphicsApi for VulkanEntry {
                     BTreeMap::<u64, (Arc<VulkanLayout>, Vec<Arc<Object>>)>::new();
 
                 objects.iter().for_each(|object| {
-                    if object.groups.is_none() {
+                    if object.groups.is_none()
+                        && let Some(obj_render_target) = object
+                            .pipeline
+                            .clone()
+                            .as_vulkan()
+                            .unwrap()
+                            .render_target
+                            .clone()
+                        && obj_render_target.render_pass.as_raw()
+                            == render_target_root.render_pass.as_raw()
+                    {
                         let layout = object.pipeline.clone().as_vulkan().unwrap().layout.clone();
 
                         let raw = object
@@ -439,18 +402,26 @@ impl traits::GraphicsApi for VulkanEntry {
                     }
                 });
 
-                for (_, (layout, objects)) in layout_objects {
-                    layout.render(&objects, command_buffer).unwrap();
-                }
+                layout_objects.iter().for_each(|(_, (layout, objects))| {
+                    layout.render(&objects, command_buffer).unwrap()
+                });
 
                 unsafe { device.cmd_end_render_pass(*command_buffer) }
             },
         )?);
 
-        compute.queue.wait_idle().unwrap();
-        compute_future.flush(compute.queue.clone()).unwrap();
+        let mut layouts = BTreeMap::<u64, Arc<VulkanLayout>>::new();
 
-        let result = graphics_future
+        objects.iter().for_each(|object| {
+            let layout = object.pipeline.clone().as_vulkan().unwrap().layout.clone();
+            layouts.insert(layout.pipeline_layout.as_raw(), layout);
+        });
+
+        layouts.values().for_each(|layout| {
+            layout.update_dynamic_data().unwrap();
+        });
+
+        let result = present_future
             .swapchain_present_and_flush(graphics.queue.clone(), presentation.clone());
 
         let mut result_lock = self.present_result.lock().unwrap();
@@ -498,7 +469,7 @@ impl traits::GraphicsApi for VulkanEntry {
                 .unwrap(),
         );
 
-        future.flush(compute.queue.clone()).unwrap();
+        future.flush_transfer(compute.queue.clone()).unwrap();
         compute.queue.wait_idle().unwrap();
 
         Ok(())
@@ -538,33 +509,6 @@ impl traits::GraphicsApi for VulkanEntry {
         } else {
             None
         }
-    }
-
-    #[allow(unused)]
-    fn create_render_target(
-        &self,
-        textures: &[Arc<dyn Texture>],
-        msaa_samples: u8,
-    ) -> GraphicsResult<Arc<dyn crate::RenderTarget>> {
-        unimplemented!("unsafe to use now");
-
-        let images: Vec<_> = textures
-            .iter()
-            .map(|tex| tex.clone().as_vulkan().unwrap().image.clone())
-            .collect();
-
-        let extent = vk::Extent2D {
-            width: images[0].extent.width,
-            height: images[0].extent.height,
-        };
-
-        Ok(VulkanRenderTarget::new(
-            self.device_manager.clone(),
-            images[0].format,
-            extent,
-            images.iter().map(|img| img.image_view).collect(),
-            msaa_samples,
-        )?)
     }
 
     fn create_layout(
@@ -712,25 +656,6 @@ impl traits::GraphicsApi for VulkanEntry {
     }
 
     fn create_texture(
-        &self,
-        extent: [u32; 2],
-        anisotropy_texels: f32,
-    ) -> GraphicsResult<Arc<dyn Texture>> {
-        log!(
-            "creating texture [ width = {}, height = {} ]",
-            extent[0],
-            extent[1],
-        );
-
-        Ok(VulkanTexture::new(
-            self.device_manager.clone(),
-            self.command_manager.clone(),
-            extent,
-            anisotropy_texels,
-        )?)
-    }
-
-    fn create_texture_staged(
         &self,
         buffer: Arc<dyn Buffer>,
         extent: [u32; 2],

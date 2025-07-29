@@ -79,7 +79,7 @@ fn main() -> GraphicsResult<()> {
     let shader = Shader::from_bytes(binary_result.as_binary_u8(), ShaderStage::Compute)?;
     let pipeline = layout.create_compute_pipeline(&shader)?;
 
-    let object = Object::new_compute(pipeline, [PARTICLE_NUM as u32 / 256, 1, 1]);
+    let object = Object::compute(pipeline, [PARTICLE_NUM as u32 / 256, 1, 1]);
 
     buffer_uniform
         .get_memory_full()

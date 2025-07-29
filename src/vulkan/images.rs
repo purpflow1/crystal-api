@@ -174,7 +174,6 @@ impl traits::Texture for VulkanTexture {
 impl VulkanTexture {
     pub(crate) fn new(
         device_manager: Arc<DeviceManager>,
-        command_manager: Arc<CommandManager>,
         extent: [u32; 2],
         anisotropy_texels: f32,
     ) -> GraphicsResult<Arc<Self>> {
@@ -215,11 +214,15 @@ impl VulkanTexture {
 
         let texture = Arc::new(Self { image });
 
-        let command_entry = command_manager
-            .command_entries
-            .get(&CommandType::Transfer)
-            .clone()
-            .unwrap();
+        let command_entry = if let Some(queue) = device_manager
+            .queues
+            .iter()
+            .find(|queue| queue.flags.intersects(vk::QueueFlags::TRANSFER))
+        {
+            CommandEntry::new(device_manager.clone(), queue.clone(), 0)?
+        } else {
+            panic!("fatal: no transfer queue family")
+        };
 
         let future = texture.transition_image_layout(
             command_entry.clone(),
@@ -231,7 +234,7 @@ impl VulkanTexture {
             vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
         )?);
 
-        future.flush(command_entry.queue.clone())?;
+        future.flush_transfer(command_entry.queue.clone())?;
 
         Ok(texture)
     }
@@ -302,7 +305,7 @@ impl VulkanTexture {
         let future = future.join(self.stage_image(buffer, command_entry.clone())?);
         let future = future.join(self.generate_mipmaps(command_entry.clone())?);
 
-        future.flush(command_entry.queue.clone())?;
+        future.flush_transfer(command_entry.queue.clone())?;
 
         Ok(())
     }

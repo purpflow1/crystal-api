@@ -22,8 +22,7 @@ use winit::{
     window::Window,
 };
 
-const OBJECT_DIMENTION: usize = 2;
-const DISTANCE: f32 = 2.;
+const DISTANCE: f32 = 5.;
 
 struct State {
     delta_time_sum: Duration,
@@ -75,7 +74,7 @@ impl Context {
         let width = settings.width;
         let height = settings.height;
 
-        const DISTANCE_FROM_OBJECTS: f32 = (DISTANCE + 1.) * OBJECT_DIMENTION as f32;
+        const DISTANCE_FROM_OBJECTS: f32 = DISTANCE + 1.;
 
         Ok(Self {
             window: None,
@@ -138,7 +137,7 @@ impl ApplicationHandler for Context {
         let graphics = init_api_instance_with_presentation(&self.settings, &window)
             .expect("cannot create entry");
 
-        println!("compiling GLSL shader...");
+        println!("compiling GLSL shaders...");
         let file_name1 = "examples/render-target/shaders/desc.vert";
         let file_name2 = "examples/render-target/shaders/desc.frag";
         let file_name3 = "examples/render-target/shaders/textured.frag";
@@ -195,32 +194,26 @@ impl ApplicationHandler for Context {
 
         let render_target = graphics.get_presentation_render_target().unwrap();
 
-        let render_target_texture = graphics.create_texture([1000, 1000], 1.0).unwrap();
-        let render_target_cube = graphics
-            .create_render_target(&[render_target_texture.clone()], 4)
+        let (render_target_cube, texture_render) = render_target
+            .create_render_target([1024, 1024], 1., 2)
             .unwrap();
 
-        let layout_obj = graphics.create_layout(true, 1, 1, 1, 3).unwrap();
+        let layout = graphics.create_layout(true, 1, 1, 1, 1).unwrap();
 
         let uniform = graphics
             .create_buffer(size_of::<Uniform>() as u64, true, false, true)
             .unwrap();
         let transform = graphics
-            .create_buffer(
-                (size_of::<glam::Mat4>() * OBJECT_DIMENTION.pow(3)) as u64,
-                false,
-                false,
-                true,
-            )
+            .create_buffer(size_of::<glam::Mat4>() as u64 * 2, false, false, true)
             .unwrap();
 
-        layout_obj.add_buffer(0, uniform.clone()).unwrap();
-        layout_obj.add_buffer(0, transform.clone()).unwrap();
+        layout.add_buffer(0, uniform.clone()).unwrap();
+        layout.add_buffer(0, transform.clone()).unwrap();
 
         self.scene.uniform = Some(uniform);
         self.scene.transforms = Some(transform);
 
-        let pipeline_render = layout_obj
+        let pipeline_render = layout
             .clone()
             .create_graphics_pipeline(
                 render_target_cube.clone(),
@@ -229,7 +222,7 @@ impl ApplicationHandler for Context {
             )
             .unwrap();
 
-        let pipeline_textured = layout_obj
+        let pipeline_textured = layout
             .clone()
             .create_graphics_pipeline(
                 render_target.clone(),
@@ -255,17 +248,18 @@ impl ApplicationHandler for Context {
         let mishka_mesh_buffer = graphics.create_buffer_mesh(mishka_mesh).unwrap();
         let cube_mesh_buffer = graphics.create_buffer_mesh(cube_mesh).unwrap();
 
-        let mishka_object = Object::with_mesh(pipeline_render.clone(), mishka_mesh_buffer.clone());
+        let mishka_object =
+            Object::with_mesh(1, pipeline_render.clone(), mishka_mesh_buffer.clone());
 
         let texture_sampler = graphics
-            .create_sampler_set(&[(0, render_target_texture)], &[layout_obj])
+            .create_sampler_set(&[(0, texture_render)], &[layout])
             .unwrap();
 
-        let cube_object = Object::with_mesh_sampled_array(
+        let cube_object = Object::with_mesh_sampled(
+            0,
             pipeline_textured.clone(),
             cube_mesh_buffer.clone(),
             texture_sampler,
-            OBJECT_DIMENTION.pow(3) as u32,
         );
 
         self.scene.objects.push(cube_object.clone());
@@ -279,26 +273,6 @@ impl ApplicationHandler for Context {
     }
 
     fn about_to_wait(&mut self, _event_loop: &winit::event_loop::ActiveEventLoop) {
-        let rotation_matrix = glam::Quat::from_mat4(&glam::Mat4::from_rotation_y(
-            PI * 2. * self.state.delta_time_sum.as_secs_f32(),
-        ));
-
-        let mut transforms = Vec::with_capacity(OBJECT_DIMENTION.pow(3));
-
-        (1..=OBJECT_DIMENTION).for_each(|i| {
-            (1..=OBJECT_DIMENTION).for_each(|j| {
-                (1..=OBJECT_DIMENTION).for_each(|k| {
-                    let transform = glam::Mat4::from_scale_rotation_translation(
-                        glam::Vec3::new(1., 1., 1.),
-                        rotation_matrix,
-                        glam::Vec3::new(i as f32, j as f32, k as f32) * DISTANCE,
-                    );
-
-                    transforms.push(transform);
-                })
-            })
-        });
-
         let ubo = Uniform {
             eye: self.scene.camera.calc_eye_matrix(),
             time: self.state.startup.elapsed().as_secs_f32(),
@@ -310,6 +284,20 @@ impl ApplicationHandler for Context {
             .unwrap()
             .get_memory_full()
             .copy_from_slice(vec![ubo].as_bytes());
+
+        let transforms = vec![
+            glam::Mat4::from_scale_rotation_translation(
+                glam::Vec3::ONE,
+                glam::Quat::from_rotation_y(PI / 2. * self.state.delta_time_sum.as_secs_f32()),
+                glam::Vec3::ZERO,
+            ),
+            glam::Mat4::from_scale_rotation_translation(
+                glam::Vec3::from_array([0.5; 3]),
+                glam::Quat::from_rotation_y(PI * 2. * self.state.delta_time_sum.as_secs_f32()),
+                glam::Vec3::ZERO,
+            ),
+        ];
+
         self.scene
             .transforms
             .as_ref()
@@ -325,16 +313,7 @@ impl ApplicationHandler for Context {
         self.graphics
             .as_ref()
             .unwrap()
-            .dispatch_render_target(
-                &[self.scene.objects[1].clone()],
-                self.render_target_cube.clone().unwrap(),
-            )
-            .unwrap();
-
-        self.graphics
-            .as_ref()
-            .unwrap()
-            .dispatch_and_present(&[self.scene.objects[0].clone()])
+            .dispatch_and_present(&self.scene.objects)
             .unwrap();
     }
 

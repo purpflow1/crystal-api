@@ -81,7 +81,54 @@ impl GpuFuture {
         Ok(())
     }
 
-    pub(crate) fn flush(self: Box<Self>, queue: Arc<Queue>) -> GraphicsResult<Box<Self>> {
+    pub(crate) fn flush_graphics(self: Box<Self>, queue: Arc<Queue>) -> GraphicsResult<Box<Self>> {
+        let mut command_buffer_lock = self.command_buffers.lock().unwrap();
+        let sync_lock = self.sync.lock().unwrap();
+
+        let command_buffers: Vec<vk::CommandBuffer> = (*command_buffer_lock)
+            .iter()
+            .map(|buffer| buffer.handler)
+            .collect();
+        let mut fence = vk::Fence::null();
+
+        if !sync_lock.is_sync() {
+            match unsafe {
+                queue
+                    .device
+                    .create_fence(&vk::FenceCreateInfo::default(), None)
+            } {
+                Ok(f) => fence = f,
+                Err(e) => {
+                    log!("failed to create one time fence: {:?}", e);
+                    return Err(GraphicsError::SyncError);
+                }
+            };
+        }
+
+        let submit_info = vk::SubmitInfo::default().command_buffers(&command_buffers);
+
+        queue.submit(&[submit_info], fence).unwrap();
+
+        if !fence.is_null() {
+            unsafe {
+                queue
+                    .device
+                    .wait_for_fences(&[fence], true, u64::MAX)
+                    .unwrap();
+
+                queue.device.destroy_fence(fence, None);
+            };
+        }
+
+        drop(command_buffers);
+        command_buffer_lock.clear();
+        drop(command_buffer_lock);
+        drop(sync_lock);
+
+        Ok(self)
+    }
+
+    pub(crate) fn flush_transfer(self: Box<Self>, queue: Arc<Queue>) -> GraphicsResult<Box<Self>> {
         let mut command_buffer_lock = self.command_buffers.lock().unwrap();
         let sync_lock = self.sync.lock().unwrap();
 
@@ -328,25 +375,29 @@ impl CommandEntry {
         GpuFuture::buffers(sync, vec![])
     }
 
-    fn new(
+    pub(crate) fn new(
         device_manager: Arc<DeviceManager>,
         queue: Arc<Queue>,
         buffer_count: u32,
-    ) -> GraphicsResult<Self> {
+    ) -> GraphicsResult<Arc<Self>> {
         let command_pool = CommandPool::new(device_manager.clone(), queue.clone())?;
 
-        let command_buffers = CommandBuffer::new(
-            command_pool.clone(),
-            buffer_count,
-            vk::CommandBufferLevel::PRIMARY,
-        )?;
+        let command_buffers = if buffer_count != 0 {
+            CommandBuffer::new(
+                command_pool.clone(),
+                buffer_count,
+                vk::CommandBufferLevel::PRIMARY,
+            )?
+        } else {
+            Vec::with_capacity(0)
+        };
 
-        Ok(Self {
+        Ok(Arc::new(Self {
             device_manager,
             command_pool,
             command_buffers,
             queue,
-        })
+        }))
     }
 
     pub(crate) fn wait(&self) -> GraphicsResult<()> {
@@ -507,11 +558,7 @@ impl CommandManager {
         {
             command_entries.insert(
                 CommandType::Graphics,
-                Arc::new(CommandEntry::new(
-                    device_manager.clone(),
-                    queue.clone(),
-                    buffer_count,
-                )?),
+                CommandEntry::new(device_manager.clone(), queue.clone(), buffer_count)?,
             );
         }
 
@@ -522,11 +569,7 @@ impl CommandManager {
         {
             command_entries.insert(
                 CommandType::Transfer,
-                Arc::new(CommandEntry::new(
-                    device_manager.clone(),
-                    queue.clone(),
-                    buffer_count,
-                )?),
+                CommandEntry::new(device_manager.clone(), queue.clone(), buffer_count)?,
             );
         }
 
@@ -537,11 +580,7 @@ impl CommandManager {
         {
             command_entries.insert(
                 CommandType::Compute,
-                Arc::new(CommandEntry::new(
-                    device_manager.clone(),
-                    queue.clone(),
-                    buffer_count,
-                )?),
+                CommandEntry::new(device_manager.clone(), queue.clone(), buffer_count)?,
             );
         }
 

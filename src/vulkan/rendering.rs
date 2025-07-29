@@ -1,4 +1,5 @@
 use std::{
+    collections::VecDeque,
     iter::zip,
     sync::{Arc, Mutex, RwLock},
 };
@@ -6,9 +7,11 @@ use std::{
 use ash::vk;
 
 use crate::{
+    Texture,
     debug::log,
     errors::{GraphicsError, GraphicsResult},
     traits,
+    vulkan::{VulkanTexture, commands::CommandEntry},
 };
 
 use super::{
@@ -20,6 +23,7 @@ use super::{
 
 pub struct VulkanRenderTarget {
     device_manager: Arc<DeviceManager>,
+    pub(crate) command_entry: Arc<CommandEntry>,
     pub extent: RwLock<vk::Extent2D>,
     pub render_pass: vk::RenderPass,
 
@@ -31,6 +35,7 @@ pub struct VulkanRenderTarget {
     image_format: vk::Format,
 
     pub sync: Arc<Mutex<GpuSync>>,
+    pub children: Mutex<VecDeque<Arc<VulkanRenderTarget>>>,
 }
 
 impl Drop for VulkanRenderTarget {
@@ -48,6 +53,36 @@ impl Drop for VulkanRenderTarget {
 impl traits::RenderTarget for VulkanRenderTarget {
     fn as_vulkan(self: Arc<Self>) -> Option<Arc<super::VulkanRenderTarget>> {
         Some(self)
+    }
+
+    fn create_render_target(
+        &self,
+        extent: [u32; 2],
+        anisotropy_texels: f32,
+        msaa_samples: u8,
+    ) -> GraphicsResult<(Arc<dyn traits::RenderTarget>, Arc<dyn Texture>)> {
+        let texture = VulkanTexture::new(self.device_manager.clone(), extent, anisotropy_texels)?;
+
+        let extent = vk::Extent2D {
+            width: extent[0],
+            height: extent[1],
+        };
+
+        let render_target = VulkanRenderTarget::new(
+            self.device_manager.clone(),
+            texture.image.format,
+            extent,
+            vec![texture.image.image_view],
+            msaa_samples,
+            false,
+        )?;
+
+        self.children
+            .lock()
+            .unwrap()
+            .push_back(render_target.clone());
+
+        Ok((render_target, texture))
     }
 }
 
@@ -161,7 +196,18 @@ impl VulkanRenderTarget {
         extent: vk::Extent2D,
         images: Vec<vk::ImageView>,
         msaa_samples: u8,
+        present: bool,
     ) -> GraphicsResult<Arc<Self>> {
+        let command_entry = if let Some(queue) = device_manager
+            .queues
+            .iter()
+            .find(|queue| queue.flags.intersects(vk::QueueFlags::GRAPHICS))
+        {
+            CommandEntry::new(device_manager.clone(), queue.clone(), images.len() as u32)?
+        } else {
+            panic!("fatal: no graphics queue family!");
+        };
+
         let counts = device_manager
             .device_properties
             .limits
@@ -189,6 +235,11 @@ impl VulkanRenderTarget {
         };
 
         let initial_layout = vk::ImageLayout::UNDEFINED;
+        let final_layout = if present {
+            vk::ImageLayout::PRESENT_SRC_KHR
+        } else {
+            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL
+        };
 
         let color_attachment = vk::AttachmentDescription::default()
             .format(image_format)
@@ -201,7 +252,7 @@ impl VulkanRenderTarget {
             .final_layout(if samples != vk::SampleCountFlags::TYPE_1 {
                 vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL
             } else {
-                vk::ImageLayout::PRESENT_SRC_KHR
+                final_layout
             });
 
         let depth_attachment = vk::AttachmentDescription::default()
@@ -226,7 +277,7 @@ impl VulkanRenderTarget {
             .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
             .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
             .initial_layout(initial_layout)
-            .final_layout(vk::ImageLayout::PRESENT_SRC_KHR);
+            .final_layout(final_layout);
 
         let mut attachments = vec![color_attachment, depth_attachment];
 
@@ -320,6 +371,7 @@ impl VulkanRenderTarget {
 
         Ok(Arc::new(Self {
             device_manager,
+            command_entry,
             extent: RwLock::new(extent),
             render_pass,
             framebuffers: framebuffers
@@ -334,6 +386,7 @@ impl VulkanRenderTarget {
             image_format,
 
             sync,
+            children: Mutex::new(VecDeque::with_capacity(16)),
         }))
     }
 }

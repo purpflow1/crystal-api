@@ -1,4 +1,3 @@
-
 #version 460
 
 layout(location = 0) in vec3 fragPos;
@@ -17,5 +16,6 @@ layout(set = 2, binding = 0) uniform sampler2D color_sampler;
 
 void main() {
     vec4 texture_color = texture(color_sampler, UV);
+    texture_color.w = 1;
     outColor = texture_color;
 }

@@ -227,7 +227,7 @@ impl ApplicationHandler for Context {
             let info = reader.next_frame(buffer.get_memory(0..size)).unwrap();
 
             let texture = graphics
-                .create_texture_staged(buffer, [info.width, info.height], 1.0)
+                .create_texture(buffer, [info.width, info.height], 1.0)
                 .unwrap();
             graphics
                 .create_sampler_set(&[(0, texture)], &[layout_obj.clone()])
@@ -247,7 +247,7 @@ impl ApplicationHandler for Context {
             let info = reader.next_frame(buffer.get_memory(0..size)).unwrap();
 
             let texture = graphics
-                .create_texture_staged(buffer, [info.width, info.height], 1.0)
+                .create_texture(buffer, [info.width, info.height], 1.0)
                 .unwrap();
             graphics
                 .create_sampler_set(&[(0, texture)], &[layout_obj.clone()])
@@ -333,6 +333,7 @@ impl ApplicationHandler for Context {
         let mesh_buffer = graphics.create_buffer_mesh(mesh).unwrap();
 
         let object = Object::with_mesh_sampled_array(
+            0,
             pipeline_render.clone(),
             mesh_buffer.clone(),
             default_sampler.clone(),

@@ -1,7 +1,7 @@
 # Crystal API
 **Crystal API**  is a unified graphics wrapper for graphics API. Currently in WIP stage.
 
-## Features:
+## Features
 - Vulkan API support
 - Synchronized in-frame and out-of-frame compute operations
 - Direct buffer access (no staging in buffer operations)

@@ -322,6 +322,10 @@ impl traits::Layout for VulkanLayout {
 }
 
 impl VulkanLayout {
+    pub(crate) fn update_dynamic_data(&self) -> GraphicsResult<usize> {
+        self.dynamic_data.lock().unwrap().update_data()
+    }
+
     pub(crate) fn new(
         device_manager: Arc<DeviceManager>,
         texture_num: usize,
@@ -578,7 +582,7 @@ impl VulkanLayout {
         objects: &[Arc<Object>],
         command_buffer: &vk::CommandBuffer,
     ) -> GraphicsResult<()> {
-        let mut dynamic_data = self.dynamic_data.lock().unwrap();
+        let dynamic_data = self.dynamic_data.lock().unwrap();
         let device_manager = dynamic_data.device_manager.clone();
 
         unsafe {
@@ -594,8 +598,6 @@ impl VulkanLayout {
                 &[],
             )
         }
-
-        let mut current_object_idx = 0u32;
 
         for object in objects.iter() {
             if let Some(sampler) = &object.sampler {
@@ -669,14 +671,10 @@ impl VulkanLayout {
                     instance_count,
                     0 as u32,
                     0 as i32,
-                    current_object_idx as u32,
+                    object.index,
                 )
             }
-
-            current_object_idx += instance_count;
         }
-
-        dynamic_data.update_data().unwrap();
 
         Ok(())
     }
@@ -714,6 +712,7 @@ impl ShaderStageInfo {
 pub struct VulkanPipeline {
     device_manager: Arc<DeviceManager>,
     pub(crate) layout: Arc<VulkanLayout>,
+    pub(crate) render_target: Option<Arc<VulkanRenderTarget>>,
     pub handle: vk::Pipeline,
 }
 
@@ -795,6 +794,7 @@ impl VulkanPipeline {
             device_manager,
             layout,
             handle: pipeline,
+            render_target: None,
         }))
     }
 
@@ -962,6 +962,7 @@ impl VulkanPipeline {
                 device_manager,
                 layout,
                 handle: pipeline[0],
+                render_target: Some(render_target),
             })),
             Err(es) => {
                 log!("cannot create graphics pipeline: {}", es.1);
