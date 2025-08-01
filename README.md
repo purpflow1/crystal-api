@@ -5,12 +5,11 @@
 - Vulkan API support
 - Synchronized in-frame and out-of-frame compute operations
 - Direct buffer access (no staging in buffer operations)
-- Multithreaded access to resource
+- Multithreaded access to resources
 - Unified app architecture
 
 ## Goals
 - Adding **Metal API** support
-- Adding **DirectX** support
 - Adding raytracing support
 
 ---
