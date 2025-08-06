@@ -383,10 +383,16 @@ fn create_logical_device(
     let mut rt_pipeline_feature =
         vk::PhysicalDeviceRayTracingPipelineFeaturesKHR::default().ray_tracing_pipeline(true);
 
+    let portability = if cfg!(target_os = "macos") {
+        vec![vk::KHR_PORTABILITY_SUBSET_NAME.as_ptr()]
+    } else {
+        Vec::with_capacity(0)
+    };
+
     let extension_names: Vec<_> = extensions
         .iter()
         .map(|ext| ext.as_ptr())
-        .chain([vk::KHR_PORTABILITY_SUBSET_NAME.as_ptr()].into_iter())
+        .chain(portability.into_iter())
         .collect();
 
     let device_create_info = vk::DeviceCreateInfo::default()
