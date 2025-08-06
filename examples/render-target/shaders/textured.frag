@@ -15,7 +15,7 @@ layout(set = 0, binding = 0) uniform UniformBufferObject {
 layout(set = 2, binding = 0) uniform sampler2D color_sampler;
 
 void main() {
-    vec4 texture_color = texture(color_sampler, UV);
+    vec4 texture_color = texture(color_sampler, UV) / 2;
     texture_color.w = 1;
     outColor = texture_color;
 }
