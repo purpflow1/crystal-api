@@ -8,7 +8,6 @@ use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
 use super::{
     commands::{CommandManager, CommandType, PresentResult},
-    debug_callback::DebugUtilsMessanger,
     devices::DeviceManager,
     images::VulkanTexture,
     layout,
@@ -34,7 +33,7 @@ pub(crate) struct TimeState {
 
 pub(crate) struct VulkanEntry {
     command_manager: Arc<CommandManager>,
-    _debug_utils_messanger: Option<DebugUtilsMessanger>,
+    _debug_utils_messanger: Option<debug_callback::DebugUtilsMessanger>,
     device_manager: Arc<DeviceManager>,
 
     presentation: Option<Arc<Presentation>>,
