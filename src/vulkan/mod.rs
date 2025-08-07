@@ -1,4 +1,5 @@
 mod commands;
+#[cfg(debug_assertions)]
 mod debug_callback;
 mod depth;
 mod devices;

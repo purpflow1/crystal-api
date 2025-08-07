@@ -1,6 +1,5 @@
 use std::{
     collections::{BTreeMap, VecDeque},
-    ffi::CStr,
     sync::{Arc, Mutex},
 };
 
@@ -9,14 +8,13 @@ use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
 use super::{
     commands::{CommandManager, CommandType, PresentResult},
-    debug_callback::{DebugUtilsMessanger, create_debug_utils_messanger},
+    debug_callback::DebugUtilsMessanger,
     devices::DeviceManager,
     images::VulkanTexture,
     layout,
     memory::{BufferInfo, BufferManager},
     presentation::Presentation,
     sync::GpuSync,
-    validation::get_supported_validation_layers,
 };
 
 use crate::{
@@ -500,6 +498,16 @@ impl traits::GraphicsApi for VulkanEntry {
         uniform_num: usize,
         storage_num: usize,
     ) -> GraphicsResult<Arc<dyn Layout>> {
+        assert!(
+            ((sampler_num == 0 && texture_num == 0) != (sampler_num > 0 && texture_num > 0)),
+            "fatal: textures cannot exist without samplers",
+        );
+
+        assert!(
+            uniform_num > 0 || storage_num > 0,
+            "fatal: cannot create layout without buffers"
+        ); // TODO it is possible!
+
         log!(
             "creating layout [ double_buffering = {} ]",
             double_buffering
@@ -703,7 +711,7 @@ impl VulkanEntry {
 
         #[cfg(debug_assertions)]
         {
-            layers = get_supported_validation_layers(&entry);
+            layers = super::validation::get_supported_validation_layers(&entry);
             if layers.is_empty() {
                 log!(
                     "No validation layers found!
@@ -729,7 +737,7 @@ impl VulkanEntry {
 
                     layers.iter().for_each(|x| {
                         let layer_bytes = &unsafe { *(x.as_ptr() as *const [u8; 256]) };
-                        let layer = CStr::from_bytes_until_nul(layer_bytes)
+                        let layer = std::ffi::CStr::from_bytes_until_nul(layer_bytes)
                             .unwrap()
                             .to_str()
                             .unwrap();
@@ -740,7 +748,7 @@ impl VulkanEntry {
 
                     instance_extensions.iter().for_each(|x| {
                         let ext_bytes = &unsafe { *(*x as *const [u8; 256]) };
-                        let ext = CStr::from_bytes_until_nul(ext_bytes)
+                        let ext = std::ffi::CStr::from_bytes_until_nul(ext_bytes)
                             .unwrap()
                             .to_str()
                             .unwrap();
@@ -756,7 +764,7 @@ impl VulkanEntry {
         #[cfg(debug_assertions)]
         let debug_utils_messanger = {
             log!("creating debug utils");
-            create_debug_utils_messanger(&entry, &instance)?
+            super::debug_callback::create_debug_utils_messanger(&entry, &instance)?
         };
 
         let device_manager = DeviceManager::new(entry.clone(), instance.clone(), None)?;
@@ -841,7 +849,7 @@ impl VulkanEntry {
 
         #[cfg(debug_assertions)]
         {
-            layers = get_supported_validation_layers(&entry);
+            layers = super::validation::get_supported_validation_layers(&entry);
             if layers.is_empty() {
                 log!(
                     "No validation layers found!
@@ -867,7 +875,7 @@ impl VulkanEntry {
 
                     layers.iter().for_each(|x| {
                         let layer_bytes = &unsafe { *(x.as_ptr() as *const [u8; 256]) };
-                        let layer = CStr::from_bytes_until_nul(layer_bytes)
+                        let layer = std::ffi::CStr::from_bytes_until_nul(layer_bytes)
                             .unwrap()
                             .to_str()
                             .unwrap();
@@ -878,7 +886,7 @@ impl VulkanEntry {
 
                     instance_extensions.iter().for_each(|x| {
                         let ext_bytes = &unsafe { *(*x as *const [u8; 256]) };
-                        let ext = CStr::from_bytes_until_nul(ext_bytes)
+                        let ext = std::ffi::CStr::from_bytes_until_nul(ext_bytes)
                             .unwrap()
                             .to_str()
                             .unwrap();
@@ -894,7 +902,7 @@ impl VulkanEntry {
         #[cfg(debug_assertions)]
         let debug_utils_messanger = {
             log!("creating debug utils");
-            create_debug_utils_messanger(&entry, &instance)?
+            super::debug_callback::create_debug_utils_messanger(&entry, &instance)?
         };
 
         let surface = Presentation::create_surface(
