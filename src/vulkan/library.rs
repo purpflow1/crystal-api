@@ -699,7 +699,9 @@ impl VulkanEntry {
         };
 
         let app_info = vk::ApplicationInfo::default().api_version(vk::API_VERSION_1_3);
-        let mut create_info = vk::InstanceCreateInfo::default()
+
+        #[cfg(not(debug_assertions))]
+        let create_info = vk::InstanceCreateInfo::default()
             .flags(flags)
             .application_info(&app_info)
             .enabled_extension_names(&instance_extensions);
@@ -710,7 +712,7 @@ impl VulkanEntry {
         let layers_pp: Vec<*const i8>;
 
         #[cfg(debug_assertions)]
-        {
+        let create_info = {
             layers = super::validation::get_supported_validation_layers(&entry);
             if layers.is_empty() {
                 log!(
@@ -723,9 +725,16 @@ impl VulkanEntry {
 
             layers_pp = layers.iter().map(|x| x.as_ptr()).collect();
 
+            let mut create_info = vk::InstanceCreateInfo::default()
+                .flags(flags)
+                .application_info(&app_info)
+                .enabled_extension_names(&instance_extensions);
+
             create_info.pp_enabled_layer_names = layers_pp.as_ptr();
             create_info.enabled_layer_count = layers_pp.len() as u32;
-        }
+
+            create_info
+        };
 
         let instance = match unsafe { entry.create_instance(&create_info, None) } {
             Err(e) => {
@@ -835,7 +844,8 @@ impl VulkanEntry {
         };
 
         let app_info = vk::ApplicationInfo::default().api_version(vk::API_VERSION_1_3);
-        let mut create_info = vk::InstanceCreateInfo::default()
+        #[cfg(not(debug_assertions))]
+        let create_info = vk::InstanceCreateInfo::default()
             .flags(flags)
             .application_info(&app_info)
             .enabled_extension_names(&instance_extensions);
@@ -846,7 +856,7 @@ impl VulkanEntry {
         let layers_pp: Vec<*const i8>;
 
         #[cfg(debug_assertions)]
-        {
+        let create_info = {
             layers = super::validation::get_supported_validation_layers(&entry);
             if layers.is_empty() {
                 log!(
@@ -859,9 +869,16 @@ impl VulkanEntry {
 
             layers_pp = layers.iter().map(|x| x.as_ptr()).collect();
 
+            let mut create_info = vk::InstanceCreateInfo::default()
+                .flags(flags)
+                .application_info(&app_info)
+                .enabled_extension_names(&instance_extensions);
+
             create_info.pp_enabled_layer_names = layers_pp.as_ptr();
             create_info.enabled_layer_count = layers_pp.len() as u32;
-        }
+
+            create_info
+        };
 
         let instance = match unsafe { entry.create_instance(&create_info, None) } {
             Err(e) => {
