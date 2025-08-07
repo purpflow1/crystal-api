@@ -10,6 +10,7 @@ mod memory;
 mod presentation;
 mod rendering;
 mod sync;
+#[cfg(debug_assertions)]
 mod validation;
 
 pub(crate) use images::VulkanTexture;

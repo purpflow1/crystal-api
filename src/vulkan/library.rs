@@ -33,7 +33,8 @@ pub(crate) struct TimeState {
 
 pub(crate) struct VulkanEntry {
     command_manager: Arc<CommandManager>,
-    _debug_utils_messanger: Option<debug_callback::DebugUtilsMessanger>,
+    #[cfg(debug_assertions)]
+    _debug_utils_messanger: super::debug_callback::DebugUtilsMessanger,
     device_manager: Arc<DeviceManager>,
 
     presentation: Option<Arc<Presentation>>,
@@ -780,9 +781,7 @@ impl VulkanEntry {
             command_manager,
 
             #[cfg(debug_assertions)]
-            _debug_utils_messanger: Some(debug_utils_messanger),
-            #[cfg(not(debug_assertions))]
-            _debug_utils_messanger: None,
+            _debug_utils_messanger: debug_utils_messanger,
 
             presentation: None,
 
@@ -948,9 +947,7 @@ impl VulkanEntry {
             command_manager,
 
             #[cfg(debug_assertions)]
-            _debug_utils_messanger: Some(debug_utils_messanger),
-            #[cfg(not(debug_assertions))]
-            _debug_utils_messanger: None,
+            _debug_utils_messanger: debug_utils_messanger,
 
             presentation: Some(presentation),
 
