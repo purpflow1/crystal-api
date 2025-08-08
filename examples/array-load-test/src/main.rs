@@ -181,15 +181,13 @@ impl ApplicationHandler for Context {
         reader.read_to_string(&mut source2).unwrap();
 
         let compiler = shaderc::Compiler::new().unwrap();
-        let mut options = shaderc::CompileOptions::new().unwrap();
-        options.add_macro_definition("EP", Some("main"));
         let binary_result1 = compiler
             .compile_into_spirv(
                 source1.as_str(),
                 shaderc::ShaderKind::Vertex,
                 file_name1,
                 "main",
-                Some(&options),
+                None,
             )
             .unwrap();
         let binary_result2 = compiler
@@ -198,7 +196,7 @@ impl ApplicationHandler for Context {
                 shaderc::ShaderKind::Fragment,
                 file_name2,
                 "main",
-                Some(&options),
+                None,
             )
             .unwrap();
 
