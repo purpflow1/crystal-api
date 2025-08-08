@@ -18,9 +18,6 @@ pub struct Shader {
 
 impl Shader {
     /// Creates new shader from words and specified stage
-    /// ```rust
-    /// let shader = Shader::from_words(words, ShaderStage::Vertex).unwrap()
-    /// ```
     pub fn from_words(words: &[u32], stage: ShaderStage) -> GraphicsResult<Self> {
         Ok(Shader {
             stage,
@@ -29,9 +26,6 @@ impl Shader {
     }
 
     /// Creates new shader from bytes and specified stage
-    /// ```rust
-    /// let shader = Shader::from_bytes(bytes, ShaderStage::Vertex).unwrap()
-    /// ```
     pub fn from_bytes(bytes: &[u8], stage: ShaderStage) -> GraphicsResult<Self> {
         let shader_code = unsafe {
             let ptr = std::alloc::alloc(std::alloc::Layout::from_size_align_unchecked(
