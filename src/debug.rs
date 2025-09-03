@@ -21,8 +21,9 @@ pub(crate) fn get_logging_level() -> LoggingLevel {
 macro_rules! log {
     ($($arg:tt)*) => {{
         use crate::debug::{get_logging_level, LoggingLevel};
+        let message = format!($($arg)*);
         match get_logging_level() {
-            LoggingLevel::Console => println!($($arg)*),
+            LoggingLevel::Console => println!("[LOG] {}", message),
             _ => ()
         }
     }};

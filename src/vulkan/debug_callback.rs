@@ -35,10 +35,16 @@ unsafe extern "system" fn debug_callback(
     let callback_data = unsafe { callback_data_ptr.read() };
     match unsafe { callback_data.message_as_c_str() } {
         Some(cstr) => {
+            let message = cstr.to_str().unwrap();
+
             if message_severity.contains(DebugUtilsMessageSeverityFlagsEXT::ERROR) {
-                panic!("fatal: {}", cstr.to_str().unwrap());
-            } else {
-                log!("DEBUG: {}", cstr.to_str().unwrap());
+                panic!("[FATAL] {}", message);
+            } else if message_severity.contains(DebugUtilsMessageSeverityFlagsEXT::INFO) {
+                log!("[VALIDATION INFO] {}", message);
+            } else if message_severity.contains(DebugUtilsMessageSeverityFlagsEXT::VERBOSE) {
+                log!("[VALIDATION VERBOSE] {}", message);
+            } else if message_severity.contains(DebugUtilsMessageSeverityFlagsEXT::WARNING) {
+                log!("[VALIDATION WARNING] {}", message);
             }
         }
         None => log!("debug callback was called, but invalid callback data was provided"),
