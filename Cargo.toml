@@ -20,9 +20,6 @@ license-file = "LICENSE.txt"
 
 exclude = ["examples/"]
 
-[workspace]
-members = ["examples/*"]
-
 [profile.release]
 opt-level = 3
 lto = true
@@ -38,3 +35,6 @@ raw-window-handle = "0.6.0"
 
 [dev-dependencies]
 shaderc = "0.9.1"
+winit = { version = "0.30.10", features = ["rwh_06"] }
+glam = "0.30.3"
+png = "0.17.16"
