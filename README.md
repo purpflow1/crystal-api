@@ -18,7 +18,7 @@
 To run debug scene from included example in
 [github](https://github.com/purpflow1/crystal-api) use:
 ```bash
-cargo run --manifest-path=examples/array-load-test/Cargo.toml
+cargo run --example array-load
 ```
 _Khronos validation layers are required to run debug builds!_
 _Visit https://vulkan.lunarg.com._
