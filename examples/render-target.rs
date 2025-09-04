@@ -312,10 +312,20 @@ impl ApplicationHandler for Context {
 
         let graphics = self.graphics.clone().unwrap();
 
+        let delta = graphics.get_delta_time();
+        self.state.delta_time_sum += delta;
+
+        if self.state.min_delta_time > delta {
+            self.state.min_delta_time = delta
+        };
+        if self.state.max_delta_time < delta {
+            self.state.max_delta_time = delta
+        };
+
         if self.state.delta_time_sum > Duration::from_secs(1) {
             self.window.as_ref().unwrap().set_title(
                 format!(
-                    "FPS: {}, min: {}, max: {}",
+                    "FPS: [ avg: {} min: {} max: {} ]",
                     self.state.current_frame,
                     (1. / self.state.max_delta_time.as_secs_f32()) as u32,
                     (1. / self.state.min_delta_time.as_secs_f32()) as u32
@@ -328,16 +338,6 @@ impl ApplicationHandler for Context {
             self.state.max_delta_time = Duration::ZERO;
             self.state.current_frame = 0;
         }
-
-        let delta = graphics.get_delta_time();
-        self.state.delta_time_sum += delta;
-
-        if self.state.min_delta_time > delta {
-            self.state.min_delta_time = delta
-        };
-        if self.state.max_delta_time < delta {
-            self.state.max_delta_time = delta
-        };
 
         self.state.current_frame += 1;
 
