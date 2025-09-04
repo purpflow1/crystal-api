@@ -585,7 +585,7 @@ impl traits::GraphicsApi for VulkanEntry {
         let vertex_size = (mesh.vertices.len() * size_of::<VertexTexture>()) as u64;
         let index_size = (mesh.indices.len() * size_of::<Index>()) as u64;
         log!(
-            "creating mesh [ size = {:.1} MB] ",
+            "creating mesh [ size = {:.1} MB ] ",
             (vertex_size + index_size) as f32 / 1024. / 1024.
         );
 
