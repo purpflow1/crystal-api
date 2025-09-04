@@ -16,6 +16,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
       - name: Install dependencies
         run: |
           sudo apt-get update -y
@@ -27,9 +30,6 @@ jobs:
           vulkan-query-version: latest
           vulkan-components: Vulkan-Headers, Vulkan-Loader
           vulkan-use-cache: true
-
-      - name: Check formatting
-        run: cargo fmt --all -- --check
 
       - name: Build
         run: cargo build --verbose
