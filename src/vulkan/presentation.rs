@@ -107,9 +107,12 @@ impl SwapchainInfo {
             .iter()
             .find(|&&mode| mode == vk::PresentModeKHR::MAILBOX)
         {
-            Some(&mode) => mode,
+            Some(&mode) => {
+                log!("mailbox present mode");
+                mode
+            }
             None => {
-                log!("no mailbox support, choosing immediate mode");
+                log!("immediate present mode");
                 vk::PresentModeKHR::IMMEDIATE
             }
         };
