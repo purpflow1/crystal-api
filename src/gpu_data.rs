@@ -1,7 +1,4 @@
-use std::{
-    sync::{Arc, Mutex},
-    usize,
-};
+use std::sync::{Arc, Mutex};
 
 use crate::traits;
 
@@ -21,9 +18,7 @@ impl<T> AsBytes for Vec<T> {
 
 impl<T> AsBytes for &[T] {
     fn as_bytes(&self) -> &[u8] {
-        unsafe {
-            std::slice::from_raw_parts(self.as_ptr() as *const u8, self.len() * size_of::<T>())
-        }
+        unsafe { std::slice::from_raw_parts(self.as_ptr() as *const u8, size_of_val(*self)) }
     }
 }
 

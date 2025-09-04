@@ -176,7 +176,7 @@ impl DeviceManager {
 
         let queue_families = find_queue_families(instance.clone(), surface, physical_device);
 
-        if queue_families.len() == 0 {
+        if queue_families.is_empty() {
             return Err(GraphicsError::NotSupportedDevice);
         }
 
@@ -260,7 +260,7 @@ fn query_extensions_support<'a>(
     Ok(supported_extensions)
 }
 
-fn pick_physical_device<'a>(
+fn pick_physical_device(
     instance: Arc<Instance>,
     get_first: bool,
 ) -> GraphicsResult<(vk::PhysicalDevice, String)> {
@@ -309,7 +309,7 @@ fn pick_physical_device<'a>(
         }
     }
 
-    return found;
+    found
 }
 
 fn find_queue_families(
@@ -336,7 +336,7 @@ fn find_queue_families(
         let mut to_push = false;
 
         queue_families.iter_mut().for_each(|(flags, info)| {
-            if (*info).family == index {
+            if info.family == index {
                 *flags |= family.queue_flags;
                 info.present_support = present_support
             } else if !flags.intersects(family.queue_flags) {
@@ -392,7 +392,7 @@ fn create_logical_device(
     let extension_names: Vec<_> = extensions
         .iter()
         .map(|ext| ext.as_ptr())
-        .chain(portability.into_iter())
+        .chain(portability)
         .collect();
 
     let device_create_info = vk::DeviceCreateInfo::default()

@@ -21,6 +21,8 @@ use super::{
     sync::GpuSync,
 };
 
+type Resources = (Vec<vk::Framebuffer>, Vec<DepthResources>, Vec<Arc<Image>>);
+
 pub struct VulkanRenderTarget {
     device_manager: Arc<DeviceManager>,
     pub(crate) command_entry: Arc<CommandEntry>,
@@ -133,7 +135,7 @@ impl VulkanRenderTarget {
         images: Vec<vk::ImageView>,
         samples: vk::SampleCountFlags,
         render_pass: vk::RenderPass,
-    ) -> GraphicsResult<(Vec<vk::Framebuffer>, Vec<DepthResources>, Vec<Arc<Image>>)> {
+    ) -> GraphicsResult<Resources> {
         let mut framebuffers = vec![];
         let mut depth_resources = vec![];
         let mut color_images = vec![];
@@ -228,10 +230,7 @@ impl VulkanRenderTarget {
         };
 
         if counts & samples != samples {
-            panic!(
-                "fatal: device is not supported for sample count: {}",
-                msaa_samples
-            );
+            panic!("fatal: device is not supported for sample count: {msaa_samples}");
         };
 
         let initial_layout = vk::ImageLayout::UNDEFINED;

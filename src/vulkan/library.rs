@@ -117,7 +117,7 @@ impl traits::GraphicsApi for VulkanEntry {
         timer.timer = std::time::Instant::now();
         drop(timer);
 
-        match graphics_now.acquire_next_image(&presentation) {
+        match graphics_now.acquire_next_image(presentation) {
             Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
                 presentation.swapchain.recreate(None)?;
                 render_target_root.update_resources(
@@ -294,7 +294,7 @@ impl traits::GraphicsApi for VulkanEntry {
                         });
 
                         layout_objects.iter().for_each(|(_, (layout, objects))| {
-                            layout.render(&objects, command_buffer).unwrap()
+                            layout.render(objects, command_buffer).unwrap()
                         });
 
                         unsafe { device.cmd_end_render_pass(*command_buffer) }
@@ -382,7 +382,7 @@ impl traits::GraphicsApi for VulkanEntry {
                 });
 
                 layout_objects.iter().for_each(|(_, (layout, objects))| {
-                    layout.render(&objects, command_buffer).unwrap()
+                    layout.render(objects, command_buffer).unwrap()
                 });
 
                 unsafe { device.cmd_end_render_pass(*command_buffer) }
@@ -458,7 +458,6 @@ impl traits::GraphicsApi for VulkanEntry {
         self.command_manager
             .command_entries
             .get(&CommandType::Graphics)
-            .clone()
             .unwrap()
             .wait()?;
 
@@ -537,7 +536,7 @@ impl traits::GraphicsApi for VulkanEntry {
             } else if size >= 1024 {
                 format!("{:.1} KB", size as f32 / 1024.)
             } else {
-                format!("{} B", size)
+                format!("{size} B")
             },
             uniform,
             transfer,
@@ -637,9 +636,11 @@ impl traits::GraphicsApi for VulkanEntry {
 
         let sampler = GpuSamplerSet::from_textures(textures);
 
-        layouts
-            .iter()
-            .for_each(|layout| layout.register_samplers(&[sampler.clone()]).unwrap());
+        layouts.iter().for_each(|layout| {
+            layout
+                .register_samplers(std::slice::from_ref(&sampler))
+                .unwrap()
+        });
 
         Ok(sampler)
     }

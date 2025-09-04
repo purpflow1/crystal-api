@@ -38,7 +38,7 @@ unsafe extern "system" fn debug_callback(
             let message = cstr.to_str().unwrap();
 
             if message_severity.contains(DebugUtilsMessageSeverityFlagsEXT::ERROR) {
-                panic!("[FATAL] {}", message);
+                panic!("[FATAL] {message}");
             } else if message_severity.contains(DebugUtilsMessageSeverityFlagsEXT::INFO) {
                 log!("[VALIDATION INFO] {}", message);
             } else if message_severity.contains(DebugUtilsMessageSeverityFlagsEXT::VERBOSE) {

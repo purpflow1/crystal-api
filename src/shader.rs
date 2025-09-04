@@ -31,7 +31,7 @@ impl Shader {
             let ptr = std::alloc::alloc(std::alloc::Layout::from_size_align_unchecked(
                 bytes.len(),
                 0x10,
-            )) as *mut u8;
+            ));
 
             if ptr.is_null() {
                 panic!("Failed to allocate memory");

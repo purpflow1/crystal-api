@@ -23,13 +23,10 @@ pub(crate) fn find_depth_format(
                 .get_physical_device_format_properties(device_manager.physical_device, format)
         };
 
-        if tiling == vk::ImageTiling::LINEAR
-            && (properties.linear_tiling_features & features) == features
-        {
-            depth_format = format;
-            break;
-        } else if tiling == vk::ImageTiling::OPTIMAL
-            && (properties.optimal_tiling_features & features) == features
+        if (tiling == vk::ImageTiling::LINEAR
+            && (properties.linear_tiling_features & features) == features)
+            || tiling == vk::ImageTiling::OPTIMAL
+                && (properties.optimal_tiling_features & features) == features
         {
             depth_format = format;
             break;

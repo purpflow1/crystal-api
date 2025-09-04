@@ -103,7 +103,7 @@ impl Mesh {
 
             let splitted: Vec<&str> = line.split_whitespace().collect();
 
-            if splitted.len() == 0 || splitted[0].chars().next().unwrap() == '#' {
+            if splitted.is_empty() || splitted[0].starts_with('#') {
                 continue;
             }
 
@@ -137,7 +137,7 @@ impl Mesh {
                         let mut local_indices = vec![];
 
                         for &data in &splitted[1..] {
-                            if data.chars().next().unwrap() == '#' {
+                            if data.starts_with('#') {
                                 break;
                             }
                             let splitted: Vec<&str> = data.split('/').collect();
@@ -149,7 +149,7 @@ impl Mesh {
                                 (idx + vertices.len() as i32) as Index
                             };
 
-                            if splitted[1].len() > 0 {
+                            if !splitted[1].is_empty() {
                                 let uv: i32 = splitted[1].parse().unwrap();
                                 let uv: usize = if uv >= 0 {
                                     (uv - 1) as usize
@@ -159,7 +159,7 @@ impl Mesh {
                                 vertices[idx as usize].uv = uvs[uv];
                             }
 
-                            if splitted.len() > 2 && splitted[2].len() > 0 {
+                            if splitted.len() > 2 && !splitted[2].is_empty() {
                                 let nor: i32 = splitted[2].parse().unwrap();
                                 let nor: usize = if nor >= 0 {
                                     (nor - 1) as usize

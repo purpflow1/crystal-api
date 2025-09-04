@@ -76,12 +76,7 @@ impl LayoutDynamicData {
         }
 
         *id_lock = (0..usize::MAX)
-            .find(|idx| {
-                self.sampler_binding_data
-                    .iter()
-                    .find(|(x, _)| **x == *idx)
-                    .is_none()
-            })
+            .find(|idx| !self.sampler_binding_data.iter().any(|(x, _)| *x == *idx))
             .unwrap();
 
         self.sampler_binding_data
@@ -183,7 +178,7 @@ impl LayoutDynamicData {
 
             let descriptor_write = vk::WriteDescriptorSet::default()
                 .dst_set(descriptor_set)
-                .dst_binding(binding as u32)
+                .dst_binding(binding)
                 .dst_array_element(0)
                 .descriptor_type(descriptor_type)
                 .descriptor_count(1)
@@ -212,7 +207,7 @@ impl LayoutDynamicData {
 
             let descriptor_write = vk::WriteDescriptorSet::default()
                 .dst_set(descriptor_set)
-                .dst_binding(binding as u32)
+                .dst_binding(binding)
                 .dst_array_element(0)
                 .descriptor_type(descriptor_type)
                 .descriptor_count(1)
@@ -385,7 +380,7 @@ impl VulkanLayout {
                 vk::DescriptorSetLayoutBinding::default()
                     .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
                     .stage_flags(vk::ShaderStageFlags::ALL)
-                    .descriptor_count(1 as u32)
+                    .descriptor_count(1)
                     .binding(idx as u32)
             })
             .collect();
@@ -395,7 +390,7 @@ impl VulkanLayout {
                 vk::DescriptorSetLayoutBinding::default()
                     .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
                     .stage_flags(vk::ShaderStageFlags::ALL)
-                    .descriptor_count(1 as u32)
+                    .descriptor_count(1)
                     .binding(idx as u32)
             })
             .collect();
@@ -405,7 +400,7 @@ impl VulkanLayout {
                 vk::DescriptorSetLayoutBinding::default()
                     .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                     .stage_flags(vk::ShaderStageFlags::FRAGMENT)
-                    .descriptor_count(1 as u32)
+                    .descriptor_count(1)
                     .binding(idx as u32)
             })
             .collect();
@@ -669,8 +664,8 @@ impl VulkanLayout {
                     *command_buffer,
                     index_count as u32,
                     instance_count,
-                    0 as u32,
-                    0 as i32,
+                    0,
+                    0,
                     object.index,
                 )
             }

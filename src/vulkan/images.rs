@@ -189,10 +189,7 @@ impl VulkanTexture {
             & vk::FormatFeatureFlags::SAMPLED_IMAGE_FILTER_LINEAR
             != vk::FormatFeatureFlags::SAMPLED_IMAGE_FILTER_LINEAR
         {
-            panic!(
-                "fatal: no suitable device for image linear filtering with format: {:?}",
-                format
-            );
+            panic!("fatal: no suitable device for image linear filtering with format: {format:?}");
         }
 
         let image = Image::new(
@@ -258,10 +255,7 @@ impl VulkanTexture {
             & vk::FormatFeatureFlags::SAMPLED_IMAGE_FILTER_LINEAR
             != vk::FormatFeatureFlags::SAMPLED_IMAGE_FILTER_LINEAR
         {
-            panic!(
-                "fatal: no suitable device for image linear filtering with format: {:?}",
-                format
-            );
+            panic!("fatal: no suitable device for image linear filtering with format: {format:?}");
         }
 
         let image = Image::new(
@@ -295,7 +289,6 @@ impl VulkanTexture {
         let command_entry = command_manager
             .command_entries
             .get(&CommandType::Transfer)
-            .clone()
             .unwrap();
 
         let future = self.transition_image_layout(

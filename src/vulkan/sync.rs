@@ -1,7 +1,4 @@
-use std::{
-    sync::{Arc, Mutex},
-    u64,
-};
+use std::sync::{Arc, Mutex};
 
 use ash::vk::{self};
 
@@ -197,10 +194,10 @@ impl GpuSync {
     }
 
     pub fn semaphore_transfer(&self) -> vk::Semaphore {
-        self.barriers.semaphore_transfer[self.n_pass as usize]
+        self.barriers.semaphore_transfer[self.n_pass]
     }
 
     pub fn is_sync(&self) -> bool {
-        self.barriers.semaphore_transfer.len() > 0
+        !self.barriers.semaphore_transfer.is_empty()
     }
 }

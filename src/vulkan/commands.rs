@@ -1,7 +1,6 @@
 use std::{
     collections::BTreeMap,
     sync::{Arc, Mutex},
-    u64,
 };
 
 use ash::{
@@ -198,7 +197,7 @@ impl GpuFuture {
                     result.suboptimal = true
                 }
                 e => {
-                    panic!("fatal: cannot present to queue: {:?}", e);
+                    panic!("fatal: cannot present to queue: {e}");
                 }
             },
         }

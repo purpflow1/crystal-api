@@ -283,17 +283,12 @@ impl Swapchain {
 
         let mut info = swapchain_create_info.as_vk();
 
-        if device_manager
-            .supported_extensions
-            .iter()
-            .find(|ext| {
-                ext.as_str()
-                    == vk::EXT_IMAGE_COMPRESSION_CONTROL_SWAPCHAIN_NAME
-                        .to_str()
-                        .unwrap()
-            })
-            .is_some()
-        {
+        if device_manager.supported_extensions.iter().any(|ext| {
+            ext.as_str()
+                == vk::EXT_IMAGE_COMPRESSION_CONTROL_SWAPCHAIN_NAME
+                    .to_str()
+                    .unwrap()
+        }) {
             info = info.push_next(&mut compression_control);
         }
 
@@ -403,8 +398,8 @@ impl Presentation {
         let surface = ash::khr::surface::Instance::new(entry, instance);
         let surface_khr = unsafe {
             ash_window::create_surface(
-                &entry,
-                &instance,
+                entry,
+                instance,
                 window.display_handle().unwrap().as_raw(),
                 window.window_handle().unwrap().as_raw(),
                 None,
