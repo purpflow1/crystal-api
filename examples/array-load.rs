@@ -387,8 +387,15 @@ impl ApplicationHandler for Context {
 
         let graphics = self.graphics.clone().unwrap();
 
-        self.state.delta_time_sum += graphics.get_delta_time();
+        let delta = graphics.get_delta_time();
+
+        self.state.delta_time_sum += delta;
         self.state.current_frame += 1;
+
+        self.window
+            .as_ref()
+            .unwrap()
+            .set_title(format!("FPS: {}", (1. / delta.as_secs_f32()) as u32).as_str());
 
         self.graphics
             .as_ref()
