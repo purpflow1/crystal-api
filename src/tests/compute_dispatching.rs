@@ -1,8 +1,6 @@
 use crate::object::Object;
 use crate::*;
 
-// TODO Test will not be passed if GPU has different float standard than IEEE 754
-
 const PARTICLES_GLSL: &str = "
 #version 460
 
