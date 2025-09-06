@@ -10,8 +10,8 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
+  formatting:
+    runs-on: "ubuntu-latest"
 
     steps:
       - uses: actions/checkout@v4
@@ -19,17 +19,29 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
 
-      - name: Install dependencies
-        run: |
-          sudo apt-get update -y
-          sudo apt-get install -y
+      - name: Clippy
+        run: cargo clippy --workspace --locked --all-targets
+
+  build:
+    runs-on: ${{ matrix.config.os }}
+    strategy:
+      matrix:
+        config:
+          - { name: "Windows", os: windows-latest }
+          - { name: "Ubuntu", os: ubuntu-latest }
+          - { name: "MacOS", os: macos-latest }
+
+    steps:
+      - uses: actions/checkout@v4
 
       - name: Prepare Vulkan SDK
-        uses: humbletim/setup-vulkan-sdk@v1.2.1
+        uses: jakoch/install-vulkan-sdk-action@v1
         with:
-          vulkan-query-version: latest
-          vulkan-components: Vulkan-Headers, Vulkan-Loader
-          vulkan-use-cache: true
+          vulkan_version: latest
+          optional_components: com.lunarg.vulkan.vma
+          install_runtime: true
+          cache: true
+          stripdown: true
 
       - name: Build
         run: cargo build --verbose
