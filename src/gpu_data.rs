@@ -2,26 +2,6 @@ use std::sync::{Arc, Mutex};
 
 use crate::traits;
 
-/// ```AsBytes``` represents a memory region as slice of bytes
-pub trait AsBytes {
-    /// ```as_bytes``` represents a memory region as slice of bytes
-    fn as_bytes(&self) -> &[u8];
-}
-
-impl<T> AsBytes for Vec<T> {
-    fn as_bytes(&self) -> &[u8] {
-        unsafe {
-            std::slice::from_raw_parts(self.as_ptr() as *const u8, self.len() * size_of::<T>())
-        }
-    }
-}
-
-impl<T> AsBytes for &[T] {
-    fn as_bytes(&self) -> &[u8] {
-        unsafe { std::slice::from_raw_parts(self.as_ptr() as *const u8, size_of_val(*self)) }
-    }
-}
-
 /// ## Used for textures bindings in shaders
 pub struct GpuSamplerSet {
     pub(crate) id: Mutex<usize>,

@@ -34,6 +34,18 @@ void main()
 }
 ";
 
+trait AsBytes {
+    fn as_bytes(&self) -> &[u8];
+}
+
+impl<T> AsBytes for Vec<T> {
+    fn as_bytes(&self) -> &[u8] {
+        unsafe {
+            std::slice::from_raw_parts(self.as_ptr() as *const u8, self.len() * size_of::<T>())
+        }
+    }
+}
+
 #[repr(C, align(16))]
 struct Uniform {
     time: f32,

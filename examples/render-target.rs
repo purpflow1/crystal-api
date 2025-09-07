@@ -24,6 +24,18 @@ use winit::{
 
 const DISTANCE: f32 = 5.;
 
+trait AsBytes {
+    fn as_bytes(&self) -> &[u8];
+}
+
+impl<T> AsBytes for Vec<T> {
+    fn as_bytes(&self) -> &[u8] {
+        unsafe {
+            std::slice::from_raw_parts(self.as_ptr() as *const u8, self.len() * size_of::<T>())
+        }
+    }
+}
+
 struct State {
     delta_time_sum: Duration,
     min_delta_time: Duration,

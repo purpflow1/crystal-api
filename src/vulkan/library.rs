@@ -17,7 +17,7 @@ use super::{
 };
 
 use crate::{
-    AsBytes, Buffer, GpuSamplerSet, GraphicsApi, GraphicsApiInitSettings, Texture,
+    Buffer, GpuSamplerSet, GraphicsApi, GraphicsApiInitSettings, Texture,
     debug::{error, log},
     errors::{GraphicsError, GraphicsResult},
     mesh::{Index, Mesh, VertexTexture},
@@ -602,9 +602,16 @@ impl traits::GraphicsApi for VulkanEntry {
         let vertex_buffer_manager =
             BufferManager::new(self.device_manager.clone(), buffer_info.clone(), None)?;
 
+        let bytes = unsafe {
+            std::slice::from_raw_parts(
+                mesh.vertices.as_ptr() as *const u8,
+                mesh.vertices.len() * size_of::<VertexTexture>(),
+            )
+        };
+
         vertex_buffer_manager
             .get_memory_full()
-            .copy_from_slice(mesh.vertices.as_bytes());
+            .copy_from_slice(bytes);
 
         buffer_info.usage = vk::BufferUsageFlags::INDEX_BUFFER;
         buffer_info.size = index_size;
@@ -612,9 +619,16 @@ impl traits::GraphicsApi for VulkanEntry {
         let index_buffer_manager =
             BufferManager::new(self.device_manager.clone(), buffer_info, None)?;
 
+        let bytes = unsafe {
+            std::slice::from_raw_parts(
+                mesh.indices.as_ptr() as *const u8,
+                mesh.indices.len() * size_of::<Index>(),
+            )
+        };
+
         index_buffer_manager
             .get_memory_full()
-            .copy_from_slice(mesh.indices.as_bytes());
+            .copy_from_slice(bytes);
 
         Ok(Arc::new(MeshBuffer {
             mesh,
