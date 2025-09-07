@@ -125,8 +125,12 @@ pub trait Buffer: Sync + Send {
         None
     }
 
+    // TODO remove mut from ref
+
     /// Returns a slice of this buffer in given range
+    #[allow(clippy::mut_from_ref)]
     fn get_memory(&self, range: Range<usize>) -> &mut [u8];
     /// Returns a slice of this buffer
+    #[allow(clippy::mut_from_ref)]
     fn get_memory_full(&self) -> &mut [u8];
 }
