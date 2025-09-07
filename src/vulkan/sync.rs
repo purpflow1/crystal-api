@@ -27,7 +27,7 @@ pub struct GpuSync {
 
 impl Drop for GpuSync {
     fn drop(&mut self) {
-        self.device_manager.wait_idle().unwrap();
+        self.device_manager.wait_idle().ok();
 
         unsafe {
             for i in 0..self.barriers.semaphore_image.len() {
@@ -167,12 +167,25 @@ impl GpuSync {
 
     fn wait_fences(&self, fences: &[vk::Fence]) -> GraphicsResult<()> {
         unsafe {
-            self.device_manager
+            match self
+                .device_manager
                 .device
                 .wait_for_fences(fences, true, u64::MAX)
-                .unwrap();
+            {
+                Ok(()) => (),
+                Err(e) => {
+                    log!("cannot wait for fences: {e:?}");
+                    return Err(GraphicsError::SyncError);
+                }
+            };
 
-            self.device_manager.device.reset_fences(fences).unwrap();
+            match self.device_manager.device.reset_fences(fences) {
+                Ok(()) => (),
+                Err(e) => {
+                    log!("cannot reset fences: {e:?}");
+                    return Err(GraphicsError::SyncError);
+                }
+            }
         }
         Ok(())
     }

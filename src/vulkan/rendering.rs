@@ -11,7 +11,7 @@ use crate::{
     debug::log,
     errors::{GraphicsError, GraphicsResult},
     traits,
-    vulkan::{VulkanTexture, commands::CommandEntry},
+    vulkan::{VulkanTexture, commands::CommandEntry, images::ImageCreateInfo},
 };
 
 use super::{
@@ -144,19 +144,21 @@ impl VulkanRenderTarget {
             let depth_resource =
                 DepthResources::new(device_manager.clone(), extent.width, extent.height, samples)?;
 
-            let color_image = Image::new(
-                device_manager.clone(),
-                extent.width,
-                extent.height,
+            let create_info = ImageCreateInfo {
+                width: extent.width,
+                height: extent.height,
+                generate_mips: false,
+                anisotropy_texels: 1.,
+                format: image_format,
                 samples,
-                image_format,
-                vk::ImageTiling::OPTIMAL,
-                vk::ImageAspectFlags::COLOR,
-                vk::ImageUsageFlags::TRANSIENT_ATTACHMENT | vk::ImageUsageFlags::COLOR_ATTACHMENT,
-                vk::MemoryPropertyFlags::DEVICE_LOCAL,
-                false,
-                1.,
-            )?;
+                tiling: vk::ImageTiling::OPTIMAL,
+                aspect_mask: vk::ImageAspectFlags::COLOR,
+                usage: vk::ImageUsageFlags::TRANSIENT_ATTACHMENT
+                    | vk::ImageUsageFlags::COLOR_ATTACHMENT,
+                mem_property: vk::MemoryPropertyFlags::DEVICE_LOCAL,
+            };
+
+            let color_image = Image::new(device_manager.clone(), create_info)?;
 
             let attachments = if samples != vk::SampleCountFlags::TYPE_1 {
                 vec![
@@ -230,7 +232,8 @@ impl VulkanRenderTarget {
         };
 
         if counts & samples != samples {
-            panic!("fatal: device is not supported for sample count: {msaa_samples}");
+            log!("device is not supported for sample count: {msaa_samples}");
+            return Err(GraphicsError::NotSupportedDevice);
         };
 
         let initial_layout = vk::ImageLayout::UNDEFINED;

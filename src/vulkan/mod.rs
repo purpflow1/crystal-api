@@ -19,3 +19,5 @@ pub(crate) use layout::VulkanPipeline;
 pub(crate) use library::VulkanEntry;
 pub(crate) use memory::BufferManager;
 pub(crate) use rendering::VulkanRenderTarget;
+
+pub(super) const API_VERSION_LATEST: u32 = u32::MAX;

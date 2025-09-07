@@ -21,6 +21,8 @@ pub enum GraphicsError {
 
     /// Happens on GPU sync error
     SyncError,
+    /// Happens on resource error, for example on drop
+    ResourceError,
     /// Happens on shader compilation/capability error
     ShaderError,
     /// Happens on GPU memory error

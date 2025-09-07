@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use ash::vk;
 
-use crate::errors::GraphicsResult;
+use crate::{errors::GraphicsResult, vulkan::images::ImageCreateInfo};
 
 use super::{devices::DeviceManager, images::Image};
 
@@ -56,19 +56,20 @@ impl DepthResources {
 
         let depth_format = find_depth_format(device_manager.clone(), tiling, features);
 
-        let image = Image::new(
-            device_manager.clone(),
+        let create_info = ImageCreateInfo {
             width,
             height,
+            generate_mips: false,
+            anisotropy_texels: 1.,
+            format: depth_format,
             samples,
-            depth_format,
             tiling,
-            vk::ImageAspectFlags::DEPTH,
-            vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
-            vk::MemoryPropertyFlags::DEVICE_LOCAL,
-            false,
-            1.,
-        )?;
+            aspect_mask: vk::ImageAspectFlags::DEPTH,
+            usage: vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
+            mem_property: vk::MemoryPropertyFlags::DEVICE_LOCAL,
+        };
+
+        let image = Image::new(device_manager.clone(), create_info)?;
 
         Ok(Self { image })
     }

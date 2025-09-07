@@ -15,7 +15,13 @@ pub(crate) fn get_supported_validation_layers(entry: &Entry) -> Vec<[i8; 256]> {
         }
     };
     for left_layer in available_layers {
-        let left = left_layer.layer_name_as_c_str().unwrap().to_str().unwrap();
+        let left = match left_layer.layer_name_as_c_str() {
+            Ok(cstr) => match cstr.to_str() {
+                Ok(name) => name,
+                Err(_) => continue,
+            },
+            Err(_) => continue,
+        };
         for &right in VALIDATION_LAYERS {
             if left == right {
                 supported_layers.push(left_layer.layer_name)

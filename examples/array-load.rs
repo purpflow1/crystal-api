@@ -227,7 +227,7 @@ impl ApplicationHandler for Context {
                 .create_texture(buffer, [info.width, info.height], 1.0)
                 .unwrap();
             graphics
-                .create_sampler_set(&[(0, texture)], &[layout_obj.clone()])
+                .create_sampler_set(&[(0, texture)], std::slice::from_ref(&layout_obj))
                 .unwrap()
         };
 
@@ -247,7 +247,7 @@ impl ApplicationHandler for Context {
                 .create_texture(buffer, [info.width, info.height], 1.0)
                 .unwrap();
             graphics
-                .create_sampler_set(&[(0, texture)], &[layout_obj.clone()])
+                .create_sampler_set(&[(0, texture)], std::slice::from_ref(&layout_obj))
                 .unwrap()
         };
 

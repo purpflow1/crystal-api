@@ -14,6 +14,20 @@ use super::{
     memory::BufferManager,
 };
 
+pub(crate) struct ImageCreateInfo {
+    pub width: u32,
+    pub height: u32,
+    pub anisotropy_texels: f32,
+    pub generate_mips: bool,
+
+    pub samples: vk::SampleCountFlags,
+    pub format: vk::Format,
+    pub tiling: vk::ImageTiling,
+    pub aspect_mask: vk::ImageAspectFlags,
+    pub usage: vk::ImageUsageFlags,
+    pub mem_property: vk::MemoryPropertyFlags,
+}
+
 pub struct Image {
     pub device_manager: Arc<DeviceManager>,
     pub image: vk::Image,
@@ -43,21 +57,18 @@ impl Drop for Image {
 impl Image {
     pub(crate) fn new(
         device_manager: Arc<DeviceManager>,
-        width: u32,
-        height: u32,
-        samples: vk::SampleCountFlags,
-        format: vk::Format,
-        tiling: vk::ImageTiling,
-        aspect_mask: vk::ImageAspectFlags,
-        usage: vk::ImageUsageFlags,
-        mem_property: vk::MemoryPropertyFlags,
-        generate_mips: bool,
-        anisotropy_texels: f32,
+        image_create_info: ImageCreateInfo,
     ) -> GraphicsResult<Arc<Self>> {
-        let extent = vk::Extent3D::default().width(width).height(height).depth(1);
+        let extent = vk::Extent3D::default()
+            .width(image_create_info.width)
+            .height(image_create_info.height)
+            .depth(1);
 
-        let mip_levels = if generate_mips {
-            (height as f32).max(width as f32).log2().floor() as u32
+        let mip_levels = if image_create_info.generate_mips {
+            (image_create_info.height as f32)
+                .max(image_create_info.width as f32)
+                .log2()
+                .floor() as u32
         } else {
             1
         };
@@ -67,20 +78,20 @@ impl Image {
         let mut compression_control = vk::ImageCompressionControlEXT::default()
             .flags(vk::ImageCompressionFlagsEXT::FIXED_RATE_DEFAULT);
 
-        let image_create_info = vk::ImageCreateInfo::default()
+        let create_info = vk::ImageCreateInfo::default()
             .image_type(ty)
             .extent(extent)
             .mip_levels(mip_levels)
             .array_layers(1)
-            .format(format)
-            .tiling(tiling)
+            .format(image_create_info.format)
+            .tiling(image_create_info.tiling)
             .initial_layout(vk::ImageLayout::UNDEFINED)
-            .usage(usage)
+            .usage(image_create_info.usage)
             .sharing_mode(vk::SharingMode::EXCLUSIVE)
-            .samples(samples)
+            .samples(image_create_info.samples)
             .push_next(&mut compression_control);
 
-        let image = match unsafe { device_manager.device.create_image(&image_create_info, None) } {
+        let image = match unsafe { device_manager.device.create_image(&create_info, None) } {
             Ok(image) => image,
             Err(e) => {
                 log!("cannot create image: {}", e);
@@ -93,10 +104,10 @@ impl Image {
 
         let memory_allocate_info = vk::MemoryAllocateInfo::default()
             .allocation_size(memory_requirements.size)
-            .memory_type_index(
-                device_manager
-                    .find_memory_type_index(mem_property, memory_requirements.memory_type_bits)?,
-            );
+            .memory_type_index(device_manager.find_memory_type_index(
+                image_create_info.mem_property,
+                memory_requirements.memory_type_bits,
+            )?);
 
         let image_memory = match unsafe {
             device_manager
@@ -125,10 +136,10 @@ impl Image {
         let image_view_create_info = vk::ImageViewCreateInfo::default()
             .image(image)
             .view_type(vk::ImageViewType::TYPE_2D)
-            .format(format)
+            .format(image_create_info.format)
             .subresource_range(
                 vk::ImageSubresourceRange::default()
-                    .aspect_mask(aspect_mask)
+                    .aspect_mask(image_create_info.aspect_mask)
                     .base_mip_level(0)
                     .level_count(mip_levels)
                     .base_array_layer(0)
@@ -150,13 +161,13 @@ impl Image {
         Ok(Arc::new(Self {
             device_manager,
             image_memory,
-            format,
+            format: image_create_info.format,
             image,
             image_view,
             layout: RwLock::new(vk::ImageLayout::UNDEFINED),
             extent,
             mip_levels,
-            anisotropy_texels,
+            anisotropy_texels: image_create_info.anisotropy_texels,
         }))
     }
 }
@@ -192,22 +203,23 @@ impl VulkanTexture {
             panic!("fatal: no suitable device for image linear filtering with format: {format:?}");
         }
 
-        let image = Image::new(
-            device_manager.clone(),
-            extent[0],
-            extent[1],
-            vk::SampleCountFlags::TYPE_1,
+        let create_info = ImageCreateInfo {
+            width: extent[0],
+            height: extent[1],
+            generate_mips: false,
+            anisotropy_texels,
             format,
-            vk::ImageTiling::OPTIMAL,
-            vk::ImageAspectFlags::COLOR,
-            vk::ImageUsageFlags::TRANSFER_SRC
+            samples: vk::SampleCountFlags::TYPE_1,
+            tiling: vk::ImageTiling::OPTIMAL,
+            aspect_mask: vk::ImageAspectFlags::COLOR,
+            usage: vk::ImageUsageFlags::TRANSFER_SRC
                 | vk::ImageUsageFlags::TRANSFER_DST
                 | vk::ImageUsageFlags::SAMPLED
                 | vk::ImageUsageFlags::COLOR_ATTACHMENT,
-            vk::MemoryPropertyFlags::DEVICE_LOCAL,
-            false,
-            anisotropy_texels,
-        )?;
+            mem_property: vk::MemoryPropertyFlags::DEVICE_LOCAL,
+        };
+
+        let image = Image::new(device_manager.clone(), create_info)?;
 
         let texture = Arc::new(Self { image });
 
@@ -258,21 +270,22 @@ impl VulkanTexture {
             panic!("fatal: no suitable device for image linear filtering with format: {format:?}");
         }
 
-        let image = Image::new(
-            device_manager.clone(),
-            extent[0],
-            extent[1],
-            vk::SampleCountFlags::TYPE_1,
+        let create_info = ImageCreateInfo {
+            width: extent[0],
+            height: extent[1],
+            generate_mips: true,
+            anisotropy_texels,
             format,
-            vk::ImageTiling::OPTIMAL,
-            vk::ImageAspectFlags::COLOR,
-            vk::ImageUsageFlags::TRANSFER_SRC
+            samples: vk::SampleCountFlags::TYPE_1,
+            tiling: vk::ImageTiling::OPTIMAL,
+            aspect_mask: vk::ImageAspectFlags::COLOR,
+            usage: vk::ImageUsageFlags::TRANSFER_SRC
                 | vk::ImageUsageFlags::TRANSFER_DST
                 | vk::ImageUsageFlags::SAMPLED,
-            vk::MemoryPropertyFlags::DEVICE_LOCAL,
-            true,
-            anisotropy_texels,
-        )?;
+            mem_property: vk::MemoryPropertyFlags::DEVICE_LOCAL,
+        };
+
+        let image = Image::new(device_manager.clone(), create_info)?;
 
         let texture = Arc::new(Self { image });
 

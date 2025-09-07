@@ -23,7 +23,7 @@ use crate::{
     mesh::{Index, Mesh, VertexTexture},
     object::{MeshBuffer, Object},
     traits::{self, Layout},
-    vulkan::VulkanLayout,
+    vulkan::{API_VERSION_LATEST, VulkanLayout},
 };
 
 pub(crate) struct TimeState {
@@ -699,7 +699,7 @@ impl VulkanEntry {
             vk::InstanceCreateFlags::empty()
         };
 
-        let app_info = vk::ApplicationInfo::default().api_version(vk::API_VERSION_1_3);
+        let app_info = vk::ApplicationInfo::default().api_version(API_VERSION_LATEST);
 
         #[cfg(not(debug_assertions))]
         let create_info = vk::InstanceCreateInfo::default()
@@ -779,7 +779,24 @@ impl VulkanEntry {
 
         let device_manager = DeviceManager::new(entry.clone(), instance.clone(), None)?;
 
-        log!("| picked device: [ {} ]", device_manager.device_name);
+        let (maj, min, var, pat) = {
+            let version = device_manager.device_properties.api_version;
+            (
+                vk::api_version_major(version),
+                vk::api_version_minor(version),
+                vk::api_version_variant(version),
+                vk::api_version_patch(version),
+            )
+        };
+
+        log!(
+            "| picked device: [ {} ] vulkan version: [ {}.{}.{}.{} ]",
+            device_manager.device_name,
+            maj,
+            min,
+            var,
+            pat
+        );
         for extension in &device_manager.supported_extensions {
             log!("|| {}", extension);
         }
@@ -844,7 +861,7 @@ impl VulkanEntry {
             vk::InstanceCreateFlags::empty()
         };
 
-        let app_info = vk::ApplicationInfo::default().api_version(vk::API_VERSION_1_3);
+        let app_info = vk::ApplicationInfo::default().api_version(API_VERSION_LATEST);
         #[cfg(not(debug_assertions))]
         let create_info = vk::InstanceCreateInfo::default()
             .flags(flags)
@@ -936,7 +953,24 @@ impl VulkanEntry {
 
         let mut khr_swapchain_found = false;
 
-        log!("| picked device: [ {} ]", device_manager.device_name);
+        let (maj, min, var, pat) = {
+            let version = device_manager.device_properties.api_version;
+            (
+                vk::api_version_major(version),
+                vk::api_version_minor(version),
+                vk::api_version_variant(version),
+                vk::api_version_patch(version),
+            )
+        };
+
+        log!(
+            "| picked device: [ {} ] vulkan version: [ {}.{}.{}.{} ]",
+            device_manager.device_name,
+            maj,
+            min,
+            var,
+            pat
+        );
         for extension in &device_manager.supported_extensions {
             log!("|| {}", extension);
 
