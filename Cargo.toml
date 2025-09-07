@@ -18,7 +18,7 @@ repository = "https://github.com/purpflow1/crystal-api"
 readme = "README.md"
 license-file = "LICENSE.txt"
 
-exclude = ["examples/"]
+exclude = ["examples/", "src/tests"]
 
 [profile.release]
 opt-level = 3
