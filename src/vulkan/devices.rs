@@ -6,7 +6,7 @@ use std::{
 use ash::{Instance, vk};
 
 use crate::{
-    debug::log,
+    debug::error,
     errors::{GraphicsError, GraphicsResult},
     vulkan::presentation::PresentSurface,
 };
@@ -61,7 +61,7 @@ impl Queue {
         match unsafe { self.device.queue_wait_idle(*self.handle.lock().unwrap()) } {
             Ok(()) => Ok(()),
             Err(e) => {
-                log!("queue wait idle error: {:?}", e);
+                error!("queue wait idle error: {:?}", e);
                 Err(GraphicsError::SyncError)
             }
         }
@@ -71,7 +71,7 @@ impl Queue {
         let lock = self.handle.lock().unwrap();
 
         if let Err(e) = unsafe { self.device.queue_submit(*lock, submits, fence) } {
-            log!("queue submit error: {:?}", e);
+            error!("queue submit error: {:?}", e);
             return Err(GraphicsError::SyncError);
         }
 
@@ -86,7 +86,7 @@ impl Queue {
         let lock = self.handle.lock().unwrap();
 
         if let Err(e) = unsafe { self.device.queue_submit(*lock, submits, fence) } {
-            log!("queue submit error: {:?}", e);
+            error!("queue submit error: {:?}", e);
             return Err(GraphicsError::SyncError);
         }
 
@@ -124,7 +124,7 @@ impl DeviceManager {
             .collect();
 
         if let Err(e) = unsafe { self.device.device_wait_idle() } {
-            log!("cannot device wait idle: {:?}", e);
+            error!("cannot device wait idle: {:?}", e);
             return Err(GraphicsError::SyncError);
         }
 
@@ -146,7 +146,7 @@ impl DeviceManager {
             }
         }
 
-        log!("cannot find suitable memory type");
+        error!("cannot find suitable memory type");
         Err(GraphicsError::MemoryError)
     }
 
@@ -241,7 +241,7 @@ fn query_extensions_support<'a>(
     let extension_props = match unsafe { instance.enumerate_device_extension_properties(device) } {
         Ok(props) => props,
         Err(e) => {
-            log!("cannot enumerate device extension properties: {}", e);
+            error!("cannot enumerate device extension properties: {}", e);
             return Err(GraphicsError::ConnotInitLibrary);
         }
     };
@@ -267,14 +267,14 @@ fn pick_physical_device(
     let devices = match unsafe { instance.enumerate_physical_devices() } {
         Ok(devices) => devices,
         Err(e) => {
-            log!("cannot enumerate physical devices: {}", e);
-            return Err(GraphicsError::NotSupportedDevice);
+            error!("cannot enumerate physical devices: {}", e);
+            return Err(GraphicsError::NoDevice);
         }
     };
 
     if devices.is_empty() {
-        log!("No devices found!");
-        return Err(GraphicsError::ConnotInitLibrary);
+        error!("no vulkan devices found");
+        return Err(GraphicsError::NoDevice);
     }
 
     if get_first {
@@ -405,7 +405,7 @@ fn create_logical_device(
     let device = match unsafe { instance.create_device(physical_device, &device_create_info, None) }
     {
         Err(e) => {
-            log!("cannot create logical device: {}", e);
+            error!("cannot create logical device: {}", e);
             return Err(GraphicsError::NotSupportedDevice);
         }
         Ok(device) => Arc::new(device),

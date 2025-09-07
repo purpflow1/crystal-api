@@ -9,7 +9,7 @@ use ash::{
 };
 
 use crate::{
-    debug::log,
+    debug::error,
     errors::{GraphicsError, GraphicsResult},
     vulkan::{devices::DeviceManager, presentation::Presentation},
 };
@@ -102,7 +102,7 @@ impl GpuFuture {
             } {
                 Ok(f) => fence = f,
                 Err(e) => {
-                    log!("failed to create one time fence: {:?}", e);
+                    error!("failed to create single time fence: {:?}", e);
                     return Err(GraphicsError::SyncError);
                 }
             };
@@ -197,7 +197,7 @@ impl GpuFuture {
                     result.suboptimal = true
                 }
                 e => {
-                    panic!("fatal: cannot present to queue: {e}");
+                    error!("cannot present to queue: {e}");
                 }
             },
         }
@@ -264,7 +264,7 @@ impl CommandBuffer {
                 })
                 .collect(),
             Err(e) => {
-                log!("cannot allocate command buffers: {}", e);
+                error!("cannot allocate command buffers: {}", e);
                 return Err(GraphicsError::TransferError);
             }
         };
@@ -302,7 +302,7 @@ impl CommandPool {
         } {
             Ok(command_pool) => command_pool,
             Err(e) => {
-                log!("cannot create command pool: {}", e);
+                error!("cannot create command pool: {}", e);
                 return Err(GraphicsError::TransferError);
             }
         };
@@ -375,7 +375,7 @@ impl CommandEntry {
         } {
             Ok(buffers) => buffers[0],
             Err(e) => {
-                log!("cannot allocate command buffer: {}", e);
+                error!("cannot allocate command buffer: {}", e);
                 return Err(GraphicsError::TransferError);
             }
         };
@@ -390,7 +390,7 @@ impl CommandEntry {
         } {
             Ok(_) => (),
             Err(e) => {
-                log!("cannot begin command buffer: {}", e);
+                error!("cannot begin command buffer: {}", e);
                 return Err(GraphicsError::TransferError);
             }
         }
@@ -404,7 +404,7 @@ impl CommandEntry {
         } {
             Ok(()) => (),
             Err(e) => {
-                log!("cannot begin command buffer: {}", e);
+                error!("cannot begin command buffer: {}", e);
                 return Err(GraphicsError::TransferError);
             }
         }
@@ -439,7 +439,7 @@ impl CommandEntry {
         } {
             Ok(()) => {}
             Err(e) => {
-                log!("failed resetting command buffer: {}", e);
+                error!("failed resetting command buffer: {}", e);
                 return Err(GraphicsError::TransferError);
             }
         };
@@ -453,7 +453,7 @@ impl CommandEntry {
         } {
             Ok(_) => {}
             Err(e) => {
-                log!("cannot begin command buffer: {}", e);
+                error!("cannot begin command buffer: {}", e);
                 return Err(GraphicsError::TransferError);
             }
         };
@@ -471,7 +471,7 @@ impl CommandEntry {
         } {
             Ok(_) => {}
             Err(e) => {
-                log!("cannot end command buffer: {}", e);
+                error!("cannot end command buffer: {}", e);
                 return Err(GraphicsError::TransferError);
             }
         };

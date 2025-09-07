@@ -9,7 +9,7 @@ use ash::vk;
 
 use crate::{
     Buffer, GpuSamplerSet, RenderTarget, Shader, ShaderStage,
-    debug::log,
+    debug::{error, log},
     errors::{GraphicsError, GraphicsResult},
     mesh::{Attribute, VertexTexture},
     object::Object,
@@ -70,9 +70,13 @@ impl LayoutDynamicData {
     fn add_textures(&mut self, sampler_set: Arc<GpuSamplerSet>) -> GraphicsResult<()> {
         let mut id_lock = sampler_set.id.lock().unwrap();
         if *id_lock != usize::MAX {
-            self.sampler_binding_data
-                .remove(&*id_lock)
-                .expect("fatal: sampler is already bound to another layout");
+            match self.sampler_binding_data.remove(&*id_lock) {
+                Some(_sampler) => (),
+                None => {
+                    error!("sampler is already bound to another layout");
+                    return Err(GraphicsError::TransferError);
+                }
+            }
         }
 
         *id_lock = (0..usize::MAX)
@@ -117,7 +121,7 @@ impl LayoutDynamicData {
                             sampler
                         }
                         Err(e) => {
-                            log!("cannot create sampler: {}", e);
+                            error!("cannot create sampler: {}", e);
                             return Err(GraphicsError::ImageError);
                         }
                     }
@@ -238,21 +242,6 @@ pub struct VulkanLayout {
 impl Drop for VulkanLayout {
     fn drop(&mut self) {
         unsafe {
-            // descriptorPool must have been created with the VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT flag
-            //
-            // let descriptor_sets: Vec<vk::DescriptorSet> = self
-            //     .uniform_descriptor_sets
-            //     .iter()
-            //     .chain(self.storage_descriptor_sets.iter())
-            //     .chain(self.sampler_descriptor_sets.iter())
-            //     .map(|&descriptor_set| descriptor_set)
-            //     .collect();
-
-            // self.device_manager
-            //     .device
-            //     .free_descriptor_sets(self.descriptor_pool, &descriptor_sets)
-            //     .unwrap();
-
             self.descriptor_set_layouts.iter().for_each(|&layout| {
                 self.device_manager
                     .device
@@ -370,7 +359,7 @@ impl VulkanLayout {
         } {
             Ok(descriptor_pool) => descriptor_pool,
             Err(e) => {
-                log!("cannot create descriptor pool: {}", e);
+                error!("cannot create descriptor pool: {}", e);
                 return Err(GraphicsError::DataError);
             }
         };
@@ -422,7 +411,7 @@ impl VulkanLayout {
         } {
             Ok(descriptor_set_layout) => descriptor_set_layout,
             Err(e) => {
-                log!("cannot create descriptor set layout: {}", e);
+                error!("cannot create descriptor set layout: {}", e);
                 return Err(GraphicsError::DataError);
             }
         };
@@ -435,7 +424,7 @@ impl VulkanLayout {
         } {
             Ok(descriptor_set_layout) => descriptor_set_layout,
             Err(e) => {
-                log!("cannot create descriptor set layout: {}", e);
+                error!("cannot create descriptor set layout: {}", e);
                 return Err(GraphicsError::DataError);
             }
         };
@@ -448,7 +437,7 @@ impl VulkanLayout {
         } {
             Ok(descriptor_set_layout) => descriptor_set_layout,
             Err(e) => {
-                log!("cannot create descriptor set layout: {}", e);
+                error!("cannot create descriptor set layout: {}", e);
                 return Err(GraphicsError::DataError);
             }
         };
@@ -477,7 +466,7 @@ impl VulkanLayout {
             } {
                 Ok(descriptor_sets) => descriptor_sets,
                 Err(e) => {
-                    log!("cannot allocate uniform descriptor sets: {}", e);
+                    error!("cannot allocate uniform descriptor sets: {}", e);
                     return Err(GraphicsError::DataError);
                 }
             }
@@ -493,7 +482,7 @@ impl VulkanLayout {
             } {
                 Ok(descriptor_sets) => descriptor_sets,
                 Err(e) => {
-                    log!("cannot allocate storage descriptor sets: {}", e);
+                    error!("cannot allocate storage descriptor sets: {}", e);
                     return Err(GraphicsError::DataError);
                 }
             }
@@ -509,7 +498,7 @@ impl VulkanLayout {
             } {
                 Ok(descriptor_sets) => descriptor_sets,
                 Err(e) => {
-                    log!("cannot allocate sampler descriptor sets: {}", e);
+                    error!("cannot allocate sampler descriptor sets: {}", e);
                     return Err(GraphicsError::DataError);
                 }
             }
@@ -534,7 +523,7 @@ impl VulkanLayout {
         } {
             Ok(layout) => layout,
             Err(e) => {
-                log!("cannot create pipeline layout: {}", e);
+                error!("cannot create pipeline layout: {}", e);
                 return Err(GraphicsError::DataError);
             }
         };
@@ -594,12 +583,15 @@ impl VulkanLayout {
             )
         }
 
+        let mut result = Ok(());
+
         for object in objects.iter() {
             if let Some(sampler) = &object.sampler {
                 let id = *sampler.id.lock().unwrap();
 
                 if id == usize::MAX {
-                    panic!("fatal: object sampler has not been registered!");
+                    error!("object sampler has not been registered!");
+                    result = Err(GraphicsError::DataError)
                 }
 
                 unsafe {
@@ -616,7 +608,10 @@ impl VulkanLayout {
 
             let pipeline = match object.pipeline.clone().as_vulkan() {
                 Some(pipeline) => pipeline,
-                None => panic!("fatal: wrong pipeline type, expected vulkan"),
+                None => {
+                    error!("wrong pipeline type, expected vulkan");
+                    return Err(GraphicsError::DataError);
+                }
             };
 
             let mesh_buffer = object.mesh_buffer.as_ref().unwrap();
@@ -671,7 +666,7 @@ impl VulkanLayout {
             }
         }
 
-        Ok(())
+        result
     }
 }
 
@@ -755,7 +750,7 @@ impl VulkanPipeline {
         } {
             Ok(module) => module,
             Err(e) => {
-                log!("cannot create shader module: {}", e);
+                error!("cannot create shader module: {}", e);
                 return Err(GraphicsError::ShaderError);
             }
         };
@@ -780,7 +775,7 @@ impl VulkanPipeline {
         } {
             Ok(pipelines) => pipelines[0],
             Err(e) => {
-                log!("cannot create compute pipeline: {:?}", e);
+                error!("cannot create compute pipeline: {:?}", e);
                 return Err(GraphicsError::ShaderError);
             }
         };
@@ -803,7 +798,7 @@ impl VulkanPipeline {
         log!("creating graphics pipeline");
 
         if shaders.is_empty() {
-            log!("no shaders specified");
+            error!("no shaders specified");
             return Err(GraphicsError::ShaderError);
         }
 
@@ -829,7 +824,7 @@ impl VulkanPipeline {
             } {
                 Ok(module) => module,
                 Err(e) => {
-                    log!("cannot create shader module: {}", e);
+                    error!("cannot create shader module: {}", e);
                     return Err(GraphicsError::ShaderError);
                 }
             };
@@ -960,7 +955,7 @@ impl VulkanPipeline {
                 render_target: Some(render_target),
             })),
             Err(es) => {
-                log!("cannot create graphics pipeline: {}", es.1);
+                error!("cannot create graphics pipeline: {}", es.1);
                 Err(GraphicsError::ShaderError)
             }
         }

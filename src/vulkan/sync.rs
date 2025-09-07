@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 use ash::vk::{self};
 
 use crate::{
-    debug::log,
+    debug::error,
     errors::{GraphicsError, GraphicsResult},
 };
 
@@ -82,7 +82,7 @@ impl GpuSync {
                 } {
                     Ok(semaphore) => semaphore,
                     Err(e) => {
-                        log!("cannot create semaphore: {}", e);
+                        error!("cannot create semaphore: {}", e);
                         return Err(GraphicsError::SyncError);
                     }
                 },
@@ -96,7 +96,7 @@ impl GpuSync {
                 } {
                     Ok(semaphore) => semaphore,
                     Err(e) => {
-                        log!("cannot create semaphore: {}", e);
+                        error!("cannot create semaphore: {}", e);
                         return Err(GraphicsError::SyncError);
                     }
                 },
@@ -110,7 +110,7 @@ impl GpuSync {
                 } {
                     Ok(semaphore) => semaphore,
                     Err(e) => {
-                        log!("cannot create semaphore: {}", e);
+                        error!("cannot create semaphore: {}", e);
                         return Err(GraphicsError::SyncError);
                     }
                 },
@@ -125,7 +125,7 @@ impl GpuSync {
         } {
             Ok(semaphore) => semaphore,
             Err(e) => {
-                log!("cannot create fence: {}", e);
+                error!("cannot create fence: {}", e);
                 return Err(GraphicsError::SyncError);
             }
         };
@@ -134,7 +134,7 @@ impl GpuSync {
             match unsafe { device_manager.device.create_fence(&fence_create_info, None) } {
                 Ok(semaphore) => semaphore,
                 Err(e) => {
-                    log!("cannot create fence: {}", e);
+                    error!("cannot create fence: {}", e);
                     return Err(GraphicsError::SyncError);
                 }
             };
@@ -174,7 +174,7 @@ impl GpuSync {
             {
                 Ok(()) => (),
                 Err(e) => {
-                    log!("cannot wait for fences: {e:?}");
+                    error!("cannot wait for fences: {e:?}");
                     return Err(GraphicsError::SyncError);
                 }
             };
@@ -182,7 +182,7 @@ impl GpuSync {
             match self.device_manager.device.reset_fences(fences) {
                 Ok(()) => (),
                 Err(e) => {
-                    log!("cannot reset fences: {e:?}");
+                    error!("cannot reset fences: {e:?}");
                     return Err(GraphicsError::SyncError);
                 }
             }

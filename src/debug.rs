@@ -29,6 +29,18 @@ macro_rules! log {
     }};
 }
 
+macro_rules! error {
+    ($($arg:tt)*) => {{
+        use crate::debug::{get_logging_level, LoggingLevel};
+        let message = format!($($arg)*);
+        match get_logging_level() {
+            LoggingLevel::Console => println!("[ERROR] {}", message),
+            _ => ()
+        }
+    }};
+}
+
 use std::sync::RwLock;
 
+pub(crate) use error;
 pub(crate) use log;

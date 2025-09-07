@@ -2,7 +2,11 @@ use std::sync::Arc;
 
 use ash::vk;
 
-use crate::{errors::GraphicsResult, vulkan::images::ImageCreateInfo};
+use crate::{
+    debug::error,
+    errors::{GraphicsError, GraphicsResult},
+    vulkan::images::ImageCreateInfo,
+};
 
 use super::{devices::DeviceManager, images::Image};
 
@@ -10,8 +14,8 @@ pub(crate) fn find_depth_format(
     device_manager: Arc<DeviceManager>,
     tiling: vk::ImageTiling,
     features: vk::FormatFeatureFlags,
-) -> vk::Format {
-    let mut depth_format = vk::Format::R8_SINT;
+) -> Option<vk::Format> {
+    let mut depth_format = None;
 
     for format in [
         vk::Format::D32_SFLOAT_S8_UINT,
@@ -28,13 +32,9 @@ pub(crate) fn find_depth_format(
             || tiling == vk::ImageTiling::OPTIMAL
                 && (properties.optimal_tiling_features & features) == features
         {
-            depth_format = format;
+            depth_format = Some(format);
             break;
         }
-    }
-
-    if depth_format == vk::Format::R8_SINT {
-        panic!("fatal: failed to find supported format for depth resources");
     }
 
     depth_format
@@ -54,7 +54,13 @@ impl DepthResources {
         let tiling = vk::ImageTiling::OPTIMAL;
         let features = vk::FormatFeatureFlags::DEPTH_STENCIL_ATTACHMENT;
 
-        let depth_format = find_depth_format(device_manager.clone(), tiling, features);
+        let depth_format = match find_depth_format(device_manager.clone(), tiling, features) {
+            Some(format) => format,
+            None => {
+                error!("cannot find supported depth format");
+                return Err(GraphicsError::NotSupportedDevice);
+            }
+        };
 
         let create_info = ImageCreateInfo {
             width,

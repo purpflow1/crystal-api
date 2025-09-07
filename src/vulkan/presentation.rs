@@ -7,7 +7,7 @@ use ash::{
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
 use crate::{
-    debug::log,
+    debug::{error, log},
     errors::{GraphicsError, GraphicsResult},
     vulkan::VulkanRenderTarget,
 };
@@ -54,18 +54,25 @@ impl SwapchainInfo {
         surface: Arc<PresentSurface>,
     ) -> GraphicsResult<Arc<Self>> {
         let queue_family_indices = [
-            device_manager
+            match device_manager
                 .queues
                 .iter()
                 .find(|queue| queue.flags.intersects(vk::QueueFlags::GRAPHICS))
-                .expect("No graphics queue!")
-                .family_index,
-            device_manager
+            {
+                Some(queue) => queue.family_index,
+                None => {
+                    error!("no graphics queue");
+                    return Err(GraphicsError::NotSupportedDevice);
+                }
+            },
+            match device_manager
                 .queues
                 .iter()
                 .find(|queue| queue.present_support)
-                .expect("No queue with present support!")
-                .family_index,
+            {
+                Some(queue) => queue.family_index,
+                None => return Err(GraphicsError::NotSupportedPresent),
+            },
         ];
 
         let swap_chain_support_details =
@@ -77,7 +84,7 @@ impl SwapchainInfo {
         }) {
             Some(&format) => format,
             None => {
-                log!("not found required swap surface format");
+                error!("not found required swap surface format");
                 return Err(GraphicsError::NotSupportedPresent);
             }
         };
@@ -87,9 +94,13 @@ impl SwapchainInfo {
                 swap_chain_support_details.capabilities.current_extent
             } else {
                 log!("unknown surface extent: getting framebuffer extent instead");
-                surface
-                    .framebuffer_extent
-                    .expect("framebuffer extent not passed!")
+                match surface.framebuffer_extent {
+                    Some(extent) => extent,
+                    None => {
+                        error!("framebuffer extent is not specified");
+                        return Err(GraphicsError::PresentError);
+                    }
+                }
             };
 
         let image_count = {
@@ -142,7 +153,7 @@ impl SwapchainInfo {
         } {
             Ok(data) => data,
             Err(e) => {
-                log!("cannot get physical device surface formats: {}", e);
+                error!("cannot get physical device surface formats: {}", e);
                 return Err(GraphicsError::NotSupportedPresent);
             }
         };
@@ -154,7 +165,7 @@ impl SwapchainInfo {
         } {
             Ok(data) => data,
             Err(e) => {
-                log!("cannot get physical device surface capabilities: {}", e);
+                error!("cannot get physical device surface capabilities: {}", e);
                 return Err(GraphicsError::NotSupportedPresent);
             }
         };
@@ -166,7 +177,7 @@ impl SwapchainInfo {
         } {
             Ok(data) => data,
             Err(e) => {
-                log!("cannot get physical device surface present modes: {}", e);
+                error!("cannot get physical device surface present modes: {}", e);
                 return Err(GraphicsError::NotSupportedPresent);
             }
         };
@@ -193,7 +204,7 @@ impl SwapchainInfo {
         } {
             Ok(data) => data,
             Err(e) => {
-                log!("cannot get physical device surface capabilities: {}", e);
+                error!("cannot get physical device surface capabilities: {}", e);
                 return Err(GraphicsError::NotSupportedDevice);
             }
         };
@@ -298,7 +309,7 @@ impl Swapchain {
         let swapchain_khr = match unsafe { swapchain.create_swapchain(&info, None) } {
             Ok(swapchain_khr) => swapchain_khr,
             Err(e) => {
-                log!("cannot create swapchain: {}", e);
+                error!("cannot create swapchain: {}", e);
                 return Err(GraphicsError::NotSupportedPresent);
             }
         };
@@ -306,7 +317,7 @@ impl Swapchain {
         let swapchain_images = match unsafe { swapchain.get_swapchain_images(swapchain_khr) } {
             Ok(images) => images,
             Err(e) => {
-                log!("cannot get swapchain images: {}", e);
+                error!("cannot get swapchain images: {}", e);
                 return Err(GraphicsError::NotSupportedPresent);
             }
         };
@@ -337,7 +348,7 @@ impl Swapchain {
                 match unsafe { device_manager.device.create_image_view(&create_info, None) } {
                     Ok(image_view) => image_view,
                     Err(e) => {
-                        log!("cannot create image view: {}", e);
+                        error!("cannot create image view: {}", e);
                         return Err(GraphicsError::NotSupportedPresent);
                     }
                 };

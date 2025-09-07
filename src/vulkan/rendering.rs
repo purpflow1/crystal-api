@@ -8,7 +8,7 @@ use ash::vk;
 
 use crate::{
     Texture,
-    debug::log,
+    debug::error,
     errors::{GraphicsError, GraphicsResult},
     traits,
     vulkan::{VulkanTexture, commands::CommandEntry, images::ImageCreateInfo},
@@ -183,7 +183,7 @@ impl VulkanRenderTarget {
                 match unsafe { device_manager.device.create_framebuffer(&create_info, None) } {
                     Ok(framebuffer) => framebuffer,
                     Err(e) => {
-                        log!("cannot create framebuffer: {}", e);
+                        error!("cannot create framebuffer: {}", e);
                         return Err(GraphicsError::NotSupportedPresent);
                     }
                 };
@@ -209,7 +209,8 @@ impl VulkanRenderTarget {
         {
             CommandEntry::new(device_manager.clone(), queue.clone(), images.len() as u32)?
         } else {
-            panic!("fatal: no graphics queue family!");
+            error!("no graphics queue family");
+            return Err(GraphicsError::NotSupportedPresent);
         };
 
         let counts = device_manager
@@ -232,7 +233,7 @@ impl VulkanRenderTarget {
         };
 
         if counts & samples != samples {
-            log!("device is not supported for sample count: {msaa_samples}");
+            error!("device is not supported for sample count: {msaa_samples}");
             return Err(GraphicsError::NotSupportedDevice);
         };
 
@@ -257,12 +258,20 @@ impl VulkanRenderTarget {
                 final_layout
             });
 
+        let depth_format = match find_depth_format(
+            device_manager.clone(),
+            vk::ImageTiling::OPTIMAL,
+            vk::FormatFeatureFlags::DEPTH_STENCIL_ATTACHMENT,
+        ) {
+            Some(format) => format,
+            None => {
+                error!("cannot find depth format");
+                return Err(GraphicsError::NotSupportedDevice);
+            }
+        };
+
         let depth_attachment = vk::AttachmentDescription::default()
-            .format(find_depth_format(
-                device_manager.clone(),
-                vk::ImageTiling::OPTIMAL,
-                vk::FormatFeatureFlags::DEPTH_STENCIL_ATTACHMENT,
-            ))
+            .format(depth_format)
             .samples(samples)
             .load_op(vk::AttachmentLoadOp::CLEAR)
             .store_op(vk::AttachmentStoreOp::DONT_CARE)
@@ -355,7 +364,7 @@ impl VulkanRenderTarget {
         } {
             Ok(render_pass) => render_pass,
             Err(e) => {
-                log!("failed to crate render pass: {}", e);
+                error!("failed to crate render pass: {}", e);
                 return Err(GraphicsError::NotSupportedPresent);
             }
         };

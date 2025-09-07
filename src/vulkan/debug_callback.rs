@@ -8,7 +8,7 @@ use ash::vk::{
 use ash::ext::debug_utils;
 use ash::{Entry, Instance};
 
-use crate::debug::log;
+use crate::debug::{error, log};
 use crate::errors::{GraphicsError, GraphicsResult};
 
 pub(crate) struct DebugUtilsMessanger {
@@ -75,7 +75,7 @@ pub(crate) fn create_debug_utils_messanger(
     } {
         Ok(messanger) => messanger,
         Err(e) => {
-            log!("cannot create vulkan debug messanger: {}", e);
+            error!("cannot create vulkan debug messanger: {}", e);
             return Err(GraphicsError::DebugError);
         }
     };

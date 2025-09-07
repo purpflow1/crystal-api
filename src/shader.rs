@@ -1,4 +1,7 @@
-use crate::errors::GraphicsResult;
+use crate::{
+    debug::error,
+    errors::{GraphicsError, GraphicsResult},
+};
 
 #[allow(missing_docs)]
 #[derive(Debug)]
@@ -34,7 +37,8 @@ impl Shader {
             ));
 
             if ptr.is_null() {
-                panic!("Failed to allocate memory");
+                error!("failed to allocate memory for shader code");
+                return Err(GraphicsError::ShaderError);
             }
 
             std::slice::from_raw_parts_mut(ptr, bytes.len())

@@ -6,7 +6,7 @@ use std::{
 use ash::vk;
 
 use crate::{
-    debug::log,
+    debug::error,
     errors::{GraphicsError, GraphicsResult},
     traits,
 };
@@ -37,7 +37,7 @@ impl BufferData {
         let buffer = match unsafe { device_manager.device.create_buffer(&create_info, None) } {
             Ok(buffer) => buffer,
             Err(e) => {
-                log!("cannot create vertex buffer: {}", e);
+                error!("cannot create vertex buffer: {}", e);
                 return Err(GraphicsError::MemoryError);
             }
         };
@@ -59,7 +59,7 @@ impl BufferData {
         } {
             Ok(device_memory) => device_memory,
             Err(e) => {
-                log!("cannot allocate device memory: {}", e);
+                error!("cannot allocate device memory: {}", e);
                 return Err(GraphicsError::MemoryError);
             }
         };
@@ -71,7 +71,7 @@ impl BufferData {
         } {
             Ok(_) => (),
             Err(e) => {
-                log!("cannot bind buffer memory: {}", e);
+                error!("cannot bind buffer memory: {}", e);
                 return Err(GraphicsError::MemoryError);
             }
         };
@@ -86,7 +86,7 @@ impl BufferData {
         } {
             Ok(ptr) => ptr as *mut u8,
             Err(e) => {
-                log!("cannot map memory: {}", e);
+                error!("cannot map memory: {}", e);
                 return Err(GraphicsError::MemoryError);
             }
         };

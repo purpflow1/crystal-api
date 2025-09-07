@@ -18,7 +18,7 @@ use super::{
 
 use crate::{
     AsBytes, Buffer, GpuSamplerSet, GraphicsApi, GraphicsApiInitSettings, Texture,
-    debug::log,
+    debug::{error, log},
     errors::{GraphicsError, GraphicsResult},
     mesh::{Index, Mesh, VertexTexture},
     object::{MeshBuffer, Object},
@@ -680,15 +680,10 @@ impl VulkanEntry {
             vk::KHR_PORTABILITY_ENUMERATION_NAME.as_ptr(),
         ];
 
-        #[cfg(debug_assertions)]
-        unsafe {
-            std::env::set_var("VK_LOADER_LAYERS_DISABLE", "~implicit~")
-        };
-
         let entry = match unsafe { ash::Entry::load() } {
             Ok(entry) => Arc::new(entry),
             Err(e) => {
-                log!("cannot load vulkan entry: {}", e);
+                error!("cannot load vulkan entry: {}", e);
                 return GraphicsResult::Err(GraphicsError::ConnotInitLibrary);
             }
         };
@@ -716,7 +711,7 @@ impl VulkanEntry {
         let create_info = {
             layers = super::validation::get_supported_validation_layers(&entry);
             if layers.is_empty() {
-                log!(
+                error!(
                     "No validation layers found!
                     Vulkan SDK should be installed for proper debug.
                     Visit https://vulkan.lunarg.com/"
@@ -739,7 +734,7 @@ impl VulkanEntry {
 
         let instance = match unsafe { entry.create_instance(&create_info, None) } {
             Err(e) => {
-                log!("cannot create vulkan instance: {}", e);
+                error!("cannot create vulkan instance: {}", e);
 
                 #[cfg(debug_assertions)]
                 {
@@ -836,7 +831,7 @@ impl VulkanEntry {
         ) {
             Ok(ext) => ext.to_vec(),
             Err(e) => {
-                log!("cannot enumerate required display extensions: {}", e);
+                error!("cannot enumerate required display extensions: {}", e);
                 return Err(GraphicsError::ConnotInitLibrary);
             }
         };
@@ -850,7 +845,7 @@ impl VulkanEntry {
         let entry = match unsafe { ash::Entry::load() } {
             Ok(entry) => Arc::new(entry),
             Err(e) => {
-                log!("cannot load vulkan entry: {}", e);
+                error!("cannot load vulkan entry: {}", e);
                 return GraphicsResult::Err(GraphicsError::ConnotInitLibrary);
             }
         };
@@ -877,7 +872,7 @@ impl VulkanEntry {
         let create_info = {
             layers = super::validation::get_supported_validation_layers(&entry);
             if layers.is_empty() {
-                log!(
+                error!(
                     "No validation layers found!
                     Vulkan SDK should be installed for proper debug.
                     Visit https://vulkan.lunarg.com/"
@@ -982,7 +977,7 @@ impl VulkanEntry {
         }
 
         if !khr_swapchain_found {
-            log!("picked device has no swapchain support!");
+            error!("picked device has no swapchain support!");
             return Err(GraphicsError::NotSupportedPresent);
         }
 

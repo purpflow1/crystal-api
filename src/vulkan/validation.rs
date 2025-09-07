@@ -1,6 +1,6 @@
 use ash::Entry;
 
-use crate::debug::log;
+use crate::debug::error;
 
 const VALIDATION_LAYERS: &[&str] = &["VK_LAYER_KHRONOS_validation"];
 
@@ -10,7 +10,7 @@ pub(crate) fn get_supported_validation_layers(entry: &Entry) -> Vec<[i8; 256]> {
     let available_layers = match unsafe { entry.enumerate_instance_layer_properties() } {
         Ok(props) => props,
         Err(e) => {
-            log!("cannot enumerate vulkan instance layer properties: {}", e);
+            error!("cannot enumerate vulkan instance layer properties: {}", e);
             return vec![];
         }
     };

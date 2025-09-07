@@ -9,6 +9,8 @@ pub enum GraphicsError {
     NotSupportedSystem,
     /// Happens on hardware missing support
     NotSupportedDevice,
+    /// Happens on device lack
+    NoDevice,
     /// Happens on hardware missing support or window server missing capability
     NotSupportedPresent,
 

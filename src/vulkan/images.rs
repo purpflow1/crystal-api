@@ -3,7 +3,7 @@ use std::sync::{Arc, RwLock};
 use ash::vk;
 
 use crate::{
-    debug::log,
+    debug::error,
     errors::{GraphicsError, GraphicsResult},
     traits,
 };
@@ -94,7 +94,7 @@ impl Image {
         let image = match unsafe { device_manager.device.create_image(&create_info, None) } {
             Ok(image) => image,
             Err(e) => {
-                log!("cannot create image: {}", e);
+                error!("cannot create image: {}", e);
                 return Err(GraphicsError::ImageError);
             }
         };
@@ -116,7 +116,7 @@ impl Image {
         } {
             Ok(mem) => mem,
             Err(e) => {
-                log!("cannot allocate image memory: {:?}", e);
+                error!("cannot allocate image memory: {:?}", e);
                 return Err(GraphicsError::ImageError);
             }
         };
@@ -128,7 +128,7 @@ impl Image {
         } {
             Ok(_) => (),
             Err(e) => {
-                log!("cannot bind image memory: {}", e);
+                error!("cannot bind image memory: {}", e);
                 return Err(GraphicsError::ImageError);
             }
         };
@@ -153,7 +153,7 @@ impl Image {
         } {
             Ok(image_view) => image_view,
             Err(e) => {
-                log!("cannot create image view: {}", e);
+                error!("cannot create image view: {}", e);
                 return Err(GraphicsError::ImageError);
             }
         };
@@ -200,7 +200,11 @@ impl VulkanTexture {
             & vk::FormatFeatureFlags::SAMPLED_IMAGE_FILTER_LINEAR
             != vk::FormatFeatureFlags::SAMPLED_IMAGE_FILTER_LINEAR
         {
-            panic!("fatal: no suitable device for image linear filtering with format: {format:?}");
+            error!(
+                "no suitable device for image linear filtering with format: {:?}",
+                format
+            );
+            return Err(GraphicsError::NotSupportedDevice);
         }
 
         let create_info = ImageCreateInfo {
@@ -230,7 +234,8 @@ impl VulkanTexture {
         {
             CommandEntry::new(device_manager.clone(), queue.clone(), 0)?
         } else {
-            panic!("fatal: no transfer queue family")
+            error!("no transfer queue family");
+            return Err(GraphicsError::NotSupportedDevice);
         };
 
         let future = texture.transition_image_layout(
@@ -267,7 +272,11 @@ impl VulkanTexture {
             & vk::FormatFeatureFlags::SAMPLED_IMAGE_FILTER_LINEAR
             != vk::FormatFeatureFlags::SAMPLED_IMAGE_FILTER_LINEAR
         {
-            panic!("fatal: no suitable device for image linear filtering with format: {format:?}");
+            error!(
+                "no suitable device for image linear filtering with format: {:?}",
+                format
+            );
+            return Err(GraphicsError::NotSupportedDevice);
         }
 
         let create_info = ImageCreateInfo {
