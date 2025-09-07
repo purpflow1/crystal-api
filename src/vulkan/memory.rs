@@ -129,7 +129,7 @@ impl traits::Buffer for BufferManager {
         Some(self.clone())
     }
 
-    fn get_memory(&self, range: Range<usize>) -> &mut [u8] {
+    fn get_memory<'a>(&self, range: Range<usize>) -> &'a mut [u8] {
         let lock = self.sync.lock().unwrap();
         let idx = if self.info.count > 1 {
             lock.odd_pass
@@ -143,7 +143,7 @@ impl traits::Buffer for BufferManager {
         }
     }
 
-    fn get_memory_full(&self) -> &mut [u8] {
+    fn get_memory_full<'a>(&self) -> &'a mut [u8] {
         self.get_memory(0..self.info.size as usize)
     }
 }
