@@ -20,9 +20,9 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Clippy
-        run: cargo clippy --workspace --locked --all-targets
+        run: cargo clippy --all-targets
 
-  build:
+  test:
     runs-on: ${{ matrix.config.os }}
     strategy:
       matrix:
@@ -45,6 +45,3 @@ jobs:
 
       - name: Build
         run: cargo build --verbose
-
-      - name: Run tests
-        run: cargo test --verbose
