@@ -34,7 +34,7 @@ ash-window = "0.13.0"
 raw-window-handle = "0.6.0"
 
 [dev-dependencies]
-shaderc = "0.9.1"
+shaderc = "0.10.1"
 winit = { version = "0.30.10", features = ["rwh_06"] }
 glam = "0.30.3"
-png = "0.17.16"
+png = "0.18.0"

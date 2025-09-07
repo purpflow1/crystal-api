@@ -9,7 +9,6 @@ use std::{
     f32::consts::PI,
     fs::File,
     io::{BufReader, Read},
-    path::Path,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -54,30 +53,6 @@ struct Uniform {
 #[repr(C, align(16))]
 #[derive(Clone)]
 struct Light(glam::Vec3);
-
-pub struct Image2D {
-    pub width: u32,
-    pub height: u32,
-    pub channels: u32,
-    pub pixels: Vec<u8>,
-}
-
-impl Image2D {
-    pub fn new(path: &Path) -> GraphicsResult<Self> {
-        let file = File::open(path).unwrap();
-        let decoder = png::Decoder::new(file);
-        let mut reader = decoder.read_info().unwrap();
-        let mut pixels = vec![0; reader.output_buffer_size()];
-        let info = reader.next_frame(&mut pixels).unwrap();
-
-        Ok(Self {
-            width: info.width,
-            height: info.height,
-            channels: info.bit_depth as u32,
-            pixels,
-        })
-    }
-}
 
 struct Scene {
     camera: Camera,
@@ -213,10 +188,11 @@ impl ApplicationHandler for Context {
 
         let default_sampler = {
             let file = File::open("examples/resources/textures/default.png").unwrap();
-            let decoder = png::Decoder::new(file);
+            let buf_reader = BufReader::new(file);
+            let decoder = png::Decoder::new(buf_reader);
             let mut reader = decoder.read_info().unwrap();
 
-            let size = reader.output_buffer_size();
+            let size = reader.output_buffer_size().unwrap();
             let buffer = graphics
                 .create_buffer(size as u64 * 2, false, true, false)
                 .unwrap();
@@ -233,10 +209,11 @@ impl ApplicationHandler for Context {
 
         let test_sampler = {
             let file = File::open("examples/resources/textures/test.png").unwrap();
-            let decoder = png::Decoder::new(file);
+            let buf_reader = BufReader::new(file);
+            let decoder = png::Decoder::new(buf_reader);
             let mut reader = decoder.read_info().unwrap();
 
-            let size = reader.output_buffer_size();
+            let size = reader.output_buffer_size().unwrap();
             let buffer = graphics
                 .create_buffer(size as u64 * 2, false, true, false)
                 .unwrap();
