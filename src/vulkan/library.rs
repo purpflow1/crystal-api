@@ -779,13 +779,13 @@ impl VulkanEntry {
 
         let device_manager = DeviceManager::new(entry.clone(), instance.clone(), None)?;
 
-        let (maj, min, var, pat) = {
+        let (maj, min, pat, var) = {
             let version = device_manager.device_properties.api_version;
             (
                 vk::api_version_major(version),
                 vk::api_version_minor(version),
-                vk::api_version_variant(version),
                 vk::api_version_patch(version),
+                vk::api_version_variant(version),
             )
         };
 
@@ -794,8 +794,8 @@ impl VulkanEntry {
             device_manager.device_name,
             maj,
             min,
-            var,
-            pat
+            pat,
+            var
         );
         for extension in &device_manager.supported_extensions {
             log!("|| {}", extension);
@@ -953,13 +953,13 @@ impl VulkanEntry {
 
         let mut khr_swapchain_found = false;
 
-        let (maj, min, var, pat) = {
+        let (maj, min, pat, var) = {
             let version = device_manager.device_properties.api_version;
             (
                 vk::api_version_major(version),
                 vk::api_version_minor(version),
-                vk::api_version_variant(version),
                 vk::api_version_patch(version),
+                vk::api_version_variant(version),
             )
         };
 
@@ -968,8 +968,8 @@ impl VulkanEntry {
             device_manager.device_name,
             maj,
             min,
-            var,
-            pat
+            pat,
+            var
         );
         for extension in &device_manager.supported_extensions {
             log!("|| {}", extension);
