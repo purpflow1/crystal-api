@@ -122,6 +122,64 @@ impl Context {
             },
         })
     }
+
+    fn call_render(&mut self) {
+        let rotation_matrix = glam::Quat::from_mat4(&glam::Mat4::from_rotation_y(
+            PI * 2. * self.state.delta_time_sum.as_secs_f32(),
+        ));
+
+        let mut transforms = Vec::with_capacity(OBJECT_DIMENTION.pow(3));
+
+        (1..=OBJECT_DIMENTION).for_each(|i| {
+            (1..=OBJECT_DIMENTION).for_each(|j| {
+                (1..=OBJECT_DIMENTION).for_each(|k| {
+                    let transform = glam::Mat4::from_scale_rotation_translation(
+                        glam::Vec3::new(0.3, 0.3, 0.3),
+                        rotation_matrix,
+                        glam::Vec3::new(i as f32, j as f32, k as f32) * DISTANCE,
+                    );
+
+                    transforms.push(transform);
+                })
+            })
+        });
+
+        let ubo = Uniform {
+            eye: self.scene.camera.calc_eye_matrix(),
+            time: self.state.startup.elapsed().as_secs_f32(),
+        };
+
+        self.scene
+            .uniform
+            .as_ref()
+            .unwrap()
+            .get_memory_full()
+            .copy_from_slice(vec![ubo].as_bytes());
+        self.scene
+            .transforms
+            .as_ref()
+            .unwrap()
+            .get_memory_full()
+            .copy_from_slice(transforms.as_bytes());
+
+        let graphics = self.graphics.clone().unwrap();
+
+        let delta = graphics.get_delta_time();
+
+        self.state.delta_time_sum += delta;
+        self.state.current_frame += 1;
+
+        self.window
+            .as_ref()
+            .unwrap()
+            .set_title(format!("FPS: {}", (1. / delta.as_secs_f32()) as u32).as_str());
+
+        self.graphics
+            .as_ref()
+            .unwrap()
+            .dispatch_and_present(&self.scene.objects)
+            .unwrap();
+    }
 }
 
 impl ApplicationHandler for Context {
@@ -321,64 +379,9 @@ impl ApplicationHandler for Context {
 
         self.graphics = Some(graphics);
         self.window = Some(window);
-    }
 
-    fn about_to_wait(&mut self, _event_loop: &winit::event_loop::ActiveEventLoop) {
-        let rotation_matrix = glam::Quat::from_mat4(&glam::Mat4::from_rotation_y(
-            PI * 2. * self.state.delta_time_sum.as_secs_f32(),
-        ));
-
-        let mut transforms = Vec::with_capacity(OBJECT_DIMENTION.pow(3));
-
-        (1..=OBJECT_DIMENTION).for_each(|i| {
-            (1..=OBJECT_DIMENTION).for_each(|j| {
-                (1..=OBJECT_DIMENTION).for_each(|k| {
-                    let transform = glam::Mat4::from_scale_rotation_translation(
-                        glam::Vec3::new(0.3, 0.3, 0.3),
-                        rotation_matrix,
-                        glam::Vec3::new(i as f32, j as f32, k as f32) * DISTANCE,
-                    );
-
-                    transforms.push(transform);
-                })
-            })
-        });
-
-        let ubo = Uniform {
-            eye: self.scene.camera.calc_eye_matrix(),
-            time: self.state.startup.elapsed().as_secs_f32(),
-        };
-
-        self.scene
-            .uniform
-            .as_ref()
-            .unwrap()
-            .get_memory_full()
-            .copy_from_slice(vec![ubo].as_bytes());
-        self.scene
-            .transforms
-            .as_ref()
-            .unwrap()
-            .get_memory_full()
-            .copy_from_slice(transforms.as_bytes());
-
-        let graphics = self.graphics.clone().unwrap();
-
-        let delta = graphics.get_delta_time();
-
-        self.state.delta_time_sum += delta;
-        self.state.current_frame += 1;
-
-        self.window
-            .as_ref()
-            .unwrap()
-            .set_title(format!("FPS: {}", (1. / delta.as_secs_f32()) as u32).as_str());
-
-        self.graphics
-            .as_ref()
-            .unwrap()
-            .dispatch_and_present(&self.scene.objects)
-            .unwrap();
+        let window = self.window.as_ref().unwrap();
+        window.request_redraw();
     }
 
     fn window_event(
@@ -413,6 +416,7 @@ impl ApplicationHandler for Context {
                     .unwrap();
             }
             WindowEvent::RedrawRequested => {
+                self.call_render();
                 let window = self.window.as_ref().unwrap();
                 window.request_redraw();
             }

@@ -118,6 +118,79 @@ impl Context {
             },
         })
     }
+
+    fn call_render(&mut self) {
+        let ubo = Uniform {
+            eye: self.scene.camera.calc_eye_matrix(),
+            time: self.state.startup.elapsed().as_secs_f32(),
+        };
+
+        self.scene
+            .uniform
+            .as_ref()
+            .unwrap()
+            .get_memory_full()
+            .copy_from_slice(vec![ubo].as_bytes());
+
+        let now = self.state.startup.elapsed();
+
+        let transforms = vec![
+            glam::Mat4::from_scale_rotation_translation(
+                glam::Vec3::ONE,
+                glam::Quat::from_rotation_y(PI / 2. * now.as_secs_f32()),
+                glam::Vec3::ZERO,
+            ),
+            glam::Mat4::from_scale_rotation_translation(
+                glam::Vec3::from_array([0.5; 3]),
+                glam::Quat::from_rotation_y(PI * 2. * now.as_secs_f32()),
+                glam::Vec3::ZERO,
+            ),
+        ];
+
+        self.scene
+            .transforms
+            .as_ref()
+            .unwrap()
+            .get_memory_full()
+            .copy_from_slice(transforms.as_bytes());
+
+        let graphics = self.graphics.clone().unwrap();
+
+        let delta = graphics.get_delta_time();
+        self.state.delta_time_sum += delta;
+
+        if self.state.min_delta_time > delta {
+            self.state.min_delta_time = delta
+        };
+        if self.state.max_delta_time < delta {
+            self.state.max_delta_time = delta
+        };
+
+        if self.state.delta_time_sum > Duration::from_secs(1) {
+            self.window.as_ref().unwrap().set_title(
+                format!(
+                    "FPS: [ avg: {} min: {} max: {} ]",
+                    self.state.current_frame,
+                    (1. / self.state.max_delta_time.as_secs_f32()) as u32,
+                    (1. / self.state.min_delta_time.as_secs_f32()) as u32
+                )
+                .as_str(),
+            );
+
+            self.state.delta_time_sum = Duration::ZERO;
+            self.state.min_delta_time = Duration::MAX;
+            self.state.max_delta_time = Duration::ZERO;
+            self.state.current_frame = 0;
+        }
+
+        self.state.current_frame += 1;
+
+        self.graphics
+            .as_ref()
+            .unwrap()
+            .dispatch_and_present(&self.scene.objects)
+            .unwrap();
+    }
 }
 
 impl ApplicationHandler for Context {
@@ -273,79 +346,9 @@ impl ApplicationHandler for Context {
         self.render_target_cube = Some(render_target_cube);
 
         println!("[end init]");
-    }
 
-    fn about_to_wait(&mut self, _event_loop: &winit::event_loop::ActiveEventLoop) {
-        let ubo = Uniform {
-            eye: self.scene.camera.calc_eye_matrix(),
-            time: self.state.startup.elapsed().as_secs_f32(),
-        };
-
-        self.scene
-            .uniform
-            .as_ref()
-            .unwrap()
-            .get_memory_full()
-            .copy_from_slice(vec![ubo].as_bytes());
-
-        let now = self.state.startup.elapsed();
-
-        let transforms = vec![
-            glam::Mat4::from_scale_rotation_translation(
-                glam::Vec3::ONE,
-                glam::Quat::from_rotation_y(PI / 2. * now.as_secs_f32()),
-                glam::Vec3::ZERO,
-            ),
-            glam::Mat4::from_scale_rotation_translation(
-                glam::Vec3::from_array([0.5; 3]),
-                glam::Quat::from_rotation_y(PI * 2. * now.as_secs_f32()),
-                glam::Vec3::ZERO,
-            ),
-        ];
-
-        self.scene
-            .transforms
-            .as_ref()
-            .unwrap()
-            .get_memory_full()
-            .copy_from_slice(transforms.as_bytes());
-
-        let graphics = self.graphics.clone().unwrap();
-
-        let delta = graphics.get_delta_time();
-        self.state.delta_time_sum += delta;
-
-        if self.state.min_delta_time > delta {
-            self.state.min_delta_time = delta
-        };
-        if self.state.max_delta_time < delta {
-            self.state.max_delta_time = delta
-        };
-
-        if self.state.delta_time_sum > Duration::from_secs(1) {
-            self.window.as_ref().unwrap().set_title(
-                format!(
-                    "FPS: [ avg: {} min: {} max: {} ]",
-                    self.state.current_frame,
-                    (1. / self.state.max_delta_time.as_secs_f32()) as u32,
-                    (1. / self.state.min_delta_time.as_secs_f32()) as u32
-                )
-                .as_str(),
-            );
-
-            self.state.delta_time_sum = Duration::ZERO;
-            self.state.min_delta_time = Duration::MAX;
-            self.state.max_delta_time = Duration::ZERO;
-            self.state.current_frame = 0;
-        }
-
-        self.state.current_frame += 1;
-
-        self.graphics
-            .as_ref()
-            .unwrap()
-            .dispatch_and_present(&self.scene.objects)
-            .unwrap();
+        let window = self.window.as_ref().unwrap();
+        window.request_redraw();
     }
 
     fn window_event(
@@ -380,6 +383,7 @@ impl ApplicationHandler for Context {
                     .unwrap();
             }
             WindowEvent::RedrawRequested => {
+                self.call_render();
                 let window = self.window.as_ref().unwrap();
                 window.request_redraw();
             }
