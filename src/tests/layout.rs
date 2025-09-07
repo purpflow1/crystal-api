@@ -23,21 +23,21 @@ fn layout_double_buffered_creation() -> GraphicsResult<()> {
 }
 
 #[test]
-#[should_panic]
+#[should_panic(expected = "layout")]
 fn layout_empty_buffers_creation() {
     let instance = init_api_instance().expect("cannot create instance");
-    instance.create_layout(false, 0, 0, 0, 0).unwrap();
+    instance.create_layout(false, 0, 0, 0, 0).expect("layout");
 }
 
 #[test]
-#[should_panic]
+#[should_panic(expected = "fatal: textures cannot exist without samplers")]
 fn layout_texture_no_samplers_creation() {
     let instance = init_api_instance().expect("cannot create instance");
     instance.create_layout(false, 1, 0, 1, 1).unwrap();
 }
 
 #[test]
-#[should_panic]
+#[should_panic(expected = "fatal: textures cannot exist without samplers")]
 fn layout_sampler_no_textures_creation() {
     let instance = init_api_instance().expect("cannot create instance");
     instance.create_layout(false, 0, 1, 1, 1).unwrap();
