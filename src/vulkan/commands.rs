@@ -39,7 +39,7 @@ impl GpuFuture {
     }
 
     /// Transfers other's buffers to self
-    pub(crate) fn join(self: Box<Self>, other: Box<Self>) -> Box<Self> {
+    pub(crate) fn join(self: Box<Self>, other: &Self) -> Box<Self> {
         let mut self_lock = self.command_buffers.lock().unwrap();
         let other_lock = other.command_buffers.lock().unwrap();
         other_lock

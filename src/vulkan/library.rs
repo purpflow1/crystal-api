@@ -141,7 +141,7 @@ impl traits::GraphicsApi for VulkanEntry {
         let compute_now = compute.now(sync.clone());
 
         let compute_future = compute_now.join(
-            compute
+            &compute
                 .record_command_buffer(sync.clone(), |command_buffer, device, _n_pass| unsafe {
                     for object in objects {
                         if object.groups.is_none() {
@@ -301,93 +301,95 @@ impl traits::GraphicsApi for VulkanEntry {
                     },
                 )?;
 
-                graphics_now = graphics_now.join(graphics_future);
+                graphics_now = graphics_now.join(&graphics_future);
             }
         }
 
-        let present_future = graphics_now.join(graphics.record_command_buffer(
-            sync.clone(),
-            |command_buffer, device, n_pass| {
-                let render_pass_begin = vk::RenderPassBeginInfo::default()
-                    .render_pass(render_target_root.render_pass)
-                    .framebuffer(*render_target_root.framebuffers[n_pass].read().unwrap())
-                    .render_area(vk::Rect2D {
-                        offset: vk::Offset2D::default().x(0).y(0),
-                        extent: vk::Extent2D {
-                            width: render_target_root
-                                .extent()
-                                .width
-                                .min(presentation.swapchain.extent().width),
-                            height: render_target_root
-                                .extent()
-                                .height
-                                .min(presentation.swapchain.extent().height),
-                        },
-                    })
-                    .clear_values(clear_values);
+        let present_future = graphics_now.join(
+            graphics
+                .record_command_buffer(sync.clone(), |command_buffer, device, n_pass| {
+                    let render_pass_begin = vk::RenderPassBeginInfo::default()
+                        .render_pass(render_target_root.render_pass)
+                        .framebuffer(*render_target_root.framebuffers[n_pass].read().unwrap())
+                        .render_area(vk::Rect2D {
+                            offset: vk::Offset2D::default().x(0).y(0),
+                            extent: vk::Extent2D {
+                                width: render_target_root
+                                    .extent()
+                                    .width
+                                    .min(presentation.swapchain.extent().width),
+                                height: render_target_root
+                                    .extent()
+                                    .height
+                                    .min(presentation.swapchain.extent().height),
+                            },
+                        })
+                        .clear_values(clear_values);
 
-                unsafe {
-                    device.cmd_begin_render_pass(
-                        *command_buffer,
-                        &render_pass_begin,
-                        vk::SubpassContents::INLINE,
-                    )
-                }
+                    unsafe {
+                        device.cmd_begin_render_pass(
+                            *command_buffer,
+                            &render_pass_begin,
+                            vk::SubpassContents::INLINE,
+                        )
+                    }
 
-                let viewport = vk::Viewport::default()
-                    .width(render_target_root.extent().width as f32)
-                    .height(render_target_root.extent().height as f32)
-                    .max_depth(1.);
-                let viewports = &[viewport];
-                unsafe { device.cmd_set_viewport(*command_buffer, 0, viewports) }
-                let scissor = vk::Rect2D::default().extent(render_target_root.extent());
-                let scissors = &[scissor];
-                unsafe { device.cmd_set_scissor(*command_buffer, 0, scissors) }
+                    let viewport = vk::Viewport::default()
+                        .width(render_target_root.extent().width as f32)
+                        .height(render_target_root.extent().height as f32)
+                        .max_depth(1.);
+                    let viewports = &[viewport];
+                    unsafe { device.cmd_set_viewport(*command_buffer, 0, viewports) }
+                    let scissor = vk::Rect2D::default().extent(render_target_root.extent());
+                    let scissors = &[scissor];
+                    unsafe { device.cmd_set_scissor(*command_buffer, 0, scissors) }
 
-                let mut layout_objects =
-                    BTreeMap::<u64, (Arc<VulkanLayout>, Vec<Arc<Object>>)>::new();
+                    let mut layout_objects =
+                        BTreeMap::<u64, (Arc<VulkanLayout>, Vec<Arc<Object>>)>::new();
 
-                objects.iter().for_each(|object| {
-                    if object.groups.is_none()
-                        && let Some(obj_render_target) = object
-                            .pipeline
-                            .clone()
-                            .as_vulkan()
-                            .unwrap()
-                            .render_target
-                            .clone()
-                        && obj_render_target.render_pass.as_raw()
-                            == render_target_root.render_pass.as_raw()
-                    {
-                        let layout = object.pipeline.clone().as_vulkan().unwrap().layout.clone();
+                    objects.iter().for_each(|object| {
+                        if object.groups.is_none()
+                            && let Some(obj_render_target) = object
+                                .pipeline
+                                .clone()
+                                .as_vulkan()
+                                .unwrap()
+                                .render_target
+                                .clone()
+                            && obj_render_target.render_pass.as_raw()
+                                == render_target_root.render_pass.as_raw()
+                        {
+                            let layout =
+                                object.pipeline.clone().as_vulkan().unwrap().layout.clone();
 
-                        let raw = object
-                            .pipeline
-                            .clone()
-                            .as_vulkan()
-                            .unwrap()
-                            .layout
-                            .pipeline_layout
-                            .as_raw();
+                            let raw = object
+                                .pipeline
+                                .clone()
+                                .as_vulkan()
+                                .unwrap()
+                                .layout
+                                .pipeline_layout
+                                .as_raw();
 
-                        match layout_objects.get_mut(&raw) {
-                            Some((_, objects)) => {
-                                objects.push(object.clone());
-                            }
-                            None => {
-                                layout_objects.insert(raw, (layout, vec![object.clone()]));
+                            match layout_objects.get_mut(&raw) {
+                                Some((_, objects)) => {
+                                    objects.push(object.clone());
+                                }
+                                None => {
+                                    layout_objects.insert(raw, (layout, vec![object.clone()]));
+                                }
                             }
                         }
-                    }
-                });
+                    });
 
-                layout_objects.iter().for_each(|(_, (layout, objects))| {
-                    layout.render(objects, command_buffer).unwrap()
-                });
+                    layout_objects.iter().for_each(|(_, (layout, objects))| {
+                        layout.render(objects, command_buffer).unwrap()
+                    });
 
-                unsafe { device.cmd_end_render_pass(*command_buffer) }
-            },
-        )?);
+                    unsafe { device.cmd_end_render_pass(*command_buffer) }
+                })?
+                .as_ref(),
+        );
 
         let mut layouts = BTreeMap::<u64, Arc<VulkanLayout>>::new();
 
@@ -422,7 +424,7 @@ impl traits::GraphicsApi for VulkanEntry {
         let now = compute.now(sync.clone());
 
         let future = now.join(
-            compute
+            &compute
                 .record_single_time_buffer(|command_buffer, device| unsafe {
                     for object in objects {
                         let pipeline = object.pipeline.clone().as_vulkan().unwrap();

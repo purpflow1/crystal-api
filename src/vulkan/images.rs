@@ -243,10 +243,14 @@ impl VulkanTexture {
             vk::ImageLayout::TRANSFER_DST_OPTIMAL,
         )?;
 
-        let future = future.join(texture.transition_image_layout(
-            command_entry.clone(),
-            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-        )?);
+        let future = future.join(
+            texture
+                .transition_image_layout(
+                    command_entry.clone(),
+                    vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                )?
+                .as_ref(),
+        );
 
         future.flush_transfer(command_entry.queue.clone())?;
 
@@ -317,8 +321,8 @@ impl VulkanTexture {
             command_entry.clone(),
             vk::ImageLayout::TRANSFER_DST_OPTIMAL,
         )?;
-        let future = future.join(self.stage_image(buffer, command_entry.clone())?);
-        let future = future.join(self.generate_mipmaps(command_entry.clone())?);
+        let future = future.join(self.stage_image(buffer, command_entry.clone())?.as_ref());
+        let future = future.join(self.generate_mipmaps(command_entry.clone())?.as_ref());
 
         future.flush_transfer(command_entry.queue.clone())?;
 
