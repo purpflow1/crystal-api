@@ -499,49 +499,50 @@ impl VulkanTexture {
         command_entry: Arc<CommandEntry>,
         new_layout: vk::ImageLayout,
     ) -> GraphicsResult<Box<GpuFuture>> {
+        let layout = *self.image.layout.read().unwrap();
+
+        let mut barrier = vk::ImageMemoryBarrier::default()
+            .old_layout(layout)
+            .new_layout(new_layout)
+            .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .image(self.image.image)
+            .subresource_range(
+                vk::ImageSubresourceRange::default()
+                    .aspect_mask(vk::ImageAspectFlags::COLOR)
+                    .base_mip_level(0)
+                    .level_count(self.image.mip_levels)
+                    .base_array_layer(0)
+                    .layer_count(1),
+            );
+
+        let mut src_stage = vk::PipelineStageFlags::TOP_OF_PIPE;
+        let mut dst_stage = vk::PipelineStageFlags::TRANSFER;
+
+        if layout == vk::ImageLayout::UNDEFINED
+            && new_layout == vk::ImageLayout::TRANSFER_DST_OPTIMAL
+        {
+            barrier = barrier
+                .src_access_mask(vk::AccessFlags::empty())
+                .dst_access_mask(vk::AccessFlags::TRANSFER_WRITE);
+        } else if layout == vk::ImageLayout::TRANSFER_DST_OPTIMAL
+            && new_layout == vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL
+        {
+            barrier = barrier
+                .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
+                .dst_access_mask(vk::AccessFlags::SHADER_READ);
+
+            src_stage = vk::PipelineStageFlags::TRANSFER;
+            dst_stage = vk::PipelineStageFlags::FRAGMENT_SHADER;
+        } else {
+            error!(
+                "unsupported layout transition: {:?} -> {:?}",
+                self.image.layout, new_layout
+            );
+            return Err(GraphicsError::ImageError);
+        }
+
         command_entry.record_single_time_buffer(|command_buffer, device| {
-            let layout = *self.image.layout.read().unwrap();
-
-            let mut barrier = vk::ImageMemoryBarrier::default()
-                .old_layout(layout)
-                .new_layout(new_layout)
-                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                .image(self.image.image)
-                .subresource_range(
-                    vk::ImageSubresourceRange::default()
-                        .aspect_mask(vk::ImageAspectFlags::COLOR)
-                        .base_mip_level(0)
-                        .level_count(self.image.mip_levels)
-                        .base_array_layer(0)
-                        .layer_count(1),
-                );
-
-            let mut src_stage = vk::PipelineStageFlags::TOP_OF_PIPE;
-            let mut dst_stage = vk::PipelineStageFlags::TRANSFER;
-
-            if layout == vk::ImageLayout::UNDEFINED
-                && new_layout == vk::ImageLayout::TRANSFER_DST_OPTIMAL
-            {
-                barrier = barrier
-                    .src_access_mask(vk::AccessFlags::empty())
-                    .dst_access_mask(vk::AccessFlags::TRANSFER_WRITE);
-            } else if layout == vk::ImageLayout::TRANSFER_DST_OPTIMAL
-                && new_layout == vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL
-            {
-                barrier = barrier
-                    .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
-                    .dst_access_mask(vk::AccessFlags::SHADER_READ);
-
-                src_stage = vk::PipelineStageFlags::TRANSFER;
-                dst_stage = vk::PipelineStageFlags::FRAGMENT_SHADER;
-            } else {
-                panic!(
-                    "fatal: unsupported layout transition: {:?} -> {:?}",
-                    self.image.layout, new_layout
-                );
-            }
-
             *self.image.layout.write().unwrap() = new_layout;
 
             unsafe {

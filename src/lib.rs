@@ -1,3 +1,5 @@
+#![deny(clippy::panic)]
+#![deny(clippy::expect_used)]
 #![warn(missing_docs)]
 #![warn(unreachable_pub)]
 
