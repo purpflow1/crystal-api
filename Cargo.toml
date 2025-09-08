@@ -31,7 +31,7 @@ overflow-checks = true
 [dependencies]
 ash = "0.38.0"
 ash-window = "0.13.0"
-raw-window-handle = "0.6.0"
+raw-window-handle = "0.6.2"
 
 [dev-dependencies]
 shaderc = "0.10.1"
