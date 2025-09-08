@@ -140,7 +140,10 @@ impl Context {
             PI * 2. * self.state.delta_time_sum.as_secs_f32(),
         ));
 
-        let mut transforms = Vec::with_capacity(OBJECT_DIMENTION.pow(3));
+        // Reference to GPU buffer
+        let transforms = self.scene.transforms.as_ref().unwrap().get_memory_full();
+
+        let mut offset = 0;
 
         (1..=OBJECT_DIMENTION).for_each(|i| {
             (1..=OBJECT_DIMENTION).for_each(|j| {
@@ -151,7 +154,10 @@ impl Context {
                         glam::Vec3::new(i as f32, j as f32, k as f32) * DISTANCE,
                     );
 
-                    transforms.push(transform);
+                    transforms[offset..offset + size_of::<glam::Mat4>()]
+                        .copy_from_slice(vec![transform].as_bytes());
+
+                    offset += size_of::<glam::Mat4>();
                 })
             })
         });
@@ -167,12 +173,6 @@ impl Context {
             .unwrap()
             .get_memory_full()
             .copy_from_slice(vec![ubo].as_bytes());
-        self.scene
-            .transforms
-            .as_ref()
-            .unwrap()
-            .get_memory_full()
-            .copy_from_slice(transforms.as_bytes());
 
         let graphics = self.graphics.clone().unwrap();
 
