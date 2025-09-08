@@ -586,10 +586,18 @@ impl traits::GraphicsApi for VulkanEntry {
     fn create_buffer_mesh(&self, mesh: Arc<Mesh>) -> GraphicsResult<Arc<MeshBuffer>> {
         let vertex_size = (mesh.vertices.len() * size_of::<VertexTexture>()) as u64;
         let index_size = (mesh.indices.len() * size_of::<Index>()) as u64;
-        log!(
-            "creating mesh [ size = {:.1} MB ] ",
-            (vertex_size + index_size) as f32 / 1024. / 1024.
-        );
+
+        log!("creating mesh [ size = {} ] ", {
+            let size = vertex_size + index_size;
+
+            if size >= 1024 * 1024 {
+                format!("{:.1} MB", size as f32 / 1024. / 1024.)
+            } else if size >= 1024 {
+                format!("{:.1} KB", size as f32 / 1024.)
+            } else {
+                format!("{size} B")
+            }
+        });
 
         let mut buffer_info = BufferInfo {
             size: vertex_size,
