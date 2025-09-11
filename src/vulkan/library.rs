@@ -62,8 +62,12 @@ impl Drop for VulkanEntry {
                     .sync
                     .clone(),
             );
-            now.acquire_next_image(self.presentation.as_ref().unwrap())
-                .unwrap();
+            match now.acquire_next_image(self.presentation.as_ref().unwrap()) {
+                Ok(()) => (),
+                // Surface can be destroyed before vulkan resource drop
+                Err(vk::Result::ERROR_SURFACE_LOST_KHR) => error!("surface lost on entry drop"),
+                Err(e) => error!("cannot acquire next (last) image on entry drop: {}", e),
+            };
         }
     }
 }
