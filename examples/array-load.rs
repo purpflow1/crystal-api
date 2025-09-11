@@ -446,8 +446,8 @@ fn main() -> GraphicsResult<()> {
 
     let settings = GraphicsApiInitSettings::default()
         .msaa_samples(4)
-        .width(1000)
-        .height(700);
+        .width(500)
+        .height(300);
 
     let event_loop = EventLoop::new().unwrap();
     event_loop.set_control_flow(ControlFlow::Poll);
