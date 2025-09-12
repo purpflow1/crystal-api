@@ -9,12 +9,23 @@ use crate::{
 };
 
 pub(crate) fn create_instance(
-    instance_extensions: Vec<*const i8>,
+    addition_extension: &[*const i8],
 ) -> GraphicsResult<(
     Arc<ash::Entry>,
     Arc<ash::Instance>,
     Option<super::debug_callback::DebugUtilsMessanger>,
 )> {
+    let mut instance_extensions = vec![
+        #[cfg(debug_assertions)]
+        vk::EXT_DEBUG_UTILS_NAME.as_ptr(),
+        #[cfg(target_vendor = "apple")]
+        vk::KHR_PORTABILITY_ENUMERATION_NAME.as_ptr(),
+    ];
+
+    addition_extension
+        .iter()
+        .for_each(|ext| instance_extensions.push(*ext));
+
     let entry = match unsafe { ash::Entry::load() } {
         Ok(entry) => Arc::new(entry),
         Err(e) => {

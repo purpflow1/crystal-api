@@ -6,7 +6,7 @@ use std::{
 use ash::{Instance, vk};
 
 use crate::{
-    debug::error,
+    debug::{error, log},
     errors::{GraphicsError, GraphicsResult},
     vulkan::presentation::PresentSurface,
 };
@@ -202,6 +202,30 @@ impl DeviceManager {
                 .map(|ext| ext.to_str().unwrap().to_string())
                 .collect(),
         }))
+    }
+
+    pub(crate) fn log_device(&self) {
+        let (maj, min, pat, var) = {
+            let version = self.device_properties.api_version;
+            (
+                vk::api_version_major(version),
+                vk::api_version_minor(version),
+                vk::api_version_patch(version),
+                vk::api_version_variant(version),
+            )
+        };
+
+        log!(
+            "| picked device: [ {} ] vulkan version: [ {}.{}.{}.{} ]",
+            self.device_name,
+            maj,
+            min,
+            pat,
+            var
+        );
+        for extension in &self.supported_extensions {
+            log!("|| {}", extension);
+        }
     }
 }
 

@@ -701,38 +701,11 @@ impl traits::GraphicsApi for VulkanEntry {
 
 impl VulkanEntry {
     pub(crate) fn no_presentation() -> GraphicsResult<Arc<dyn traits::GraphicsApi>> {
-        let instance_extensions = vec![
-            #[cfg(debug_assertions)]
-            vk::EXT_DEBUG_UTILS_NAME.as_ptr(),
-            #[cfg(target_vendor = "apple")]
-            vk::KHR_PORTABILITY_ENUMERATION_NAME.as_ptr(),
-        ];
-
-        let (entry, instance, _debug_utils_messanger) = create_instance(instance_extensions)?;
+        let (entry, instance, _debug_utils_messanger) = create_instance(&[])?;
 
         let device_manager = DeviceManager::new(entry.clone(), instance.clone(), None)?;
 
-        let (maj, min, pat, var) = {
-            let version = device_manager.device_properties.api_version;
-            (
-                vk::api_version_major(version),
-                vk::api_version_minor(version),
-                vk::api_version_patch(version),
-                vk::api_version_variant(version),
-            )
-        };
-
-        log!(
-            "| picked device: [ {} ] vulkan version: [ {}.{}.{}.{} ]",
-            device_manager.device_name,
-            maj,
-            min,
-            pat,
-            var
-        );
-        for extension in &device_manager.supported_extensions {
-            log!("|| {}", extension);
-        }
+        device_manager.log_device();
 
         let command_manager = CommandManager::new(device_manager.clone(), 1)?;
 
@@ -757,25 +730,17 @@ impl VulkanEntry {
         settings: &GraphicsApiInitSettings,
         window: &T,
     ) -> GraphicsResult<Arc<dyn traits::GraphicsApi>> {
-        let mut instance_extensions = vec![
-            #[cfg(debug_assertions)]
-            vk::EXT_DEBUG_UTILS_NAME.as_ptr(),
-            #[cfg(target_vendor = "apple")]
-            vk::KHR_PORTABILITY_ENUMERATION_NAME.as_ptr(),
-        ];
-
-        let mut required_extensions = match ash_window::enumerate_required_extensions(
+        let required_extensions = match ash_window::enumerate_required_extensions(
             window.display_handle().unwrap().as_raw(),
         ) {
-            Ok(ext) => ext.to_vec(),
+            Ok(ext) => ext,
             Err(e) => {
                 error!("cannot enumerate required display extensions: {}", e);
                 return Err(GraphicsError::ConnotInitLibrary);
             }
         };
-        instance_extensions.append(&mut required_extensions);
 
-        let (entry, instance, _debug_utils_messanger) = create_instance(instance_extensions)?;
+        let (entry, instance, _debug_utils_messanger) = create_instance(required_extensions)?;
 
         let surface = Presentation::create_surface(
             &entry,
@@ -790,37 +755,13 @@ impl VulkanEntry {
         let device_manager =
             DeviceManager::new(entry.clone(), instance.clone(), Some(surface.clone()))?;
 
-        let mut khr_swapchain_found = false;
+        device_manager.log_device();
 
-        let (maj, min, pat, var) = {
-            let version = device_manager.device_properties.api_version;
-            (
-                vk::api_version_major(version),
-                vk::api_version_minor(version),
-                vk::api_version_patch(version),
-                vk::api_version_variant(version),
-            )
-        };
-
-        log!(
-            "| picked device: [ {} ] vulkan version: [ {}.{}.{}.{} ]",
-            device_manager.device_name,
-            maj,
-            min,
-            pat,
-            var
-        );
-        for extension in &device_manager.supported_extensions {
-            log!("|| {}", extension);
-
-            if !khr_swapchain_found
-                && extension.as_str() == vk::KHR_SWAPCHAIN_NAME.to_str().unwrap()
-            {
-                khr_swapchain_found = true;
-            }
-        }
-
-        if !khr_swapchain_found {
+        if !device_manager
+            .supported_extensions
+            .iter()
+            .any(|ext| ext.as_str() == vk::KHR_SWAPCHAIN_NAME.to_str().unwrap())
+        {
             error!("picked device has no swapchain support!");
             return Err(GraphicsError::NotSupportedPresent);
         }
