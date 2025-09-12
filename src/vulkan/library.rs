@@ -865,11 +865,6 @@ impl VulkanEntry {
         };
         instance_extensions.append(&mut required_extensions);
 
-        #[cfg(debug_assertions)]
-        unsafe {
-            std::env::set_var("VK_LOADER_LAYERS_DISABLE", "~implicit~")
-        };
-
         let entry = match unsafe { ash::Entry::load() } {
             Ok(entry) => Arc::new(entry),
             Err(e) => {
