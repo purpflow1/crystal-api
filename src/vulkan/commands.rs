@@ -112,14 +112,14 @@ impl GpuFuture {
             .command_buffers(&command_buffers)
             .signal_semaphores(&signal_semaphores);
 
-        queue.submit(&[submit_info], fence).unwrap();
+        queue.submit(&[submit_info], fence)?;
 
         if !fence.is_null() {
             unsafe {
-                queue
-                    .device
-                    .wait_for_fences(&[fence], true, u64::MAX)
-                    .unwrap();
+                if let Err(e) = queue.device.wait_for_fences(&[fence], true, u64::MAX) {
+                    error!("cannot wait for fences: {}", e);
+                    return Err(GraphicsError::SyncError);
+                };
 
                 queue.device.destroy_fence(fence, None);
             };
@@ -214,7 +214,9 @@ pub(crate) struct CommandBuffer {
 impl Drop for CommandBuffer {
     fn drop(&mut self) {
         unsafe {
-            self.pool.queue.wait_idle().unwrap();
+            if let Err(e) = self.pool.queue.wait_idle() {
+                error!("cannot queue wait idle: {}", e)
+            };
             self.pool
                 .device_manager
                 .device

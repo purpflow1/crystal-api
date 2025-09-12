@@ -3,7 +3,7 @@ use std::sync::Arc;
 use ash::vk;
 
 use crate::{
-    debug::{error, log},
+    debug::error,
     errors::{GraphicsError, GraphicsResult},
     vulkan::API_VERSION_LATEST,
 };
@@ -94,7 +94,7 @@ pub(crate) fn create_instance(
         #[cfg(debug_assertions)]
         match super::debug_callback::create_debug_utils_messanger(&entry, &instance) {
             Ok(debug_utils_messanger) => {
-                log!("debug_utils_messanger created");
+                crate::debug::log!("debug_utils_messanger created");
                 Some(debug_utils_messanger)
             }
             Err(e) => {

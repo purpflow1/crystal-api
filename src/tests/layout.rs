@@ -30,15 +30,17 @@ fn layout_empty_buffers_creation() {
 }
 
 #[test]
-#[should_panic(expected = "fatal: textures cannot exist without samplers")]
 fn layout_texture_no_samplers_creation() {
     let instance = init_api_instance().expect("cannot create instance");
-    instance.create_layout(false, 1, 0, 1, 1).unwrap();
+    if let Ok(_) = instance.create_layout(false, 1, 0, 1, 1) {
+        panic!("invalid")
+    }
 }
 
 #[test]
-#[should_panic(expected = "fatal: textures cannot exist without samplers")]
 fn layout_sampler_no_textures_creation() {
     let instance = init_api_instance().expect("cannot create instance");
-    instance.create_layout(false, 0, 1, 1, 1).unwrap();
+    if let Ok(_) = instance.create_layout(false, 0, 1, 1, 1) {
+        panic!("invalid")
+    }
 }

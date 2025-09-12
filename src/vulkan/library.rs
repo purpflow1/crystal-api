@@ -503,15 +503,15 @@ impl traits::GraphicsApi for VulkanEntry {
         uniform_num: usize,
         storage_num: usize,
     ) -> GraphicsResult<Arc<dyn Layout>> {
-        assert!(
-            ((sampler_num == 0 && texture_num == 0) != (sampler_num > 0 && texture_num > 0)),
-            "fatal: textures cannot exist without samplers",
-        );
+        if (sampler_num == 0 && texture_num == 0) == (sampler_num > 0 && texture_num > 0) {
+            error!("textures cannot exist without samplers");
+            return Err(GraphicsError::DataError);
+        }
 
-        assert!(
-            uniform_num > 0 || storage_num > 0,
-            "fatal: cannot create layout without buffers"
-        ); // TODO it is possible!
+        if !(uniform_num > 0 || storage_num > 0) {
+            error!("cannot create layout without buffers");
+            return Err(GraphicsError::DataError);
+        } // TODO it is possible!
 
         log!(
             "creating layout [ double_buffering = {} ]",

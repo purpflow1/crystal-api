@@ -25,7 +25,7 @@ impl Drop for DebugUtilsMessanger {
     }
 }
 
-#[allow(unused_variables)]
+#[allow(unused)]
 unsafe extern "system" fn debug_callback(
     message_severity: DebugUtilsMessageSeverityFlagsEXT,
     message_type: DebugUtilsMessageTypeFlagsEXT,
@@ -55,6 +55,7 @@ unsafe extern "system" fn debug_callback(
     0
 }
 
+#[allow(unused)]
 pub(crate) fn create_debug_utils_messanger(
     entry: &Entry,
     instance: &Instance,
