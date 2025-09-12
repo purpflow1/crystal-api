@@ -227,17 +227,17 @@ impl ApplicationHandler for Context {
             .expect("cannot create entry");
 
         println!("compiling GLSL shaders...");
-        let file_name1 = "examples/shaders/render-target.vert";
-        let file_name2 = "examples/shaders/render-target.frag";
-        let file_name3 = "examples/shaders/textured.frag";
+        const FILENAME1: &str = "examples/shaders/render-target.vert";
+        const FILENAME2: &str = "examples/shaders/render-target.frag";
+        const FILENAME3: &str = "examples/shaders/textured.frag";
         let mut source1 = String::new();
         let mut source2 = String::new();
         let mut source3 = String::new();
-        let mut reader = BufReader::new(File::open(file_name1).unwrap());
+        let mut reader = BufReader::new(File::open(FILENAME1).unwrap());
         reader.read_to_string(&mut source1).unwrap();
-        let mut reader = BufReader::new(File::open(file_name2).unwrap());
+        let mut reader = BufReader::new(File::open(FILENAME2).unwrap());
         reader.read_to_string(&mut source2).unwrap();
-        let mut reader = BufReader::new(File::open(file_name3).unwrap());
+        let mut reader = BufReader::new(File::open(FILENAME3).unwrap());
         reader.read_to_string(&mut source3).unwrap();
 
         let compiler = shaderc::Compiler::new().unwrap();
@@ -246,7 +246,7 @@ impl ApplicationHandler for Context {
             .compile_into_spirv(
                 source1.as_str(),
                 shaderc::ShaderKind::Vertex,
-                file_name1,
+                FILENAME1,
                 "main",
                 None,
             )
@@ -255,7 +255,7 @@ impl ApplicationHandler for Context {
             .compile_into_spirv(
                 source2.as_str(),
                 shaderc::ShaderKind::Fragment,
-                file_name2,
+                FILENAME2,
                 "main",
                 None,
             )
@@ -264,7 +264,7 @@ impl ApplicationHandler for Context {
             .compile_into_spirv(
                 source3.as_str(),
                 shaderc::ShaderKind::Fragment,
-                file_name3,
+                FILENAME3,
                 "main",
                 None,
             )

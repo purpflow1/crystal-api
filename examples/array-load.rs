@@ -216,13 +216,13 @@ impl ApplicationHandler for Context {
             .expect("cannot create entry");
 
         println!("compiling GLSL shader...");
-        let file_name1 = "examples/shaders/desc.vert";
-        let file_name2 = "examples/shaders/desc.frag";
+        const FILENAME1: &str = "examples/shaders/desc.vert";
+        const FILENAME2: &str = "examples/shaders/desc.frag";
         let mut source1 = String::new();
         let mut source2 = String::new();
-        let mut reader = BufReader::new(File::open(file_name1).unwrap());
+        let mut reader = BufReader::new(File::open(FILENAME1).unwrap());
         reader.read_to_string(&mut source1).unwrap();
-        let mut reader = BufReader::new(File::open(file_name2).unwrap());
+        let mut reader = BufReader::new(File::open(FILENAME2).unwrap());
         reader.read_to_string(&mut source2).unwrap();
 
         let compiler = shaderc::Compiler::new().unwrap();
@@ -230,7 +230,7 @@ impl ApplicationHandler for Context {
             .compile_into_spirv(
                 source1.as_str(),
                 shaderc::ShaderKind::Vertex,
-                file_name1,
+                FILENAME1,
                 "main",
                 None,
             )
@@ -239,7 +239,7 @@ impl ApplicationHandler for Context {
             .compile_into_spirv(
                 source2.as_str(),
                 shaderc::ShaderKind::Fragment,
-                file_name2,
+                FILENAME2,
                 "main",
                 None,
             )
