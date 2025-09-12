@@ -18,7 +18,7 @@ type Vec2 = [f32; 2];
 pub type Index = u32;
 
 /// Textured vertex struct
-#[repr(C, align(16))]
+#[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub struct VertexTexture {
     pos: Vec3,
@@ -114,7 +114,10 @@ impl Mesh {
                         splitted[2].parse().unwrap(),
                         splitted[3].parse().unwrap(),
                     ]),
-                    "vt" => uvs.push([splitted[1].parse().unwrap(), splitted[2].parse().unwrap()]),
+                    "vt" => uvs.push([
+                        splitted[1].parse::<f32>().unwrap(),
+                        splitted[2].parse::<f32>().unwrap(),
+                    ]),
                     "v" => vertices.push(VertexTexture {
                         pos: [
                             splitted[1].parse().unwrap(),
