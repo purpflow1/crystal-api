@@ -1,9 +1,9 @@
 mod commands;
-#[cfg(debug_assertions)]
 mod debug_callback;
 mod depth;
 mod devices;
 mod images;
+mod instance;
 mod layout;
 mod library;
 mod memory;

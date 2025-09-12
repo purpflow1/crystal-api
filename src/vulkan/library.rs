@@ -23,7 +23,7 @@ use crate::{
     mesh::{Index, Mesh, VertexTexture},
     object::{MeshBuffer, Object},
     traits::{self, Layout},
-    vulkan::{API_VERSION_LATEST, VulkanLayout},
+    vulkan::{VulkanLayout, instance::create_instance},
 };
 
 pub(crate) struct TimeState {
@@ -34,7 +34,7 @@ pub(crate) struct TimeState {
 pub(crate) struct VulkanEntry {
     command_manager: Arc<CommandManager>,
     #[cfg(debug_assertions)]
-    _debug_utils_messanger: super::debug_callback::DebugUtilsMessanger,
+    _debug_utils_messanger: Option<super::debug_callback::DebugUtilsMessanger>,
     device_manager: Arc<DeviceManager>,
 
     presentation: Option<Arc<Presentation>>,
@@ -708,97 +708,7 @@ impl VulkanEntry {
             vk::KHR_PORTABILITY_ENUMERATION_NAME.as_ptr(),
         ];
 
-        let entry = match unsafe { ash::Entry::load() } {
-            Ok(entry) => Arc::new(entry),
-            Err(e) => {
-                error!("cannot load vulkan entry: {}", e);
-                return GraphicsResult::Err(GraphicsError::ConnotInitLibrary);
-            }
-        };
-
-        let flags = if cfg!(target_vendor = "apple") {
-            vk::InstanceCreateFlags::ENUMERATE_PORTABILITY_KHR
-        } else {
-            vk::InstanceCreateFlags::empty()
-        };
-
-        let app_info = vk::ApplicationInfo::default().api_version(API_VERSION_LATEST);
-
-        #[cfg(not(debug_assertions))]
-        let create_info = vk::InstanceCreateInfo::default()
-            .flags(flags)
-            .application_info(&app_info)
-            .enabled_extension_names(&instance_extensions);
-
-        #[cfg(debug_assertions)]
-        let layers;
-        #[cfg(debug_assertions)]
-        let layers_pp: Vec<*const i8>;
-
-        #[cfg(debug_assertions)]
-        let create_info = {
-            layers = super::validation::get_supported_validation_layers(&entry);
-            if layers.is_empty() {
-                error!(
-                    "No validation layers found!
-                    Vulkan SDK should be installed for proper debug.
-                    Visit https://vulkan.lunarg.com/"
-                );
-                return Err(GraphicsError::ConnotInitLibrary);
-            }
-
-            layers_pp = layers.iter().map(|x| x.as_ptr()).collect();
-
-            let mut create_info = vk::InstanceCreateInfo::default()
-                .flags(flags)
-                .application_info(&app_info)
-                .enabled_extension_names(&instance_extensions);
-
-            create_info.pp_enabled_layer_names = layers_pp.as_ptr();
-            create_info.enabled_layer_count = layers_pp.len() as u32;
-
-            create_info
-        };
-
-        let instance = match unsafe { entry.create_instance(&create_info, None) } {
-            Err(e) => {
-                error!("cannot create vulkan instance: {}", e);
-
-                #[cfg(debug_assertions)]
-                {
-                    log!("| [layers]");
-
-                    layers.iter().for_each(|x| {
-                        let layer_bytes = &unsafe { *(x.as_ptr() as *const [u8; 256]) };
-                        let layer = std::ffi::CStr::from_bytes_until_nul(layer_bytes)
-                            .unwrap()
-                            .to_str()
-                            .unwrap();
-                        log!("| {}", layer);
-                    });
-
-                    log!("| [extensions]");
-
-                    instance_extensions.iter().for_each(|x| {
-                        let ext_bytes = &unsafe { *(*x as *const [u8; 256]) };
-                        let ext = std::ffi::CStr::from_bytes_until_nul(ext_bytes)
-                            .unwrap()
-                            .to_str()
-                            .unwrap();
-                        log!("| {}", ext);
-                    });
-                }
-
-                return GraphicsResult::Err(GraphicsError::ConnotInitLibrary);
-            }
-            Ok(instance) => Arc::new(instance),
-        };
-
-        #[cfg(debug_assertions)]
-        let debug_utils_messanger = {
-            log!("creating debug utils");
-            super::debug_callback::create_debug_utils_messanger(&entry, &instance)?
-        };
+        let (entry, instance, _debug_utils_messanger) = create_instance(instance_extensions)?;
 
         let device_manager = DeviceManager::new(entry.clone(), instance.clone(), None)?;
 
@@ -831,7 +741,7 @@ impl VulkanEntry {
             command_manager,
 
             #[cfg(debug_assertions)]
-            _debug_utils_messanger: debug_utils_messanger,
+            _debug_utils_messanger,
 
             presentation: None,
 
@@ -865,96 +775,7 @@ impl VulkanEntry {
         };
         instance_extensions.append(&mut required_extensions);
 
-        let entry = match unsafe { ash::Entry::load() } {
-            Ok(entry) => Arc::new(entry),
-            Err(e) => {
-                error!("cannot load vulkan entry: {}", e);
-                return GraphicsResult::Err(GraphicsError::ConnotInitLibrary);
-            }
-        };
-
-        let flags = if cfg!(target_vendor = "apple") {
-            vk::InstanceCreateFlags::ENUMERATE_PORTABILITY_KHR
-        } else {
-            vk::InstanceCreateFlags::empty()
-        };
-
-        let app_info = vk::ApplicationInfo::default().api_version(API_VERSION_LATEST);
-        #[cfg(not(debug_assertions))]
-        let create_info = vk::InstanceCreateInfo::default()
-            .flags(flags)
-            .application_info(&app_info)
-            .enabled_extension_names(&instance_extensions);
-
-        #[cfg(debug_assertions)]
-        let layers;
-        #[cfg(debug_assertions)]
-        let layers_pp: Vec<*const i8>;
-
-        #[cfg(debug_assertions)]
-        let create_info = {
-            layers = super::validation::get_supported_validation_layers(&entry);
-            if layers.is_empty() {
-                error!(
-                    "No validation layers found!
-                    Vulkan SDK should be installed for proper debug.
-                    Visit https://vulkan.lunarg.com/"
-                );
-                return Err(GraphicsError::ConnotInitLibrary);
-            }
-
-            layers_pp = layers.iter().map(|x| x.as_ptr()).collect();
-
-            let mut create_info = vk::InstanceCreateInfo::default()
-                .flags(flags)
-                .application_info(&app_info)
-                .enabled_extension_names(&instance_extensions);
-
-            create_info.pp_enabled_layer_names = layers_pp.as_ptr();
-            create_info.enabled_layer_count = layers_pp.len() as u32;
-
-            create_info
-        };
-
-        let instance = match unsafe { entry.create_instance(&create_info, None) } {
-            Err(e) => {
-                log!("cannot create vulkan instance: {}", e);
-
-                #[cfg(debug_assertions)]
-                {
-                    log!("| [layers]");
-
-                    layers.iter().for_each(|x| {
-                        let layer_bytes = &unsafe { *(x.as_ptr() as *const [u8; 256]) };
-                        let layer = std::ffi::CStr::from_bytes_until_nul(layer_bytes)
-                            .unwrap()
-                            .to_str()
-                            .unwrap();
-                        log!("| {}", layer);
-                    });
-
-                    log!("| [extensions]");
-
-                    instance_extensions.iter().for_each(|x| {
-                        let ext_bytes = &unsafe { *(*x as *const [u8; 256]) };
-                        let ext = std::ffi::CStr::from_bytes_until_nul(ext_bytes)
-                            .unwrap()
-                            .to_str()
-                            .unwrap();
-                        log!("| {}", ext);
-                    });
-                }
-
-                return GraphicsResult::Err(GraphicsError::ConnotInitLibrary);
-            }
-            Ok(instance) => Arc::new(instance),
-        };
-
-        #[cfg(debug_assertions)]
-        let debug_utils_messanger = {
-            log!("creating debug utils");
-            super::debug_callback::create_debug_utils_messanger(&entry, &instance)?
-        };
+        let (entry, instance, _debug_utils_messanger) = create_instance(instance_extensions)?;
 
         let surface = Presentation::create_surface(
             &entry,
@@ -1017,7 +838,7 @@ impl VulkanEntry {
             command_manager,
 
             #[cfg(debug_assertions)]
-            _debug_utils_messanger: debug_utils_messanger,
+            _debug_utils_messanger,
 
             presentation: Some(presentation),
 
