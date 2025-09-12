@@ -34,7 +34,6 @@ pub use traits::*;
 
 use crate::{errors::GraphicsResult, vulkan::VulkanEntry};
 
-// TODO document
 /// Creates api instance with presentation support
 pub fn init_api_instance_with_presentation<T: HasWindowHandle + HasDisplayHandle>(
     settings: &GraphicsApiInitSettings,
@@ -44,12 +43,6 @@ pub fn init_api_instance_with_presentation<T: HasWindowHandle + HasDisplayHandle
 }
 
 /// Creates api instance for compute operations
-///
-/// ```rust
-/// use crystal_api::init_api_instance;
-///
-/// let graphics = init_api_instance().expect("cannot create entry");
-/// ```
 pub fn init_api_instance() -> GraphicsResult<Arc<dyn traits::GraphicsApi>> {
     VulkanEntry::no_presentation()
 }
