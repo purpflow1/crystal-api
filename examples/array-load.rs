@@ -22,7 +22,7 @@ use winit::{
     window::Window,
 };
 
-const OBJECT_DIMENTION: usize = 8;
+const OBJECT_DIMENTION: usize = 5;
 const DISTANCE: f32 = 2.;
 
 trait AsBytes {
