@@ -10,6 +10,7 @@ use crate::{
     render_target::RenderTarget,
 };
 
+/// Used to specify input and output shader data
 pub struct Layout {
     pub(crate) inner: Arc<dyn LayoutProxy>,
 }

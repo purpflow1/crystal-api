@@ -28,7 +28,7 @@ pub(crate) struct ImageCreateInfo {
     pub mem_property: vk::MemoryPropertyFlags,
 }
 
-pub struct Image {
+pub(crate) struct Image {
     pub device_manager: Arc<DeviceManager>,
     pub image: vk::Image,
     pub image_view: vk::ImageView,
@@ -172,7 +172,7 @@ impl Image {
     }
 }
 
-pub struct VulkanTexture {
+pub(crate) struct VulkanTexture {
     pub image: Arc<Image>,
 }
 

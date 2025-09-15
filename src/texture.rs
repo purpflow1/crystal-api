@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use crate::proxies::TextureProxy;
 
+/// Stores texture data in GPU
 pub struct Texture {
     pub(crate) inner: Arc<dyn TextureProxy>,
 }

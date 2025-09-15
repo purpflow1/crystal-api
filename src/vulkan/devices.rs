@@ -11,7 +11,7 @@ use crate::{
     vulkan::presentation::PresentSurface,
 };
 
-pub struct Queue {
+pub(crate) struct Queue {
     pub device: Arc<ash::Device>,
     pub flags: vk::QueueFlags,
     pub present_support: bool,
@@ -57,7 +57,7 @@ impl Queue {
             .concat()
     }
 
-    pub fn wait_idle(&self) -> GraphicsResult<()> {
+    pub(crate) fn wait_idle(&self) -> GraphicsResult<()> {
         match unsafe { self.device.queue_wait_idle(*self.handle.lock().unwrap()) } {
             Ok(()) => Ok(()),
             Err(e) => {
@@ -67,7 +67,11 @@ impl Queue {
         }
     }
 
-    pub fn submit(&self, submits: &[vk::SubmitInfo<'_>], fence: vk::Fence) -> GraphicsResult<()> {
+    pub(crate) fn submit(
+        &self,
+        submits: &[vk::SubmitInfo<'_>],
+        fence: vk::Fence,
+    ) -> GraphicsResult<()> {
         let lock = self.handle.lock().unwrap();
 
         if let Err(e) = unsafe { self.device.queue_submit(*lock, submits, fence) } {
@@ -78,7 +82,7 @@ impl Queue {
         Ok(())
     }
 
-    pub fn submit_still_lock(
+    pub(crate) fn submit_still_lock(
         &self,
         submits: &[vk::SubmitInfo<'_>],
         fence: vk::Fence,
@@ -94,8 +98,8 @@ impl Queue {
     }
 }
 
-pub struct DeviceManager {
-    pub entry: Arc<ash::Entry>,
+pub(crate) struct DeviceManager {
+    pub _entry: Arc<ash::Entry>,
     pub instance: Arc<ash::Instance>,
     pub device: Arc<ash::Device>,
     pub physical_device: vk::PhysicalDevice,
@@ -116,7 +120,7 @@ impl Drop for DeviceManager {
 }
 
 impl DeviceManager {
-    pub fn wait_idle(&self) -> GraphicsResult<()> {
+    pub(crate) fn wait_idle(&self) -> GraphicsResult<()> {
         let locks: Vec<MutexGuard<vk::Queue>> = self
             .queues
             .iter()
@@ -133,7 +137,7 @@ impl DeviceManager {
         Ok(())
     }
 
-    pub fn find_memory_type_index(
+    pub(crate) fn find_memory_type_index(
         &self,
         flags: vk::MemoryPropertyFlags,
         type_filter: u32,
@@ -150,7 +154,7 @@ impl DeviceManager {
         Err(GraphicsError::MemoryError)
     }
 
-    pub fn new(
+    pub(crate) fn new(
         entry: Arc<ash::Entry>,
         instance: Arc<Instance>,
         surface: Option<Arc<PresentSurface>>,
@@ -189,7 +193,7 @@ impl DeviceManager {
         )?;
 
         Ok(Arc::new(Self {
-            entry,
+            _entry: entry,
             instance,
             device: logical_device.clone(),
             physical_device,

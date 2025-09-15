@@ -7,6 +7,7 @@ use crate::{
     proxies::PipelineProxy,
 };
 
+/// Empty struct used for compute pipeline as a template
 pub struct ComputeDescriptor {}
 
 impl AttributeDescriptor for ComputeDescriptor {
@@ -15,6 +16,7 @@ impl AttributeDescriptor for ComputeDescriptor {
     }
 }
 
+/// Used to setup render or compute pipeline
 pub struct Pipeline<V: AttributeDescriptor> {
     pub(crate) inner: Arc<dyn PipelineProxy>,
     _ty: PhantomData<V>,
@@ -94,6 +96,7 @@ impl<V: AttributeDescriptor> Pipeline<V> {
 }
 
 impl Pipeline<ComputeDescriptor> {
+    /// Creates compute object. Need to specify compute groups
     pub fn create_object_compute(&self, groups: [u32; 3]) -> Object {
         Object {
             pipeline: self.inner.clone(),
@@ -105,6 +108,7 @@ impl Pipeline<ComputeDescriptor> {
         }
     }
 
+    /// Creates compute object with samplers
     pub fn create_object_compute_with_samplers(
         &self,
         groups: [u32; 3],

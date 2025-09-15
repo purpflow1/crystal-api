@@ -6,6 +6,7 @@ use std::{
 
 use crate::proxies::BufferProxy;
 
+/// Stores GPU data
 pub struct Buffer<T> {
     pub(crate) inner: Arc<dyn BufferProxy>,
     _t: PhantomData<T>,
@@ -19,6 +20,7 @@ impl<T> Buffer<T> {
         }
     }
 
+    /// Returns length of buffer
     pub fn len(&self) -> u64 {
         self.inner.get_size() / size_of::<T>() as u64
     }

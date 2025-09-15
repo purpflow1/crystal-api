@@ -17,7 +17,7 @@ pub(crate) struct Barriers {
     pub fence_render: [vk::Fence; 2],
 }
 
-pub struct GpuSync {
+pub(crate) struct GpuSync {
     pub device_manager: Arc<DeviceManager>,
     barriers: Barriers,
     n_pass: usize,
@@ -52,7 +52,7 @@ impl Drop for GpuSync {
 }
 
 impl GpuSync {
-    pub fn no_sync(device_manager: Arc<DeviceManager>) -> Arc<Mutex<Self>> {
+    pub(crate) fn no_sync(device_manager: Arc<DeviceManager>) -> Arc<Mutex<Self>> {
         Arc::new(Mutex::new(Self {
             device_manager,
             barriers: Default::default(),
@@ -62,7 +62,7 @@ impl GpuSync {
         }))
     }
 
-    pub fn new(
+    pub(crate) fn new(
         device_manager: Arc<DeviceManager>,
         render_images: u32,
     ) -> GraphicsResult<Arc<Mutex<Self>>> {
@@ -155,12 +155,12 @@ impl GpuSync {
         })))
     }
 
-    pub fn unflip(&mut self) {
+    pub(crate) fn unflip(&mut self) {
         self.n_pass = self.barriers.semaphore_image.len() - 1;
         self.odd_pass = 0;
     }
 
-    pub fn flip(&mut self) {
+    pub(crate) fn flip(&mut self) {
         self.n_pass = (self.n_pass + 1) % self.barriers.semaphore_image.len();
         self.odd_pass = (self.odd_pass + 1) % 2;
     }
@@ -190,27 +190,27 @@ impl GpuSync {
         Ok(())
     }
 
-    pub fn wait_render(&self) -> GraphicsResult<()> {
+    pub(crate) fn wait_render(&self) -> GraphicsResult<()> {
         self.wait_fences(&[self.barriers.fence_render[self.odd_pass]])
     }
 
-    pub fn fence_render(&self) -> vk::Fence {
+    pub(crate) fn fence_render(&self) -> vk::Fence {
         self.barriers.fence_render[self.odd_pass]
     }
 
-    pub fn semaphore_render(&self) -> vk::Semaphore {
+    pub(crate) fn semaphore_render(&self) -> vk::Semaphore {
         self.barriers.semaphore_render[self.image_index as usize]
     }
 
-    pub fn semaphore_image(&self) -> vk::Semaphore {
+    pub(crate) fn semaphore_image(&self) -> vk::Semaphore {
         self.barriers.semaphore_image[self.n_pass]
     }
 
-    pub fn semaphore_transfer(&self) -> vk::Semaphore {
+    pub(crate) fn semaphore_transfer(&self) -> vk::Semaphore {
         self.barriers.semaphore_transfer[self.n_pass]
     }
 
-    pub fn is_sync(&self) -> bool {
+    pub(crate) fn is_sync(&self) -> bool {
         !self.barriers.semaphore_transfer.is_empty()
     }
 }

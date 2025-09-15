@@ -8,7 +8,7 @@ use crate::{
     errors::GraphicsResult,
     layout::Layout,
     mesh::{AttributeDescriptor, Mesh},
-    object::{MeshBuffer, Object},
+    object::Object,
     proxies::*,
     render_target::RenderTarget,
     texture::Texture,

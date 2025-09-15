@@ -228,7 +228,7 @@ impl LayoutDynamicData {
     }
 }
 
-pub struct VulkanLayout {
+pub(crate) struct VulkanLayout {
     device_manager: Arc<DeviceManager>,
 
     descriptor_pool: vk::DescriptorPool,
@@ -643,7 +643,7 @@ impl VulkanLayout {
                     *command_buffer,
                     index_buffer,
                     0,
-                    vk::IndexType::UINT32,
+                    index_type,
                 );
             }
 
@@ -706,10 +706,10 @@ impl ShaderStageInfo {
     }
 }
 
-pub struct VulkanPipeline {
+pub(crate) struct VulkanPipeline {
     device_manager: Arc<DeviceManager>,
-    pub(crate) layout: Arc<VulkanLayout>,
-    pub(crate) render_target: Option<Arc<VulkanRenderTarget>>,
+    pub layout: Arc<VulkanLayout>,
+    pub render_target: Option<Arc<VulkanRenderTarget>>,
     pub handle: vk::Pipeline,
 }
 
@@ -730,7 +730,7 @@ impl VulkanPipeline {
         stages.into_iter().map(|stage| stage.as_vk()).collect()
     }
 
-    pub fn new_compute(
+    pub(crate) fn new_compute(
         device_manager: Arc<DeviceManager>,
         layout: Arc<VulkanLayout>,
         shader: &Shader,
@@ -795,7 +795,7 @@ impl VulkanPipeline {
         }))
     }
 
-    pub fn from_render_target(
+    pub(crate) fn from_render_target(
         device_manager: Arc<DeviceManager>,
         layout: Arc<VulkanLayout>,
         shaders: &[Shader],

@@ -4,7 +4,7 @@ use crate::{
     GpuSamplerSet,
     errors::GraphicsResult,
     mesh::Attribute,
-    object::{MeshBuffer, Object},
+    object::{MeshBufferProxy, Object},
     shader::Shader,
     vulkan,
 };
@@ -34,7 +34,7 @@ pub(crate) trait DeviceProxy: Sync + Send {
         vertices: &[u8],
         indices: &[u8],
         index_size: usize,
-    ) -> GraphicsResult<Arc<MeshBuffer>>;
+    ) -> GraphicsResult<Arc<MeshBufferProxy>>;
     fn create_sampler_set(
         &self,
         textures: &[(u32, Arc<dyn TextureProxy>)],

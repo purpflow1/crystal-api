@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use crate::{errors::GraphicsResult, proxies::RenderTargetProxy, texture::Texture};
 
+/// Used to render into
 pub struct RenderTarget {
     pub(crate) inner: Arc<dyn RenderTargetProxy>,
 }
@@ -11,6 +12,7 @@ impl RenderTarget {
         Self { inner: proxy }
     }
 
+    /// Inherits a new `RenderTarget` from current
     pub fn inherit(
         &self,
         extent: [u32; 2],

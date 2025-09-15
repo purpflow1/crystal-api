@@ -20,8 +20,7 @@ use crate::{
     GpuSamplerSet, GraphicsApiInitSettings,
     debug::{error, log},
     errors::{GraphicsError, GraphicsResult},
-    mesh::Attribute,
-    object::{MeshBuffer, Object},
+    object::{MeshBufferProxy, Object},
     proxies::*,
     vulkan::{VulkanLayout, instance::create_instance},
 };
@@ -592,7 +591,7 @@ impl DeviceProxy for VulkanEntry {
         vertices: &[u8],
         indices: &[u8],
         index_size: usize,
-    ) -> GraphicsResult<Arc<MeshBuffer>> {
+    ) -> GraphicsResult<Arc<MeshBufferProxy>> {
         let vertex_size = vertices.len() as u64;
         let indices_size = indices.len() as u64;
 
@@ -633,7 +632,7 @@ impl DeviceProxy for VulkanEntry {
             .get_memory(0..indices_size)
             .copy_from_slice(indices);
 
-        Ok(Arc::new(MeshBuffer {
+        Ok(Arc::new(MeshBufferProxy {
             vertices: vertex_buffer_manager,
             indices: index_buffer_manager,
             index_size,

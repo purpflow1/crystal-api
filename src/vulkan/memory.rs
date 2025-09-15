@@ -14,7 +14,7 @@ use crate::{
 use super::{devices::DeviceManager, sync::GpuSync};
 
 #[derive(Clone)]
-pub struct BufferInfo {
+pub(crate) struct BufferInfo {
     pub size: u64,
     pub usage: vk::BufferUsageFlags,
     pub properties: vk::MemoryPropertyFlags,
@@ -99,7 +99,7 @@ impl BufferData {
     }
 }
 
-pub struct BufferManager {
+pub(crate) struct BufferManager {
     device_manager: Arc<DeviceManager>,
     buffer_data: Vec<BufferData>,
     pub info: BufferInfo,
@@ -166,7 +166,7 @@ impl BufferManager {
         }))
     }
 
-    pub fn get_handlers(&self) -> Vec<vk::Buffer> {
+    pub(crate) fn get_handlers(&self) -> Vec<vk::Buffer> {
         self.buffer_data.iter().map(|buf| buf.handler).collect()
     }
 }

@@ -20,7 +20,7 @@ pub(crate) struct SwapChainSupportDetails {
     pub capabilities: SurfaceCapabilitiesKHR,
 }
 
-pub struct PresentSurface {
+pub(crate) struct PresentSurface {
     pub surface: ash::khr::surface::Instance,
     pub surface_khr: vk::SurfaceKHR,
     framebuffer_extent: Option<vk::Extent2D>,

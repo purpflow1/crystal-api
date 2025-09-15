@@ -22,7 +22,7 @@ use super::{
 
 type Resources = (Vec<vk::Framebuffer>, Vec<DepthResources>, Vec<Arc<Image>>);
 
-pub struct VulkanRenderTarget {
+pub(crate) struct VulkanRenderTarget {
     device_manager: Arc<DeviceManager>,
     pub(crate) command_entry: Arc<CommandEntry>,
     pub extent: RwLock<vk::Extent2D>,
@@ -102,7 +102,7 @@ impl VulkanRenderTarget {
         }
     }
 
-    pub fn update_resources(
+    pub(crate) fn update_resources(
         &self,
         extent: vk::Extent2D,
         images: Vec<vk::ImageView>,
