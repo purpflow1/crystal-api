@@ -31,7 +31,7 @@ pub mod render_target;
 /// Settings module
 pub mod settings;
 mod shader;
-#[cfg(test)]
+#[cfg(all(test, debug_assertions))]
 mod tests;
 /// Texture module
 pub mod texture;

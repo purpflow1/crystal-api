@@ -32,7 +32,7 @@ fn layout_empty_buffers_creation() {
 #[test]
 fn layout_texture_no_samplers_creation() {
     let device = Device::compute().expect("cannot create device");
-    if let Ok(_) = device.create_layout(false, 1, 0, 1, 1) {
+    if device.create_layout(false, 1, 0, 1, 1).is_ok() {
         panic!("invalid")
     }
 }
@@ -40,7 +40,7 @@ fn layout_texture_no_samplers_creation() {
 #[test]
 fn layout_sampler_no_textures_creation() {
     let device = Device::compute().expect("cannot create device");
-    if let Ok(_) = device.create_layout(false, 0, 1, 1, 1) {
+    if device.create_layout(false, 0, 1, 1, 1).is_ok() {
         panic!("invalid")
     }
 }
