@@ -11,7 +11,7 @@ use crate::{
     GpuSamplerSet, Shader, ShaderStage,
     debug::{error, log},
     errors::{GraphicsError, GraphicsResult},
-    mesh::{Attribute, VertexTexture},
+    mesh::Attribute,
     object::Object,
     proxies::*,
 };
@@ -622,6 +622,16 @@ impl VulkanLayout {
                 .unwrap()
                 .get_handlers()[0];
 
+            let index_type = match mesh_buffer.index_size {
+                1 => vk::IndexType::UINT8_KHR,
+                2 => vk::IndexType::UINT16,
+                4 => vk::IndexType::UINT32,
+                size => {
+                    error!("unknown index size: {}", size);
+                    vk::IndexType::NONE_KHR
+                }
+            };
+
             unsafe {
                 device_manager.device.cmd_bind_pipeline(
                     *command_buffer,
@@ -637,7 +647,8 @@ impl VulkanLayout {
                 );
             }
 
-            let index_count = mesh_buffer.mesh.indices.len();
+            let index_count =
+                index.as_vulkan().as_ref().unwrap().info.size / mesh_buffer.index_size as u64;
 
             unsafe {
                 device_manager.device.cmd_bind_vertex_buffers(
@@ -837,7 +848,7 @@ impl VulkanPipeline {
 
         let binding_descriptions = &[vk::VertexInputBindingDescription::default()
             .binding(0)
-            .stride(size_of::<VertexTexture>() as u32)
+            .stride(attributes.iter().map(|a| a.size as u32).sum())
             .input_rate(vk::VertexInputRate::VERTEX)];
 
         let mut attribute_descriptions = vec![];

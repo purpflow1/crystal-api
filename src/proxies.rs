@@ -3,7 +3,7 @@ use std::{ops::Range, sync::Arc};
 use crate::{
     GpuSamplerSet,
     errors::GraphicsResult,
-    mesh::{Attribute, Mesh},
+    mesh::Attribute,
     object::{MeshBuffer, Object},
     shader::Shader,
     vulkan,
@@ -29,7 +29,12 @@ pub(crate) trait DeviceProxy: Sync + Send {
         transfer: bool,
         enable_sync: bool,
     ) -> GraphicsResult<Arc<dyn BufferProxy>>;
-    fn create_buffer_mesh(&self, mesh: Arc<Mesh>) -> GraphicsResult<Arc<MeshBuffer>>;
+    fn create_buffer_mesh(
+        &self,
+        vertices: &[u8],
+        indices: &[u8],
+        index_size: usize,
+    ) -> GraphicsResult<Arc<MeshBuffer>>;
     fn create_sampler_set(
         &self,
         textures: &[(u32, Arc<dyn TextureProxy>)],

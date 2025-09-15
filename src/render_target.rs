@@ -1,10 +1,6 @@
 use std::sync::Arc;
 
-use crate::{
-    errors::GraphicsResult,
-    proxies::{RenderTargetProxy, TextureProxy},
-    texture::Texture,
-};
+use crate::{errors::GraphicsResult, proxies::RenderTargetProxy, texture::Texture};
 
 pub struct RenderTarget {
     pub(crate) inner: Arc<dyn RenderTargetProxy>,

@@ -1,198 +1,32 @@
-use std::{
-    io::{BufRead, BufReader},
-    mem::offset_of,
-};
-
-use crate::errors::GraphicsResult;
+use std::{marker::PhantomData, sync::Arc};
 
 /// Used to setup vertex shader attributes
+#[derive(Clone, Copy)]
 pub struct Attribute {
-    pub(crate) size: usize,
-    pub(crate) offset: usize,
+    pub size: usize,
+    pub offset: usize,
 }
 
-type Vec3 = [f32; 3];
-type Vec2 = [f32; 2];
-
-/// Index type
-pub type Index = u32;
-
-/// Textured vertex struct
-#[repr(C)]
-#[derive(Clone, Copy, Default)]
-pub struct VertexTexture {
-    pos: Vec3,
-    nor: Vec3,
-    uv: Vec2,
-    col: Vec3,
-}
-
-impl VertexTexture {
-    /// Gets list of vertex attributes used in shaders
-    pub fn get_attributes() -> Vec<Attribute> {
-        vec![
-            Attribute {
-                size: size_of::<Vec3>(),
-                offset: offset_of!(Self, pos),
-            },
-            Attribute {
-                size: size_of::<Vec3>(),
-                offset: offset_of!(Self, nor),
-            },
-            Attribute {
-                size: size_of::<Vec2>(),
-                offset: offset_of!(Self, uv),
-            },
-            Attribute {
-                size: size_of::<Vec3>(),
-                offset: offset_of!(Self, col),
-            },
-        ]
-    }
+pub trait AttributeDescriptor {
+    fn get_attributes() -> &'static [Attribute];
 }
 
 /// Mesh struct stores the mesh data in CPU memory
-pub struct Mesh {
-    pub(crate) vertices: Vec<VertexTexture>,
-    pub(crate) indices: Vec<Index>,
+pub struct Mesh<V: AttributeDescriptor, I> {
+    pub vertices: Vec<V>,
+    pub indices: Vec<I>,
 }
 
-impl Mesh {
-    /// Creates screen space plane mesh may be used for post-processing
-    pub fn screen_space_plane() -> Self {
-        let vertices = vec![
-            VertexTexture {
-                pos: [0., 0., 0.],
-                ..Default::default()
-            },
-            VertexTexture {
-                pos: [1., 0., 0.],
-                ..Default::default()
-            },
-            VertexTexture {
-                pos: [1., -1., 0.],
-                ..Default::default()
-            },
-            VertexTexture {
-                pos: [-1., -1., 0.],
-                ..Default::default()
-            },
-        ];
+pub struct MeshBuffer<V: AttributeDescriptor, I> {
+    pub(crate) inner: Arc<crate::object::MeshBuffer>,
+    _tp: PhantomData<(V, I)>,
+}
 
+impl<V: AttributeDescriptor, I> MeshBuffer<V, I> {
+    pub(crate) fn new(inner: Arc<crate::object::MeshBuffer>) -> Self {
         Self {
-            vertices,
-            indices: vec![0, 1, 2, 2, 3, 0],
+            inner,
+            _tp: PhantomData::default(),
         }
-    }
-
-    /// Creates the mesh from buffer with ```.obj``` format
-    pub fn from_buffer<T>(buffer: BufReader<T>) -> GraphicsResult<Self>
-    where
-        BufReader<T>: BufRead,
-    {
-        let mut vertices = vec![];
-        let mut indices = vec![];
-        let mut normals: Vec<[f32; 3]> = vec![];
-        let mut uvs: Vec<[f32; 2]> = vec![];
-
-        for line in buffer.lines() {
-            let line = match line {
-                Ok(line) => line,
-                Err(_) => continue,
-            };
-
-            let splitted: Vec<&str> = line.split_whitespace().collect();
-
-            if splitted.is_empty() || splitted[0].starts_with('#') {
-                continue;
-            }
-
-            if splitted.len() >= 3 {
-                match splitted[0] {
-                    "vn" => normals.push([
-                        splitted[1].parse().unwrap(),
-                        splitted[2].parse().unwrap(),
-                        splitted[3].parse().unwrap(),
-                    ]),
-                    "vt" => uvs.push([
-                        splitted[1].parse::<f32>().unwrap(),
-                        splitted[2].parse::<f32>().unwrap(),
-                    ]),
-                    "v" => vertices.push(VertexTexture {
-                        pos: [
-                            splitted[1].parse().unwrap(),
-                            splitted[2].parse().unwrap(),
-                            splitted[3].parse().unwrap(),
-                        ],
-                        nor: [0., 0., 0.],
-                        uv: [0., 0.],
-                        col: if splitted.len() != 7 {
-                            [0., 0., 0.]
-                        } else {
-                            [
-                                splitted[4].parse().unwrap_or(0.),
-                                splitted[5].parse().unwrap_or(0.),
-                                splitted[6].parse().unwrap_or(0.),
-                            ]
-                        },
-                    }),
-                    "f" => {
-                        let mut local_indices = vec![];
-
-                        for &data in &splitted[1..] {
-                            if data.starts_with('#') {
-                                break;
-                            }
-                            let splitted: Vec<&str> = data.split('/').collect();
-
-                            let idx: i32 = splitted[0].parse().unwrap();
-                            let idx: Index = if idx >= 0 {
-                                (idx - 1) as Index
-                            } else {
-                                (idx + vertices.len() as i32) as Index
-                            };
-
-                            if !splitted[1].is_empty() {
-                                let uv: i32 = splitted[1].parse().unwrap();
-                                let uv: usize = if uv >= 0 {
-                                    (uv - 1) as usize
-                                } else {
-                                    (uv + uvs.len() as i32) as usize
-                                };
-                                vertices[idx as usize].uv = uvs[uv];
-                            }
-
-                            if splitted.len() > 2 && !splitted[2].is_empty() {
-                                let nor: i32 = splitted[2].parse().unwrap();
-                                let nor: usize = if nor >= 0 {
-                                    (nor - 1) as usize
-                                } else {
-                                    (nor + normals.len() as i32) as usize
-                                };
-                                vertices[idx as usize].nor = normals[nor];
-                            }
-
-                            local_indices.push(idx);
-                        }
-
-                        if local_indices.len() == 3 {
-                            indices.append(&mut local_indices);
-                        } else if local_indices.len() == 4 {
-                            indices.push(local_indices[0]);
-                            indices.push(local_indices[1]);
-                            indices.push(local_indices[2]);
-
-                            indices.push(local_indices[0]);
-                            indices.push(local_indices[2]);
-                            indices.push(local_indices[3]);
-                        }
-                    }
-
-                    _ => (),
-                }
-            }
-        }
-
-        Ok(Self { vertices, indices })
     }
 }

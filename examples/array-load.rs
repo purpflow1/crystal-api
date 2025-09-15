@@ -2,6 +2,7 @@ use crystal_api::{
     buffer::Buffer,
     debug::{LoggingLevel, set_internal_logging_level},
     errors::GraphicsResult,
+    mesh::{Attribute, AttributeDescriptor},
     object::Object,
     *,
 };
@@ -9,12 +10,13 @@ use crystal_api::{
 use std::{
     f32::consts::PI,
     fs::File,
-    io::{BufReader, Read},
+    io::{BufRead, BufReader, Read},
+    mem::offset_of,
     sync::Arc,
     time::{Duration, Instant},
 };
 
-use mesh::{Mesh, VertexTexture};
+use mesh::Mesh;
 use winit::{
     application::ApplicationHandler,
     dpi::LogicalSize,
@@ -25,6 +27,119 @@ use winit::{
 
 const OBJECT_DIMENTION: usize = 5;
 const DISTANCE: f32 = 2.;
+
+type Vec3 = [f32; 3];
+type Vec2 = [f32; 2];
+
+/// Index type
+pub type Index = u32;
+
+/// Textured vertex struct
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct VertexTexture {
+    pos: Vec3,
+    uv: Vec2,
+}
+
+impl AttributeDescriptor for VertexTexture {
+    fn get_attributes() -> &'static [mesh::Attribute] {
+        &[
+            Attribute {
+                size: size_of::<Vec3>(),
+                offset: offset_of!(Self, pos),
+            },
+            Attribute {
+                size: size_of::<Vec2>(),
+                offset: offset_of!(Self, uv),
+            },
+        ]
+    }
+}
+
+fn mesh_from_obj_buffer<T>(buffer: BufReader<T>) -> GraphicsResult<Mesh<VertexTexture, Index>>
+where
+    BufReader<T>: BufRead,
+{
+    let mut vertices = vec![];
+    let mut indices = vec![];
+    let mut uvs: Vec<[f32; 2]> = vec![];
+
+    for line in buffer.lines() {
+        let line = match line {
+            Ok(line) => line,
+            Err(_) => continue,
+        };
+
+        let splitted: Vec<&str> = line.split_whitespace().collect();
+
+        if splitted.is_empty() || splitted[0].starts_with('#') {
+            continue;
+        }
+
+        if splitted.len() >= 3 {
+            match splitted[0] {
+                "vt" => uvs.push([
+                    splitted[1].parse::<f32>().unwrap(),
+                    splitted[2].parse::<f32>().unwrap(),
+                ]),
+                "v" => vertices.push(VertexTexture {
+                    pos: [
+                        splitted[1].parse().unwrap(),
+                        splitted[2].parse().unwrap(),
+                        splitted[3].parse().unwrap(),
+                    ],
+                    uv: [0., 0.],
+                }),
+                "f" => {
+                    let mut local_indices = vec![];
+
+                    for &data in &splitted[1..] {
+                        if data.starts_with('#') {
+                            break;
+                        }
+                        let splitted: Vec<&str> = data.split('/').collect();
+
+                        let idx: i32 = splitted[0].parse().unwrap();
+                        let idx: Index = if idx >= 0 {
+                            (idx - 1) as Index
+                        } else {
+                            (idx + vertices.len() as i32) as Index
+                        };
+
+                        if !splitted[1].is_empty() {
+                            let uv: i32 = splitted[1].parse().unwrap();
+                            let uv: usize = if uv >= 0 {
+                                (uv - 1) as usize
+                            } else {
+                                (uv + uvs.len() as i32) as usize
+                            };
+                            vertices[idx as usize].uv = uvs[uv];
+                        }
+
+                        local_indices.push(idx);
+                    }
+
+                    if local_indices.len() == 3 {
+                        indices.append(&mut local_indices);
+                    } else if local_indices.len() == 4 {
+                        indices.push(local_indices[0]);
+                        indices.push(local_indices[1]);
+                        indices.push(local_indices[2]);
+
+                        indices.push(local_indices[0]);
+                        indices.push(local_indices[2]);
+                        indices.push(local_indices[3]);
+                    }
+                }
+
+                _ => (),
+            }
+        }
+    }
+
+    Ok(Mesh { vertices, indices })
+}
 
 struct State {
     delta_time_sum: Duration,
@@ -283,31 +398,24 @@ impl ApplicationHandler for Context {
         self.scene.transforms = Some(transform);
 
         let pipeline_render = layout_obj
-            .create_graphics_pipeline(
-                &render_target,
-                &shaders_obj,
-                &VertexTexture::get_attributes(),
-            )
+            .create_graphics_pipeline::<VertexTexture>(&render_target, &shaders_obj)
             .unwrap();
 
-        let mesh = Arc::new(
-            Mesh::from_buffer(BufReader::new(
-                File::open("examples/resources/mishka/owo.obj").unwrap(),
-            ))
-            .unwrap(),
-        );
+        let mesh = mesh_from_obj_buffer(BufReader::new(
+            File::open("examples/resources/mishka/owo.obj").unwrap(),
+        ))
+        .unwrap();
 
-        let mesh_buffer = device.create_buffer_mesh(mesh).unwrap();
+        let mesh_buffer = device.create_buffer_mesh(&mesh).unwrap();
 
-        let object = Object::with_mesh_sampled_array(
+        let object = Arc::new(pipeline_render.create_object_with_mesh_sampled_array(
             0,
-            &pipeline_render,
-            mesh_buffer.clone(),
+            &mesh_buffer,
             default_sampler.clone(),
             OBJECT_DIMENTION.pow(3) as u32,
-        );
+        ));
 
-        self.scene.objects.push(object.clone());
+        self.scene.objects.push(object);
         layout_obj
             .register_samplers(&[default_sampler, test_sampler])
             .unwrap();

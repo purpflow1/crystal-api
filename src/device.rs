@@ -7,7 +7,7 @@ use crate::{
     buffer::Buffer,
     errors::GraphicsResult,
     layout::Layout,
-    mesh::Mesh,
+    mesh::{AttributeDescriptor, Mesh},
     object::{MeshBuffer, Object},
     proxies::*,
     render_target::RenderTarget,
@@ -97,8 +97,27 @@ impl Device {
     }
 
     /// Creates a set of GPU buffers used for meshes
-    pub fn create_buffer_mesh(&self, mesh: Arc<Mesh>) -> GraphicsResult<Arc<MeshBuffer>> {
-        self.inner.create_buffer_mesh(mesh)
+    pub fn create_buffer_mesh<V: AttributeDescriptor, I>(
+        &self,
+        mesh: &Mesh<V, I>,
+    ) -> GraphicsResult<crate::mesh::MeshBuffer<V, I>> {
+        let vertices = unsafe {
+            std::slice::from_raw_parts(
+                mesh.vertices.as_ptr() as *const u8,
+                mesh.vertices.len() * size_of::<V>(),
+            )
+        };
+        let indices = unsafe {
+            std::slice::from_raw_parts(
+                mesh.indices.as_ptr() as *const u8,
+                mesh.indices.len() * size_of::<I>(),
+            )
+        };
+        let buffer_mesh = self
+            .inner
+            .create_buffer_mesh(vertices, indices, size_of::<I>())?;
+
+        Ok(crate::mesh::MeshBuffer::new(buffer_mesh))
     }
 
     /// Creates sampler set

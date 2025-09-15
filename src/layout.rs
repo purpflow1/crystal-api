@@ -1,8 +1,13 @@
 use std::sync::Arc;
 
 use crate::{
-    GpuSamplerSet, Shader, buffer::Buffer, errors::GraphicsResult, mesh::Attribute,
-    pipeline::Pipeline, proxies::LayoutProxy, render_target::RenderTarget,
+    GpuSamplerSet, Shader,
+    buffer::Buffer,
+    errors::GraphicsResult,
+    mesh::AttributeDescriptor,
+    pipeline::{ComputeDescriptor, Pipeline},
+    proxies::LayoutProxy,
+    render_target::RenderTarget,
 };
 
 pub struct Layout {
@@ -15,12 +20,13 @@ impl Layout {
     }
 
     /// Creates graphics pipeline
-    pub fn create_graphics_pipeline(
+    pub fn create_graphics_pipeline<V: AttributeDescriptor>(
         &self,
         render_target: &RenderTarget,
         shaders: &[Shader],
-        attributes: &[Attribute],
-    ) -> GraphicsResult<Pipeline> {
+    ) -> GraphicsResult<Pipeline<V>> {
+        let attributes = V::get_attributes();
+
         Ok(Pipeline::new(self.inner.clone().create_graphics_pipeline(
             render_target.inner.clone(),
             shaders,
@@ -29,7 +35,10 @@ impl Layout {
     }
 
     /// Creates compute pipeline
-    pub fn create_compute_pipeline(&self, shader: &Shader) -> GraphicsResult<Pipeline> {
+    pub fn create_compute_pipeline(
+        &self,
+        shader: &Shader,
+    ) -> GraphicsResult<Pipeline<ComputeDescriptor>> {
         Ok(Pipeline::new(
             self.inner.clone().create_compute_pipeline(shader)?,
         ))

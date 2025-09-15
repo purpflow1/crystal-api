@@ -20,7 +20,7 @@ use crate::{
     GpuSamplerSet, GraphicsApiInitSettings,
     debug::{error, log},
     errors::{GraphicsError, GraphicsResult},
-    mesh::{Index, Mesh, VertexTexture},
+    mesh::Attribute,
     object::{MeshBuffer, Object},
     proxies::*,
     vulkan::{VulkanLayout, instance::create_instance},
@@ -587,12 +587,17 @@ impl DeviceProxy for VulkanEntry {
         Ok(buffer_manager)
     }
 
-    fn create_buffer_mesh(&self, mesh: Arc<Mesh>) -> GraphicsResult<Arc<MeshBuffer>> {
-        let vertex_size = (mesh.vertices.len() * size_of::<VertexTexture>()) as u64;
-        let index_size = (mesh.indices.len() * size_of::<Index>()) as u64;
+    fn create_buffer_mesh(
+        &self,
+        vertices: &[u8],
+        indices: &[u8],
+        index_size: usize,
+    ) -> GraphicsResult<Arc<MeshBuffer>> {
+        let vertex_size = vertices.len() as u64;
+        let indices_size = indices.len() as u64;
 
         log!("creating mesh [ size = {} ] ", {
-            let size = vertex_size + index_size;
+            let size = vertex_size + indices_size;
 
             if size >= 1024 * 1024 {
                 format!("{:.1} MB", size as f32 / 1024. / 1024.)
@@ -614,38 +619,24 @@ impl DeviceProxy for VulkanEntry {
         let vertex_buffer_manager =
             BufferManager::new(self.device_manager.clone(), buffer_info.clone(), None)?;
 
-        let bytes = unsafe {
-            std::slice::from_raw_parts(
-                mesh.vertices.as_ptr() as *const u8,
-                mesh.vertices.len() * size_of::<VertexTexture>(),
-            )
-        };
-
         vertex_buffer_manager
             .get_memory(0..vertex_size)
-            .copy_from_slice(bytes);
+            .copy_from_slice(vertices);
 
         buffer_info.usage = vk::BufferUsageFlags::INDEX_BUFFER;
-        buffer_info.size = index_size;
+        buffer_info.size = indices_size;
 
         let index_buffer_manager =
             BufferManager::new(self.device_manager.clone(), buffer_info, None)?;
 
-        let bytes = unsafe {
-            std::slice::from_raw_parts(
-                mesh.indices.as_ptr() as *const u8,
-                mesh.indices.len() * size_of::<Index>(),
-            )
-        };
-
         index_buffer_manager
-            .get_memory(0..index_size)
-            .copy_from_slice(bytes);
+            .get_memory(0..indices_size)
+            .copy_from_slice(indices);
 
         Ok(Arc::new(MeshBuffer {
-            mesh,
             vertices: vertex_buffer_manager,
             indices: index_buffer_manager,
+            index_size,
         }))
     }
 

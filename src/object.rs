@@ -1,12 +1,11 @@
 use std::sync::Arc;
 
-use crate::pipeline::Pipeline;
+use crate::GpuSamplerSet;
 use crate::proxies::*;
-use crate::{GpuSamplerSet, mesh::Mesh};
 
 /// Used for GPU mesh data
-pub struct MeshBuffer {
-    pub(crate) mesh: Arc<Mesh>,
+pub(crate) struct MeshBuffer {
+    pub(crate) index_size: usize,
     pub(crate) vertices: Arc<dyn BufferProxy>,
     pub(crate) indices: Arc<dyn BufferProxy>,
 }
@@ -23,98 +22,3 @@ pub struct Object {
 
 unsafe impl Sync for Object {}
 unsafe impl Send for Object {}
-
-#[allow(dead_code)]
-impl Object {
-    /// Creates compute object
-    pub fn compute(pipeline: &Pipeline, groups: [u32; 3]) -> Arc<Self> {
-        Arc::new(Self {
-            pipeline: pipeline.inner.clone(),
-            mesh_buffer: None,
-            sampler: None,
-            groups: Some(groups),
-            index: 0,
-            array: 0,
-        })
-    }
-
-    /// Creates compute object with textures
-    pub fn compute_with_textures(
-        pipeline: &Pipeline,
-        groups: [u32; 3],
-        sampler: Arc<GpuSamplerSet>,
-    ) -> Arc<Self> {
-        Arc::new(Self {
-            pipeline: pipeline.inner.clone(),
-            mesh_buffer: None,
-            sampler: Some(sampler),
-            groups: Some(groups),
-            index: 0,
-            array: 0,
-        })
-    }
-
-    /// Creates graphics object with mesh only
-    pub fn with_mesh(index: u32, pipeline: &Pipeline, mesh: Arc<MeshBuffer>) -> Arc<Self> {
-        Arc::new(Self {
-            pipeline: pipeline.inner.clone(),
-            mesh_buffer: Some(mesh),
-            sampler: None,
-            groups: None,
-            index,
-            array: 1,
-        })
-    }
-
-    /// Creates graphics object with mesh and textures
-    pub fn with_mesh_sampled(
-        index: u32,
-        pipeline: &Pipeline,
-        mesh: Arc<MeshBuffer>,
-        sampler: Arc<GpuSamplerSet>,
-    ) -> Arc<Self> {
-        Arc::new(Self {
-            pipeline: pipeline.inner.clone(),
-            mesh_buffer: Some(mesh),
-            sampler: Some(sampler),
-            groups: None,
-            index,
-            array: 1,
-        })
-    }
-
-    /// Creates array of graphics objects with mesh
-    pub fn with_mesh_array(
-        index: u32,
-        pipeline: &Pipeline,
-        mesh: Arc<MeshBuffer>,
-        array: u32,
-    ) -> Arc<Self> {
-        Arc::new(Self {
-            pipeline: pipeline.inner.clone(),
-            mesh_buffer: Some(mesh),
-            sampler: None,
-            groups: None,
-            index,
-            array,
-        })
-    }
-
-    /// Creates array of graphics objects with mesh and textures
-    pub fn with_mesh_sampled_array(
-        index: u32,
-        pipeline: &Pipeline,
-        mesh: Arc<MeshBuffer>,
-        sampler: Arc<GpuSamplerSet>,
-        array: u32,
-    ) -> Arc<Self> {
-        Arc::new(Self {
-            pipeline: pipeline.inner.clone(),
-            mesh_buffer: Some(mesh),
-            sampler: Some(sampler),
-            groups: None,
-            index,
-            array,
-        })
-    }
-}

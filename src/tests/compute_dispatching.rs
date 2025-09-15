@@ -1,5 +1,6 @@
+use std::sync::Arc;
+
 use crate::errors::GraphicsResult;
-use crate::object::Object;
 use crate::*;
 
 const PARTICLES_GLSL: &str = "
@@ -84,7 +85,7 @@ fn compute_dispatching() -> GraphicsResult<()> {
     let shader = Shader::from_bytes(binary_result.as_binary_u8(), ShaderStage::Compute)?;
     let pipeline = layout.create_compute_pipeline(&shader)?;
 
-    let object = Object::compute(&pipeline, [PARTICLE_NUM as u32 / 256, 1, 1]);
+    let object = Arc::new(pipeline.create_object_compute([PARTICLE_NUM as u32 / 256, 1, 1]));
 
     const TIME: f32 = 0.5;
 
