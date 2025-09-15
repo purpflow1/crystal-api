@@ -1,7 +1,7 @@
 [package]
 name = "crystal-api"
 description = "Crystal API is a unified GPU API's wrapper"
-version = "0.0.5"
+version = "0.0.6"
 edition = "2024"
 authors = ["purpflow"]
 
