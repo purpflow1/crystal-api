@@ -1,3 +1,4 @@
+use crate::errors::GraphicsResult;
 use crate::object::Object;
 use crate::*;
 
@@ -34,18 +35,6 @@ void main()
 }
 ";
 
-trait AsBytes {
-    fn as_bytes(&self) -> &[u8];
-}
-
-impl<T> AsBytes for Vec<T> {
-    fn as_bytes(&self) -> &[u8] {
-        unsafe {
-            std::slice::from_raw_parts(self.as_ptr() as *const u8, self.len() * size_of::<T>())
-        }
-    }
-}
-
 #[repr(C, align(16))]
 struct Uniform {
     time: f32,
@@ -60,7 +49,7 @@ struct Vector {
 }
 
 #[repr(C, align(16))]
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 struct Particle {
     pos: Vector,
     vel: Vector,
@@ -70,26 +59,16 @@ const PARTICLE_NUM: u64 = 1024;
 
 #[test]
 fn compute_dispatching() -> GraphicsResult<()> {
-    let instance = init_api_instance()?;
-    let layout = instance.create_layout(false, 0, 0, 1, 2)?;
+    let device = Device::compute()?;
+    let layout = device.create_layout(false, 0, 0, 1, 2)?;
 
-    let buffer_uniform = instance.create_buffer(size_of::<Uniform>() as u64, true, false, false)?;
-    let buffer_in = instance.create_buffer(
-        size_of::<Particle>() as u64 * PARTICLE_NUM,
-        false,
-        true,
-        false,
-    )?;
-    let buffer_out = instance.create_buffer(
-        size_of::<Particle>() as u64 * PARTICLE_NUM,
-        false,
-        true,
-        false,
-    )?;
+    let mut buffer_uniform = device.create_buffer(1, true, false, false)?;
+    let mut buffer_in = device.create_buffer::<Particle>(PARTICLE_NUM, false, true, false)?;
+    let buffer_out = device.create_buffer::<Particle>(PARTICLE_NUM, false, true, false)?;
 
-    layout.add_buffer(0, buffer_uniform.clone())?;
-    layout.add_buffer(0, buffer_in.clone())?;
-    layout.add_buffer(1, buffer_out.clone())?;
+    layout.add_buffer(0, &buffer_uniform)?;
+    layout.add_buffer(0, &buffer_in)?;
+    layout.add_buffer(1, &buffer_out)?;
 
     let compiler = shaderc::Compiler::new().unwrap();
     let binary_result = compiler
@@ -105,13 +84,11 @@ fn compute_dispatching() -> GraphicsResult<()> {
     let shader = Shader::from_bytes(binary_result.as_binary_u8(), ShaderStage::Compute)?;
     let pipeline = layout.create_compute_pipeline(&shader)?;
 
-    let object = Object::compute(pipeline, [PARTICLE_NUM as u32 / 256, 1, 1]);
+    let object = Object::compute(&pipeline, [PARTICLE_NUM as u32 / 256, 1, 1]);
 
     const TIME: f32 = 0.5;
 
-    buffer_uniform
-        .get_memory_full()
-        .copy_from_slice(vec![Uniform { time: TIME }].as_bytes());
+    buffer_uniform[0] = Uniform { time: TIME };
 
     let vel = Vector {
         x: 0.1,
@@ -129,20 +106,12 @@ fn compute_dispatching() -> GraphicsResult<()> {
         })
         .collect();
 
-    buffer_in
-        .get_memory_full()
-        .copy_from_slice(input.as_bytes());
+    buffer_in[..].copy_from_slice(&input);
 
-    instance.dispatch_compute(&[object])?;
+    device.dispatch_compute(&[object])?;
 
-    let out = buffer_out.get_memory_full();
-
-    for (idx, offset) in (0..PARTICLE_NUM as usize * size_of::<Particle>())
-        .step_by(size_of::<Particle>())
-        .enumerate()
-    {
-        let ptr = (&out[offset]) as *const u8 as *const Particle;
-        let particle = unsafe { ptr.read() };
+    for idx in 0..PARTICLE_NUM {
+        let particle = buffer_out[idx];
         assert_eq!(particle.pos.x, idx as f32 + particle.vel.x * TIME);
         assert_eq!(particle.pos.y, particle.vel.y * TIME);
         assert_eq!(particle.pos.z, particle.vel.z * TIME);

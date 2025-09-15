@@ -7,10 +7,9 @@ use std::{
 use ash::vk;
 
 use crate::{
-    Texture,
     debug::error,
     errors::{GraphicsError, GraphicsResult},
-    traits,
+    proxies::{self, TextureProxy},
     vulkan::{VulkanTexture, commands::CommandEntry, images::ImageCreateInfo},
 };
 
@@ -52,7 +51,7 @@ impl Drop for VulkanRenderTarget {
     }
 }
 
-impl traits::RenderTarget for VulkanRenderTarget {
+impl proxies::RenderTargetProxy for VulkanRenderTarget {
     fn as_vulkan(self: Arc<Self>) -> Option<Arc<super::VulkanRenderTarget>> {
         Some(self)
     }
@@ -62,7 +61,7 @@ impl traits::RenderTarget for VulkanRenderTarget {
         extent: [u32; 2],
         anisotropy_texels: f32,
         msaa_samples: u8,
-    ) -> GraphicsResult<(Arc<dyn traits::RenderTarget>, Arc<dyn Texture>)> {
+    ) -> GraphicsResult<(Arc<dyn proxies::RenderTargetProxy>, Arc<dyn TextureProxy>)> {
         let texture = VulkanTexture::new(self.device_manager.clone(), extent, anisotropy_texels)?;
 
         let extent = vk::Extent2D {

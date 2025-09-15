@@ -1,7 +1,9 @@
 use crystal_api::{
+    buffer::Buffer,
     debug::{LoggingLevel, set_internal_logging_level},
     errors::GraphicsResult,
     object::Object,
+    render_target::RenderTarget,
     *,
 };
 
@@ -23,18 +25,6 @@ use winit::{
 };
 
 const DISTANCE: f32 = 5.;
-
-trait AsBytes {
-    fn as_bytes(&self) -> &[u8];
-}
-
-impl<T> AsBytes for Vec<T> {
-    fn as_bytes(&self) -> &[u8] {
-        unsafe {
-            std::slice::from_raw_parts(self.as_ptr() as *const u8, self.len() * size_of::<T>())
-        }
-    }
-}
 
 struct State {
     delta_time_sum: Duration,
@@ -66,16 +56,16 @@ struct Uniform {
 struct Scene {
     camera: Camera,
 
-    uniform: Option<Arc<dyn Buffer>>,
-    transforms: Option<Arc<dyn Buffer>>,
+    uniform: Option<Buffer<Uniform>>,
+    transforms: Option<Buffer<glam::Mat4>>,
 
     objects: Vec<Arc<Object>>,
 }
 
 struct Context {
     window: Option<Window>,
-    graphics: Option<Arc<dyn GraphicsApi>>,
-    render_target_cube: Option<Arc<dyn RenderTarget>>,
+    device: Option<Device>,
+    render_target_cube: Option<RenderTarget>,
 
     settings: GraphicsApiInitSettings,
     scene: Scene,
@@ -92,7 +82,7 @@ impl Context {
 
         Ok(Self {
             window: None,
-            graphics: None,
+            device: None,
             render_target_cube: None,
 
             settings,
@@ -137,38 +127,27 @@ impl Context {
             time: self.state.startup.elapsed().as_secs_f32(),
         };
 
-        self.scene
-            .uniform
-            .as_ref()
-            .unwrap()
-            .get_memory_full()
-            .copy_from_slice(vec![ubo].as_bytes());
+        self.scene.uniform.as_mut().unwrap()[0] = ubo;
 
         let now = self.state.startup.elapsed();
 
-        let transforms = vec![
-            glam::Mat4::from_scale_rotation_translation(
-                glam::Vec3::ONE,
-                glam::Quat::from_rotation_y(PI / 2. * now.as_secs_f32()),
-                glam::Vec3::ZERO,
-            ),
-            glam::Mat4::from_scale_rotation_translation(
-                glam::Vec3::from_array([0.5; 3]),
-                glam::Quat::from_rotation_y(PI * 2. * now.as_secs_f32()),
-                glam::Vec3::ZERO,
-            ),
-        ];
+        let transforms = self.scene.transforms.as_mut().unwrap();
 
-        self.scene
-            .transforms
-            .as_ref()
-            .unwrap()
-            .get_memory_full()
-            .copy_from_slice(transforms.as_bytes());
+        transforms[0] = glam::Mat4::from_scale_rotation_translation(
+            glam::Vec3::ONE,
+            glam::Quat::from_rotation_y(PI / 2. * now.as_secs_f32()),
+            glam::Vec3::ZERO,
+        );
 
-        let graphics = self.graphics.clone().unwrap();
+        transforms[1] = glam::Mat4::from_scale_rotation_translation(
+            glam::Vec3::from_array([0.5; 3]),
+            glam::Quat::from_rotation_y(PI * 2. * now.as_secs_f32()),
+            glam::Vec3::ZERO,
+        );
 
-        let delta = graphics.get_delta_time();
+        let device = self.device.as_ref().unwrap();
+
+        let delta = device.get_delta_time();
         self.state.delta_time_sum += delta;
 
         if self.state.min_delta_time > delta {
@@ -197,11 +176,7 @@ impl Context {
 
         self.state.current_frame += 1;
 
-        self.graphics
-            .as_ref()
-            .unwrap()
-            .dispatch_and_present(&self.scene.objects)
-            .unwrap();
+        device.dispatch_and_present(&self.scene.objects).unwrap();
     }
 }
 
@@ -223,8 +198,7 @@ impl ApplicationHandler for Context {
                 .unwrap()
         };
 
-        let graphics = init_api_instance_with_presentation(&self.settings, &window)
-            .expect("cannot create entry");
+        let device = Device::graphics(&self.settings, &window).expect("cannot create entry");
 
         println!("compiling GLSL shaders...");
         const FILENAME1: &str = "examples/shaders/render-target.vert";
@@ -280,40 +254,33 @@ impl ApplicationHandler for Context {
             Shader::from_bytes(binary_result3.as_binary_u8(), ShaderStage::Fragment).unwrap(),
         ];
 
-        let render_target = graphics.get_presentation_render_target().unwrap();
+        let render_target = device.get_presentation_render_target().unwrap();
 
-        let (render_target_cube, texture_render) = render_target
-            .create_render_target([1024, 1024], 1., 2)
-            .unwrap();
+        let (render_target_cube, texture_render) =
+            render_target.inherit([1024, 1024], 1., 2).unwrap();
 
-        let layout = graphics.create_layout(true, 1, 1, 1, 1).unwrap();
+        let layout = device.create_layout(true, 1, 1, 1, 1).unwrap();
 
-        let uniform = graphics
-            .create_buffer(size_of::<Uniform>() as u64, true, false, true)
-            .unwrap();
-        let transform = graphics
-            .create_buffer(size_of::<glam::Mat4>() as u64 * 2, false, false, true)
-            .unwrap();
+        let uniform = device.create_buffer(1, true, false, true).unwrap();
+        let transform = device.create_buffer(2, false, false, true).unwrap();
 
-        layout.add_buffer(0, uniform.clone()).unwrap();
-        layout.add_buffer(0, transform.clone()).unwrap();
+        layout.add_buffer(0, &uniform).unwrap();
+        layout.add_buffer(0, &transform).unwrap();
 
         self.scene.uniform = Some(uniform);
         self.scene.transforms = Some(transform);
 
         let pipeline_render = layout
-            .clone()
             .create_graphics_pipeline(
-                render_target_cube.clone(),
+                &render_target_cube,
                 &shaders_obj,
                 &VertexTexture::get_attributes(),
             )
             .unwrap();
 
         let pipeline_textured = layout
-            .clone()
             .create_graphics_pipeline(
-                render_target.clone(),
+                &render_target,
                 &shaders_textured,
                 &VertexTexture::get_attributes(),
             )
@@ -333,19 +300,18 @@ impl ApplicationHandler for Context {
             .unwrap(),
         );
 
-        let mishka_mesh_buffer = graphics.create_buffer_mesh(mishka_mesh).unwrap();
-        let cube_mesh_buffer = graphics.create_buffer_mesh(cube_mesh).unwrap();
+        let mishka_mesh_buffer = device.create_buffer_mesh(mishka_mesh).unwrap();
+        let cube_mesh_buffer = device.create_buffer_mesh(cube_mesh).unwrap();
 
-        let mishka_object =
-            Object::with_mesh(1, pipeline_render.clone(), mishka_mesh_buffer.clone());
+        let mishka_object = Object::with_mesh(1, &pipeline_render, mishka_mesh_buffer.clone());
 
-        let texture_sampler = graphics
-            .create_sampler_set(&[(0, texture_render)], &[layout])
+        let texture_sampler = device
+            .create_sampler_set(&[(0, &texture_render)], &[&layout])
             .unwrap();
 
         let cube_object = Object::with_mesh_sampled(
             0,
-            pipeline_textured.clone(),
+            &pipeline_textured,
             cube_mesh_buffer.clone(),
             texture_sampler,
         );
@@ -353,7 +319,7 @@ impl ApplicationHandler for Context {
         self.scene.objects.push(cube_object.clone());
         self.scene.objects.push(mishka_object.clone());
 
-        self.graphics = Some(graphics);
+        self.device = Some(device);
         self.window = Some(window);
         self.render_target_cube = Some(render_target_cube);
 
@@ -388,7 +354,7 @@ impl ApplicationHandler for Context {
                     100.,
                 );
 
-                self.graphics
+                self.device
                     .as_ref()
                     .unwrap()
                     .resize_resources(size.width, size.height)
@@ -404,7 +370,7 @@ impl ApplicationHandler for Context {
     }
 
     fn exiting(&mut self, _event_loop: &winit::event_loop::ActiveEventLoop) {
-        self.graphics = None;
+        self.device = None;
     }
 }
 

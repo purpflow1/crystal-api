@@ -1,46 +1,46 @@
-use crate::*;
+use crate::{errors::GraphicsResult, *};
 
 #[test]
 fn layout_non_empty_creation() -> GraphicsResult<()> {
-    let instance = init_api_instance()?;
-    instance.create_layout(false, 0, 0, 0, 1)?;
-    instance.create_layout(false, 0, 0, 1, 0)?;
-    instance.create_layout(false, 0, 0, 1, 1)?;
-    instance.create_layout(false, 1, 1, 1, 1)?;
-    instance.create_layout(false, 2, 2, 2, 2)?;
+    let device = Device::compute()?;
+    device.create_layout(false, 0, 0, 0, 1)?;
+    device.create_layout(false, 0, 0, 1, 0)?;
+    device.create_layout(false, 0, 0, 1, 1)?;
+    device.create_layout(false, 1, 1, 1, 1)?;
+    device.create_layout(false, 2, 2, 2, 2)?;
     Ok(())
 }
 
 #[test]
 fn layout_double_buffered_creation() -> GraphicsResult<()> {
-    let instance = init_api_instance()?;
-    instance.create_layout(true, 0, 0, 0, 1)?;
-    instance.create_layout(true, 0, 0, 1, 0)?;
-    instance.create_layout(true, 0, 0, 1, 1)?;
-    instance.create_layout(true, 1, 1, 1, 1)?;
-    instance.create_layout(true, 2, 2, 2, 2)?;
+    let device = Device::compute()?;
+    device.create_layout(true, 0, 0, 0, 1)?;
+    device.create_layout(true, 0, 0, 1, 0)?;
+    device.create_layout(true, 0, 0, 1, 1)?;
+    device.create_layout(true, 1, 1, 1, 1)?;
+    device.create_layout(true, 2, 2, 2, 2)?;
     Ok(())
 }
 
 #[test]
 #[should_panic(expected = "layout")]
 fn layout_empty_buffers_creation() {
-    let instance = init_api_instance().expect("cannot create instance");
-    instance.create_layout(false, 0, 0, 0, 0).expect("layout");
+    let device = Device::compute().expect("cannot create device");
+    device.create_layout(false, 0, 0, 0, 0).expect("layout");
 }
 
 #[test]
 fn layout_texture_no_samplers_creation() {
-    let instance = init_api_instance().expect("cannot create instance");
-    if let Ok(_) = instance.create_layout(false, 1, 0, 1, 1) {
+    let device = Device::compute().expect("cannot create device");
+    if let Ok(_) = device.create_layout(false, 1, 0, 1, 1) {
         panic!("invalid")
     }
 }
 
 #[test]
 fn layout_sampler_no_textures_creation() {
-    let instance = init_api_instance().expect("cannot create instance");
-    if let Ok(_) = instance.create_layout(false, 0, 1, 1, 1) {
+    let device = Device::compute().expect("cannot create device");
+    if let Ok(_) = device.create_layout(false, 0, 1, 1, 1) {
         panic!("invalid")
     }
 }

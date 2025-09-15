@@ -1,0 +1,35 @@
+use std::sync::Arc;
+
+use crate::{
+    errors::GraphicsResult,
+    proxies::{RenderTargetProxy, TextureProxy},
+    texture::Texture,
+};
+
+pub struct RenderTarget {
+    pub(crate) inner: Arc<dyn RenderTargetProxy>,
+}
+
+impl RenderTarget {
+    pub(crate) fn new(proxy: Arc<dyn RenderTargetProxy>) -> Self {
+        Self { inner: proxy }
+    }
+
+    pub fn inherit(
+        &self,
+        extent: [u32; 2],
+        anisotropy_texels: f32,
+        msaa_samples: u8,
+    ) -> GraphicsResult<(Self, Texture)> {
+        let (render_target, texture) =
+            self.inner
+                .create_render_target(extent, anisotropy_texels, msaa_samples)?;
+
+        Ok((
+            Self {
+                inner: render_target,
+            },
+            Texture::new(texture),
+        ))
+    }
+}

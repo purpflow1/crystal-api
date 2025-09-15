@@ -8,7 +8,7 @@ use ash::vk;
 use crate::{
     debug::error,
     errors::{GraphicsError, GraphicsResult},
-    traits,
+    proxies,
 };
 
 use super::{devices::DeviceManager, sync::GpuSync};
@@ -124,12 +124,17 @@ impl Drop for BufferManager {
     }
 }
 
-impl traits::Buffer for BufferManager {
+impl proxies::BufferProxy for BufferManager {
     fn as_vulkan(self: Arc<Self>) -> Option<Arc<super::BufferManager>> {
         Some(self.clone())
     }
 
-    fn get_memory<'a>(&self, range: Range<usize>) -> &'a mut [u8] {
+    fn get_size(&self) -> u64 {
+        self.info.size
+    }
+
+    // TODO make range actually u64, not usize
+    fn get_memory<'a>(&self, range: Range<u64>) -> &'a mut [u8] {
         let lock = self.sync.lock().unwrap();
         let idx = if self.info.count > 1 {
             lock.odd_pass
@@ -138,13 +143,9 @@ impl traits::Buffer for BufferManager {
         };
 
         unsafe {
-            let ptr = self.buffer_data[idx].mapped.byte_add(range.start);
-            std::slice::from_raw_parts_mut(ptr, range.len())
+            let ptr = self.buffer_data[idx].mapped.byte_add(range.start as usize);
+            std::slice::from_raw_parts_mut(ptr, (range.end - range.start) as usize)
         }
-    }
-
-    fn get_memory_full<'a>(&self) -> &'a mut [u8] {
-        self.get_memory(0..self.info.size as usize)
     }
 }
 

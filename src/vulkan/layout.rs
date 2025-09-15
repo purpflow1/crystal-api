@@ -8,12 +8,12 @@ use std::{
 use ash::vk;
 
 use crate::{
-    Buffer, GpuSamplerSet, RenderTarget, Shader, ShaderStage,
+    GpuSamplerSet, Shader, ShaderStage,
     debug::{error, log},
     errors::{GraphicsError, GraphicsResult},
     mesh::{Attribute, VertexTexture},
     object::Object,
-    traits,
+    proxies::*,
 };
 
 use super::{VulkanRenderTarget, devices::DeviceManager};
@@ -154,7 +154,7 @@ impl LayoutDynamicData {
         Ok(())
     }
 
-    fn add_buffer(&mut self, binding: u32, buffer: Arc<dyn Buffer>) -> GraphicsResult<()> {
+    fn add_buffer(&mut self, binding: u32, buffer: Arc<dyn BufferProxy>) -> GraphicsResult<()> {
         let buffer = buffer.as_vulkan().clone().unwrap();
 
         let size = buffer.info.size;
@@ -259,12 +259,8 @@ impl Drop for VulkanLayout {
     }
 }
 
-impl traits::Layout for VulkanLayout {
-    fn as_vulkan(self: Arc<Self>) -> Option<Arc<super::VulkanLayout>> {
-        Some(self)
-    }
-
-    fn add_buffer(&self, binding: u32, buffer: Arc<dyn Buffer>) -> GraphicsResult<()> {
+impl LayoutProxy for VulkanLayout {
+    fn add_buffer(&self, binding: u32, buffer: Arc<dyn BufferProxy>) -> GraphicsResult<()> {
         let mut lock = self.dynamic_data.lock().unwrap();
         lock.add_buffer(binding, buffer)
     }
@@ -280,10 +276,10 @@ impl traits::Layout for VulkanLayout {
 
     fn create_graphics_pipeline(
         self: Arc<Self>,
-        render_target: Arc<dyn RenderTarget>,
+        render_target: Arc<dyn RenderTargetProxy>,
         shaders: &[Shader],
         attributes: &[Attribute],
-    ) -> GraphicsResult<Arc<dyn traits::Pipeline>> {
+    ) -> GraphicsResult<Arc<dyn PipelineProxy>> {
         Ok(VulkanPipeline::from_render_target(
             self.device_manager.clone(),
             self,
@@ -296,7 +292,7 @@ impl traits::Layout for VulkanLayout {
     fn create_compute_pipeline(
         self: Arc<Self>,
         shader: &Shader,
-    ) -> GraphicsResult<Arc<dyn traits::Pipeline>> {
+    ) -> GraphicsResult<Arc<dyn PipelineProxy>> {
         Ok(VulkanPipeline::new_compute(
             self.device_manager.clone(),
             self,
@@ -962,7 +958,7 @@ impl VulkanPipeline {
     }
 }
 
-impl traits::Pipeline for VulkanPipeline {
+impl PipelineProxy for VulkanPipeline {
     fn as_vulkan(self: Arc<Self>) -> Option<Arc<VulkanPipeline>> {
         Some(self)
     }

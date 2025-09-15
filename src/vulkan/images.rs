@@ -5,7 +5,7 @@ use ash::vk;
 use crate::{
     debug::error,
     errors::{GraphicsError, GraphicsResult},
-    traits,
+    proxies,
 };
 
 use super::{
@@ -176,7 +176,7 @@ pub struct VulkanTexture {
     pub image: Arc<Image>,
 }
 
-impl traits::Texture for VulkanTexture {
+impl proxies::TextureProxy for VulkanTexture {
     fn as_vulkan(self: Arc<Self>) -> Option<Arc<super::VulkanTexture>> {
         Some(self)
     }

@@ -1,4 +1,5 @@
 use crystal_api::{
+    buffer::Buffer,
     debug::{LoggingLevel, set_internal_logging_level},
     errors::GraphicsResult,
     object::Object,
@@ -25,18 +26,6 @@ use winit::{
 const OBJECT_DIMENTION: usize = 5;
 const DISTANCE: f32 = 2.;
 
-trait AsBytes {
-    fn as_bytes(&self) -> &[u8];
-}
-
-impl<T> AsBytes for Vec<T> {
-    fn as_bytes(&self) -> &[u8] {
-        unsafe {
-            std::slice::from_raw_parts(self.as_ptr() as *const u8, self.len() * size_of::<T>())
-        }
-    }
-}
-
 struct State {
     delta_time_sum: Duration,
     current_frame: usize,
@@ -62,25 +51,18 @@ struct Uniform {
     time: f32,
 }
 
-#[repr(C, align(16))]
-#[derive(Clone)]
-struct Light(glam::Vec3);
-
 struct Scene {
     camera: Camera,
 
-    light: Option<Arc<dyn Buffer>>,
-    light_info: Option<Arc<dyn Buffer>>,
-
-    uniform: Option<Arc<dyn Buffer>>,
-    transforms: Option<Arc<dyn Buffer>>,
+    uniform: Option<Buffer<Uniform>>,
+    transforms: Option<Buffer<glam::Mat4>>,
 
     objects: Vec<Arc<Object>>,
 }
 
 struct Context {
     window: Option<Window>,
-    graphics: Option<Arc<dyn GraphicsApi>>,
+    device: Option<Device>,
 
     settings: GraphicsApiInitSettings,
     scene: Scene,
@@ -97,7 +79,7 @@ impl Context {
 
         Ok(Self {
             window: None,
-            graphics: None,
+            device: None,
 
             settings,
             scene: Scene {
@@ -120,8 +102,6 @@ impl Context {
                 },
 
                 uniform: None,
-                light: None,
-                light_info: None,
                 transforms: None,
 
                 objects: vec![],
@@ -141,7 +121,7 @@ impl Context {
         ));
 
         // Reference to GPU buffer
-        let transforms = self.scene.transforms.as_ref().unwrap().get_memory_full();
+        let transforms = self.scene.transforms.as_mut().unwrap();
 
         let mut offset = 0;
 
@@ -154,10 +134,9 @@ impl Context {
                         glam::Vec3::new(i as f32, j as f32, k as f32) * DISTANCE,
                     );
 
-                    transforms[offset..offset + size_of::<glam::Mat4>()]
-                        .copy_from_slice(vec![transform].as_bytes());
+                    transforms[offset] = transform;
 
-                    offset += size_of::<glam::Mat4>();
+                    offset += 1;
                 })
             })
         });
@@ -167,16 +146,11 @@ impl Context {
             time: self.state.startup.elapsed().as_secs_f32(),
         };
 
-        self.scene
-            .uniform
-            .as_ref()
-            .unwrap()
-            .get_memory_full()
-            .copy_from_slice(vec![ubo].as_bytes());
+        self.scene.uniform.as_mut().unwrap()[0] = ubo;
 
-        let graphics = self.graphics.clone().unwrap();
+        let device = self.device.as_ref().unwrap();
 
-        let delta = graphics.get_delta_time();
+        let delta = device.get_delta_time();
 
         self.state.delta_time_sum += delta;
         self.state.current_frame += 1;
@@ -186,7 +160,7 @@ impl Context {
             .unwrap()
             .set_title(format!("FPS: {}", (1. / delta.as_secs_f32()) as u32).as_str());
 
-        self.graphics
+        self.device
             .as_ref()
             .unwrap()
             .dispatch_and_present(&self.scene.objects)
@@ -212,8 +186,7 @@ impl ApplicationHandler for Context {
                 .unwrap()
         };
 
-        let graphics = init_api_instance_with_presentation(&self.settings, &window)
-            .expect("cannot create entry");
+        let device = Device::graphics(&self.settings, &window).unwrap();
 
         println!("compiling GLSL shader...");
         const FILENAME1: &str = "examples/shaders/desc.vert";
@@ -250,9 +223,9 @@ impl ApplicationHandler for Context {
             Shader::from_bytes(binary_result2.as_binary_u8(), ShaderStage::Fragment).unwrap(),
         ];
 
-        let render_target = graphics.get_presentation_render_target().unwrap();
+        let render_target = device.get_presentation_render_target().unwrap();
 
-        let layout_obj = graphics
+        let layout_obj = device
             .create_layout(true, 2, OBJECT_DIMENTION.pow(3), 1, 3)
             .unwrap();
 
@@ -263,17 +236,17 @@ impl ApplicationHandler for Context {
             let mut reader = decoder.read_info().unwrap();
 
             let size = reader.output_buffer_size().unwrap();
-            let buffer = graphics
+            let mut buffer = device
                 .create_buffer(size as u64 * 2, false, true, false)
                 .unwrap();
 
-            let info = reader.next_frame(buffer.get_memory(0..size)).unwrap();
+            let info = reader.next_frame(&mut buffer[..size as u64]).unwrap();
 
-            let texture = graphics
-                .create_texture(buffer, [info.width, info.height], 1.0)
+            let texture = device
+                .create_texture(&buffer, [info.width, info.height], 1.0)
                 .unwrap();
-            graphics
-                .create_sampler_set(&[(0, texture)], std::slice::from_ref(&layout_obj))
+            device
+                .create_sampler_set(&[(0, &texture)], &[&layout_obj])
                 .unwrap()
         };
 
@@ -284,84 +257,34 @@ impl ApplicationHandler for Context {
             let mut reader = decoder.read_info().unwrap();
 
             let size = reader.output_buffer_size().unwrap();
-            let buffer = graphics
+            let mut buffer = device
                 .create_buffer(size as u64 * 2, false, true, false)
                 .unwrap();
 
-            let info = reader.next_frame(buffer.get_memory(0..size)).unwrap();
+            let info = reader.next_frame(&mut buffer[..size as u64]).unwrap();
 
-            let texture = graphics
-                .create_texture(buffer, [info.width, info.height], 1.0)
+            let texture = device
+                .create_texture(&buffer, [info.width, info.height], 1.0)
                 .unwrap();
-            graphics
-                .create_sampler_set(&[(0, texture)], std::slice::from_ref(&layout_obj))
+            device
+                .create_sampler_set(&[(0, &texture)], &[&layout_obj])
                 .unwrap()
         };
 
-        let uniform = graphics
-            .create_buffer(size_of::<Uniform>() as u64, true, false, true)
-            .unwrap();
-        let transform = graphics
-            .create_buffer(
-                (size_of::<glam::Mat4>() * OBJECT_DIMENTION.pow(3)) as u64,
-                false,
-                false,
-                true,
-            )
-            .unwrap();
-        let light = graphics
-            .create_buffer(size_of::<Light>() as u64 * 3, false, false, true)
-            .unwrap();
-        let light_info = graphics
-            .create_buffer(size_of::<u32>() as u64, false, false, true)
+        let uniform = device.create_buffer(1, true, false, true).unwrap();
+        let transform = device
+            .create_buffer(OBJECT_DIMENTION.pow(3) as u64, false, false, true)
             .unwrap();
 
-        layout_obj.add_buffer(0, uniform.clone()).unwrap();
-        layout_obj.add_buffer(0, transform.clone()).unwrap();
-        layout_obj.add_buffer(1, light.clone()).unwrap();
-        layout_obj.add_buffer(2, light_info.clone()).unwrap();
+        layout_obj.add_buffer(0, &uniform).unwrap();
+        layout_obj.add_buffer(0, &transform).unwrap();
 
         self.scene.uniform = Some(uniform);
         self.scene.transforms = Some(transform);
-        self.scene.light = Some(light);
-        self.scene.light_info = Some(light_info);
-
-        self.scene
-            .light
-            .as_ref()
-            .unwrap()
-            .get_memory_full()
-            .copy_from_slice(
-                vec![
-                    Light(glam::Vec3 {
-                        x: 1.,
-                        y: 1.,
-                        z: 1.,
-                    }),
-                    Light(glam::Vec3 {
-                        x: 0.,
-                        y: 3.,
-                        z: 0.,
-                    }),
-                    Light(glam::Vec3 {
-                        x: 0.,
-                        y: 0.,
-                        z: 0.,
-                    }),
-                ]
-                .as_bytes(),
-            );
-        self.scene
-            .light_info
-            .as_ref()
-            .unwrap()
-            .get_memory_full()
-            .copy_from_slice(&1u32.to_le_bytes());
 
         let pipeline_render = layout_obj
-            .clone()
             .create_graphics_pipeline(
-                render_target.clone(),
+                &render_target,
                 &shaders_obj,
                 &VertexTexture::get_attributes(),
             )
@@ -374,11 +297,11 @@ impl ApplicationHandler for Context {
             .unwrap(),
         );
 
-        let mesh_buffer = graphics.create_buffer_mesh(mesh).unwrap();
+        let mesh_buffer = device.create_buffer_mesh(mesh).unwrap();
 
         let object = Object::with_mesh_sampled_array(
             0,
-            pipeline_render.clone(),
+            &pipeline_render,
             mesh_buffer.clone(),
             default_sampler.clone(),
             OBJECT_DIMENTION.pow(3) as u32,
@@ -389,7 +312,7 @@ impl ApplicationHandler for Context {
             .register_samplers(&[default_sampler, test_sampler])
             .unwrap();
 
-        self.graphics = Some(graphics);
+        self.device = Some(device);
         self.window = Some(window);
 
         let window = self.window.as_ref().unwrap();
@@ -421,7 +344,7 @@ impl ApplicationHandler for Context {
                     100.,
                 );
 
-                self.graphics
+                self.device
                     .as_ref()
                     .unwrap()
                     .resize_resources(size.width, size.height)
@@ -437,7 +360,7 @@ impl ApplicationHandler for Context {
     }
 
     fn exiting(&mut self, _event_loop: &winit::event_loop::ActiveEventLoop) {
-        self.graphics = None;
+        self.device = None;
     }
 }
 

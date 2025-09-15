@@ -17,12 +17,12 @@ use super::{
 };
 
 use crate::{
-    Buffer, GpuSamplerSet, GraphicsApi, GraphicsApiInitSettings, Texture,
+    GpuSamplerSet, GraphicsApiInitSettings,
     debug::{error, log},
     errors::{GraphicsError, GraphicsResult},
     mesh::{Index, Mesh, VertexTexture},
     object::{MeshBuffer, Object},
-    traits::{self, Layout},
+    proxies::*,
     vulkan::{VulkanLayout, instance::create_instance},
 };
 
@@ -72,7 +72,7 @@ impl Drop for VulkanEntry {
     }
 }
 
-impl traits::GraphicsApi for VulkanEntry {
+impl DeviceProxy for VulkanEntry {
     fn dispatch_and_present(&self, objects: &[Arc<Object>]) -> GraphicsResult<()> {
         let graphics = self
             .command_manager
@@ -487,7 +487,7 @@ impl traits::GraphicsApi for VulkanEntry {
             )
     }
 
-    fn get_presentation_render_target(&self) -> Option<Arc<dyn crate::RenderTarget>> {
+    fn get_presentation_render_target(&self) -> Option<Arc<dyn RenderTargetProxy>> {
         if let Some(presentation) = self.presentation.clone() {
             Some(presentation.render_target.clone())
         } else {
@@ -502,7 +502,7 @@ impl traits::GraphicsApi for VulkanEntry {
         sampler_num: usize,
         uniform_num: usize,
         storage_num: usize,
-    ) -> GraphicsResult<Arc<dyn Layout>> {
+    ) -> GraphicsResult<Arc<dyn LayoutProxy>> {
         if (sampler_num == 0 && texture_num == 0) == (sampler_num > 0 && texture_num > 0) {
             error!("textures cannot exist without samplers");
             return Err(GraphicsError::DataError);
@@ -534,7 +534,7 @@ impl traits::GraphicsApi for VulkanEntry {
         uniform: bool,
         transfer: bool,
         enable_sync: bool,
-    ) -> GraphicsResult<Arc<dyn Buffer>> {
+    ) -> GraphicsResult<Arc<dyn BufferProxy>> {
         log!(
             "creating buffer [ size = {}, uniform = {}, transfer = {}, synced = {} ]",
             if size >= 1024 * 1024 {
@@ -622,7 +622,7 @@ impl traits::GraphicsApi for VulkanEntry {
         };
 
         vertex_buffer_manager
-            .get_memory_full()
+            .get_memory(0..vertex_size)
             .copy_from_slice(bytes);
 
         buffer_info.usage = vk::BufferUsageFlags::INDEX_BUFFER;
@@ -639,7 +639,7 @@ impl traits::GraphicsApi for VulkanEntry {
         };
 
         index_buffer_manager
-            .get_memory_full()
+            .get_memory(0..index_size)
             .copy_from_slice(bytes);
 
         Ok(Arc::new(MeshBuffer {
@@ -651,8 +651,8 @@ impl traits::GraphicsApi for VulkanEntry {
 
     fn create_sampler_set(
         &self,
-        textures: &[(u32, Arc<dyn Texture>)],
-        layouts: &[Arc<dyn Layout>],
+        textures: &[(u32, Arc<dyn TextureProxy>)],
+        layouts: &[Arc<dyn LayoutProxy>],
     ) -> GraphicsResult<Arc<GpuSamplerSet>> {
         log!(
             "creating sampler [ bindings = {:?} ]",
@@ -675,10 +675,10 @@ impl traits::GraphicsApi for VulkanEntry {
 
     fn create_texture(
         &self,
-        buffer: Arc<dyn Buffer>,
+        buffer: Arc<dyn BufferProxy>,
         extent: [u32; 2],
         anisotropy_texels: f32,
-    ) -> GraphicsResult<Arc<dyn Texture>> {
+    ) -> GraphicsResult<Arc<dyn TextureProxy>> {
         log!(
             "creating texture [ width = {}, height = {} ]",
             extent[0],
@@ -700,7 +700,7 @@ impl traits::GraphicsApi for VulkanEntry {
 }
 
 impl VulkanEntry {
-    pub(crate) fn no_presentation() -> GraphicsResult<Arc<dyn traits::GraphicsApi>> {
+    pub(crate) fn no_presentation() -> GraphicsResult<Box<dyn DeviceProxy>> {
         let (entry, instance, _debug_utils_messanger) = create_instance(&[])?;
 
         let device_manager = DeviceManager::new(entry.clone(), instance.clone(), None)?;
@@ -709,7 +709,7 @@ impl VulkanEntry {
 
         let command_manager = CommandManager::new(device_manager.clone(), 1)?;
 
-        Ok(Arc::new(Self {
+        Ok(Box::new(Self {
             device_manager: device_manager.clone(),
             command_manager,
 
@@ -729,7 +729,7 @@ impl VulkanEntry {
     pub(crate) fn with_presentation<T: HasWindowHandle + HasDisplayHandle>(
         settings: &GraphicsApiInitSettings,
         window: &T,
-    ) -> GraphicsResult<Arc<dyn traits::GraphicsApi>> {
+    ) -> GraphicsResult<Box<dyn DeviceProxy>> {
         let required_extensions = match ash_window::enumerate_required_extensions(
             window.display_handle().unwrap().as_raw(),
         ) {
@@ -774,7 +774,7 @@ impl VulkanEntry {
             presentation.swapchain.swapchain_info.image_count,
         )?;
 
-        Ok(Arc::new(Self {
+        Ok(Box::new(Self {
             device_manager: device_manager.clone(),
             command_manager,
 
