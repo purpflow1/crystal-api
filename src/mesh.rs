@@ -63,7 +63,7 @@ impl<V: AttributeDescriptor, I> MeshBuffer<V, I> {
     pub(crate) fn new(inner: Arc<crate::object::MeshBufferProxy>) -> Self {
         Self {
             inner,
-            _tp: PhantomData::default(),
+            _tp: PhantomData,
         }
     }
 }

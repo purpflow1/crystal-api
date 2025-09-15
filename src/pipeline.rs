@@ -26,7 +26,7 @@ impl<V: AttributeDescriptor> Pipeline<V> {
     pub(crate) fn new(proxy: Arc<dyn PipelineProxy>) -> Self {
         Self {
             inner: proxy,
-            _ty: PhantomData::default(),
+            _ty: PhantomData,
         }
     }
 

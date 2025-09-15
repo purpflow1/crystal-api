@@ -16,8 +16,13 @@ impl<T> Buffer<T> {
     pub(crate) fn new(proxy: Arc<dyn BufferProxy>) -> Self {
         Self {
             inner: proxy,
-            _t: PhantomData::default(),
+            _t: PhantomData,
         }
+    }
+
+    /// Returns true if buffer is empty
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 
     /// Returns length of buffer

@@ -55,11 +55,9 @@ impl Device {
 
     /// Returns ```RenderTarget``` created on presentation init
     pub fn get_presentation_render_target(&self) -> Option<RenderTarget> {
-        if let Some(render_target) = self.inner.get_presentation_render_target() {
-            Some(RenderTarget::new(render_target))
-        } else {
-            None
-        }
+        self.inner
+            .get_presentation_render_target()
+            .map(RenderTarget::new)
     }
 
     /// Creates shader layout
