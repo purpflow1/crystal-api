@@ -276,11 +276,7 @@ impl Context {
             .unwrap()
             .set_title(format!("FPS: {}", (1. / delta.as_secs_f32()) as u32).as_str());
 
-        self.device
-            .as_ref()
-            .unwrap()
-            .dispatch_and_present(&self.scene.objects)
-            .unwrap();
+        device.dispatch_and_present(&self.scene.objects).unwrap();
     }
 }
 
