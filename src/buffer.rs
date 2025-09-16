@@ -6,7 +6,8 @@ use std::{
 
 use crate::proxies::BufferProxy;
 
-/// Stores GPU data
+/// Stores GPU data.
+/// Can be indexed with `u64` only!
 pub struct Buffer<T> {
     pub(crate) inner: Arc<dyn BufferProxy>,
     _t: PhantomData<T>,
