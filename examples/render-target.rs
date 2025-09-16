@@ -1,4 +1,5 @@
 use crystal_api::{
+    bitflags::BufferFlags,
     buffer::Buffer,
     debug::{LoggingLevel, set_internal_logging_level},
     errors::GraphicsResult,
@@ -376,8 +377,10 @@ impl ApplicationHandler for Context {
 
         let layout = device.create_layout(true, 1, 1, 1, 1).unwrap();
 
-        let uniform = device.create_buffer(1, true, false, true).unwrap();
-        let transform = device.create_buffer(2, false, false, true).unwrap();
+        let uniform = device
+            .create_buffer(1, BufferFlags::UNIFORM | BufferFlags::SYNCED)
+            .unwrap();
+        let transform = device.create_buffer(2, BufferFlags::SYNCED).unwrap();
 
         layout.add_buffer(0, &uniform).unwrap();
         layout.add_buffer(0, &transform).unwrap();

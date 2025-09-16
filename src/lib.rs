@@ -8,6 +8,8 @@
 //! Crystal API is a unified wrapper for GPU APIs designed for the best capability
 //! with any solutions in apps development
 
+/// Bitflags module
+pub mod bitflags;
 /// Buffer module
 pub mod buffer;
 /// Debug module

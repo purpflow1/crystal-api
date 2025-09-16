@@ -4,6 +4,7 @@ use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
 use crate::{
     GpuSamplerSet, GraphicsApiInitSettings,
+    bitflags::BufferFlags,
     buffer::Buffer,
     errors::GraphicsResult,
     layout::Layout,
@@ -79,13 +80,11 @@ impl Device {
     }
 
     /// Creates GPU buffer
-    pub fn create_buffer<T>(
-        &self,
-        len: u64,
-        uniform: bool,
-        transfer: bool,
-        enable_sync: bool,
-    ) -> GraphicsResult<Buffer<T>> {
+    pub fn create_buffer<T>(&self, len: u64, flags: BufferFlags) -> GraphicsResult<Buffer<T>> {
+        let uniform = !(flags & BufferFlags::UNIFORM).is_none();
+        let transfer = !(flags & BufferFlags::TRANSFER).is_none();
+        let enable_sync = !(flags & BufferFlags::SYNCED).is_none();
+
         Ok(Buffer::new(self.inner.create_buffer(
             len * size_of::<T>() as u64,
             uniform,

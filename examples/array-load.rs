@@ -1,4 +1,5 @@
 use crystal_api::{
+    bitflags::BufferFlags,
     buffer::Buffer,
     debug::{LoggingLevel, set_internal_logging_level},
     errors::GraphicsResult,
@@ -352,7 +353,7 @@ impl ApplicationHandler for Context {
 
             let size = reader.output_buffer_size().unwrap();
             let mut buffer = device
-                .create_buffer(size as u64 * 2, false, true, false)
+                .create_buffer(size as u64 * 2, BufferFlags::TRANSFER)
                 .unwrap();
 
             let info = reader.next_frame(&mut buffer[..size as u64]).unwrap();
@@ -373,7 +374,7 @@ impl ApplicationHandler for Context {
 
             let size = reader.output_buffer_size().unwrap();
             let mut buffer = device
-                .create_buffer(size as u64 * 2, false, true, false)
+                .create_buffer(size as u64 * 2, BufferFlags::TRANSFER)
                 .unwrap();
 
             let info = reader.next_frame(&mut buffer[..size as u64]).unwrap();
@@ -386,9 +387,11 @@ impl ApplicationHandler for Context {
                 .unwrap()
         };
 
-        let uniform = device.create_buffer(1, true, false, true).unwrap();
+        let uniform = device
+            .create_buffer(1, BufferFlags::UNIFORM | BufferFlags::SYNCED)
+            .unwrap();
         let transform = device
-            .create_buffer(OBJECT_DIMENTION.pow(3) as u64, false, false, true)
+            .create_buffer(OBJECT_DIMENTION.pow(3) as u64, BufferFlags::SYNCED)
             .unwrap();
 
         layout_obj.add_buffer(0, &uniform).unwrap();

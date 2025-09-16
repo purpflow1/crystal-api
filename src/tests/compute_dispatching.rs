@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use crate::bitflags::BufferFlags;
 use crate::errors::GraphicsResult;
 use crate::*;
 
@@ -63,9 +64,9 @@ fn compute_dispatching() -> GraphicsResult<()> {
     let device = Device::compute()?;
     let layout = device.create_layout(false, 0, 0, 1, 2)?;
 
-    let mut buffer_uniform = device.create_buffer(1, true, false, false)?;
-    let mut buffer_in = device.create_buffer::<Particle>(PARTICLE_NUM, false, true, false)?;
-    let buffer_out = device.create_buffer::<Particle>(PARTICLE_NUM, false, true, false)?;
+    let mut buffer_uniform = device.create_buffer(1, BufferFlags::UNIFORM)?;
+    let mut buffer_in = device.create_buffer::<Particle>(PARTICLE_NUM, BufferFlags::TRANSFER)?;
+    let buffer_out = device.create_buffer::<Particle>(PARTICLE_NUM, BufferFlags::TRANSFER)?;
 
     layout.add_buffer(0, &buffer_uniform)?;
     layout.add_buffer(0, &buffer_in)?;
