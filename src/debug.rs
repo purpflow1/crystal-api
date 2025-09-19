@@ -8,6 +8,7 @@ pub enum LoggingLevel {
 }
 
 pub(crate) static LOGGING_LEVEL: RwLock<LoggingLevel> = RwLock::new(LoggingLevel::None);
+static STARTUP_TIME: RwLock<MaybeUninit<Instant>> = RwLock::new(MaybeUninit::uninit());
 
 /// Sets logging level
 pub fn set_internal_logging_level(logging_level: LoggingLevel) {
@@ -18,12 +19,21 @@ pub(crate) fn get_logging_level() -> LoggingLevel {
     *LOGGING_LEVEL.read().unwrap()
 }
 
+pub(crate) fn get_startup_time() -> Instant {
+    unsafe { (*STARTUP_TIME.read().unwrap()).assume_init_read() }
+}
+
+pub(crate) fn setup_startup_time() {
+    *STARTUP_TIME.write().unwrap() = MaybeUninit::new(Instant::now())
+}
+
 macro_rules! log {
     ($($arg:tt)*) => {{
-        use crate::debug::{get_logging_level, LoggingLevel};
+        use crate::debug::{get_logging_level, get_startup_time, LoggingLevel};
         let message = format!($($arg)*);
+        let now = get_startup_time().elapsed();
         match get_logging_level() {
-            LoggingLevel::Console => println!("[LOG] {}", message),
+            LoggingLevel::Console => println!("[{:>13.6}] [LOG] {}", now.as_secs_f32(), message),
             _ => ()
         }
     }};
@@ -31,10 +41,11 @@ macro_rules! log {
 
 macro_rules! error {
     ($($arg:tt)*) => {{
-        use crate::debug::{get_logging_level, LoggingLevel};
+        use crate::debug::{get_logging_level, get_startup_time, LoggingLevel};
         let message = format!($($arg)*);
+        let now = get_startup_time().elapsed();
         match get_logging_level() {
-            LoggingLevel::Console => println!("[ERROR] {}", message),
+            LoggingLevel::Console => println!("[{:>13.6}] [ERROR] {}", now.as_secs_f32(), message),
             _ => ()
         }
     }};
@@ -54,7 +65,7 @@ macro_rules! fmt_size {
     };
 }
 
-use std::sync::RwLock;
+use std::{mem::MaybeUninit, sync::RwLock, time::Instant};
 
 pub(crate) use error;
 pub(crate) use fmt_size;

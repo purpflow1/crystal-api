@@ -6,7 +6,7 @@ use crate::{
     GpuSamplerSet, GraphicsApiInitSettings,
     bitflags::BufferFlags,
     buffer::Buffer,
-    debug::{error, fmt_size, log},
+    debug::{error, fmt_size, log, setup_startup_time},
     errors::{GraphicsError, GraphicsResult},
     layout::Layout,
     mesh::{AttributeDescriptor, Mesh},
@@ -25,6 +25,7 @@ pub struct Device {
 impl Device {
     /// Initializes device with no presentation support
     pub fn compute() -> GraphicsResult<Self> {
+        setup_startup_time();
         log!("creating compute device");
         Ok(Self {
             inner: VulkanEntry::no_presentation()?,
@@ -36,6 +37,7 @@ impl Device {
         settings: &GraphicsApiInitSettings,
         window: &T,
     ) -> GraphicsResult<Self> {
+        setup_startup_time();
         log!("creating graphics device");
         Ok(Self {
             inner: VulkanEntry::with_presentation(settings, window)?,
