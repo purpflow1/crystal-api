@@ -173,28 +173,26 @@ impl DeviceProxy for VulkanEntry {
                 .unwrap(),
         );
 
-        const DEEP: usize = 16;
-        const WIDE: usize = 32;
-
-        let mut render_targets_levels = VecDeque::with_capacity(DEEP);
-        let mut currents = Vec::with_capacity(WIDE);
+        let mut render_targets_levels = VecDeque::new();
+        let mut currents = Vec::new();
 
         currents.push(render_target_root.clone());
 
-        for _level in 0..16 {
-            let mut render_targets = Vec::with_capacity(WIDE);
-            let c = currents.clone();
-            currents.clear();
+        while !currents.is_empty() {
+            let mut render_targets = Vec::with_capacity(currents.len());
+            let mut next_level = Vec::new();
 
-            for current in c {
+            for current in currents.drain(..) {
                 render_targets.push(current.clone());
+
                 let children = current.children.lock().unwrap();
-                for child in &*children {
-                    currents.push(child.clone());
+                for child in children.iter() {
+                    next_level.push(child.clone());
                 }
             }
 
             render_targets_levels.push_front(render_targets);
+            currents = next_level;
         }
 
         compute.queue.wait_idle().unwrap();
