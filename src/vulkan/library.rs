@@ -228,14 +228,8 @@ impl DeviceProxy for VulkanEntry {
                             .render_area(vk::Rect2D {
                                 offset: vk::Offset2D::default().x(0).y(0),
                                 extent: vk::Extent2D {
-                                    width: render_target
-                                        .extent()
-                                        .width
-                                        .min(presentation.swapchain.extent().width),
-                                    height: render_target
-                                        .extent()
-                                        .height
-                                        .min(presentation.swapchain.extent().height),
+                                    width: render_target.extent().width,
+                                    height: render_target.extent().height,
                                 },
                             })
                             .clear_values(clear_values);
