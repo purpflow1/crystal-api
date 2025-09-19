@@ -250,44 +250,38 @@ impl DeviceProxy for VulkanEntry {
                         let mut layout_objects =
                             BTreeMap::<u64, (Arc<VulkanLayout>, Vec<Arc<Object>>)>::new();
 
-                        objects.iter().for_each(|object| {
-                            let raw = object
-                                .pipeline
-                                .clone()
-                                .as_vulkan()
-                                .unwrap()
-                                .layout
-                                .pipeline_layout
-                                .as_raw();
+                        for object in objects.iter() {
+                            let vk_pipeline = match object.pipeline.clone().as_vulkan() {
+                                Some(p) => p,
+                                None => continue,
+                            };
 
-                            if object.groups.is_none()
-                                && let Some(obj_render_target) = object
-                                    .pipeline
-                                    .clone()
-                                    .as_vulkan()
-                                    .unwrap()
-                                    .render_target
-                                    .clone()
-                                && obj_render_target.render_pass.as_raw()
-                                    == render_target.render_pass.as_raw()
-                            {
-                                let layout =
-                                    object.pipeline.clone().as_vulkan().unwrap().layout.clone();
+                            let raw = vk_pipeline.layout.pipeline_layout.as_raw();
 
-                                match layout_objects.get_mut(&raw) {
-                                    Some((_, objects)) => {
-                                        objects.push(object.clone());
-                                    }
-                                    None => {
-                                        layout_objects.insert(raw, (layout, vec![object.clone()]));
-                                    }
-                                }
+                            if object.groups.is_some() {
+                                continue;
                             }
-                        });
 
-                        layout_objects.iter().for_each(|(_, (layout, objects))| {
-                            layout.render(objects, command_buffer).unwrap()
-                        });
+                            let obj_rt = match vk_pipeline.render_target.as_ref() {
+                                Some(rt) => rt,
+                                None => continue,
+                            };
+
+                            if obj_rt.render_pass.as_raw() != render_target.render_pass.as_raw() {
+                                continue;
+                            }
+
+                            let layout_arc = vk_pipeline.layout.clone();
+
+                            layout_objects
+                                .entry(raw)
+                                .and_modify(|(_, vec)| vec.push(object.clone()))
+                                .or_insert_with(|| (layout_arc, vec![object.clone()]));
+                        }
+
+                        for (_raw, (layout, objects_vec)) in layout_objects.into_iter() {
+                            layout.render(&objects_vec, command_buffer).unwrap();
+                        }
 
                         unsafe { device.cmd_end_render_pass(*command_buffer) }
                     },
