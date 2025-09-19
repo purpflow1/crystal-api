@@ -135,7 +135,7 @@ impl DeviceProxy for VulkanEntry {
                 // return Ok(());
             }
             Err(e) => {
-                log!("failed aquire next image: {:?}", e);
+                error!("failed aquire next image: {:?}", e);
                 return Err(GraphicsError::RenderingError);
             }
             _ => (),
