@@ -1,4 +1,5 @@
 use std::ffi::c_void;
+use std::process::abort;
 
 use ash::vk::{
     self, DebugUtilsMessageSeverityFlagsEXT, DebugUtilsMessageTypeFlagsEXT,
@@ -40,7 +41,8 @@ unsafe extern "system" fn debug_callback(
             if message_severity.contains(DebugUtilsMessageSeverityFlagsEXT::ERROR) {
                 #[allow(clippy::panic)]
                 {
-                    panic!("[FATAL] {message}")
+                    println!("[FATAL] {message}");
+                    abort()
                 };
             } else if message_severity.contains(DebugUtilsMessageSeverityFlagsEXT::INFO) {
                 log!("[VALIDATION INFO] {}", message);
