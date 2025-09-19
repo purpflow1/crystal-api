@@ -45,8 +45,7 @@ impl Layout {
         ))
     }
 
-    /// Registers samplers in layout for reusing them.
-    /// Samplers are removing automatically on zero hard references in ```Arc```
+    /// Registers samplers in layout for reusing them
     pub fn register_samplers(&self, samplers: &[Arc<GpuSamplerSet>]) -> GraphicsResult<()> {
         self.inner.register_samplers(samplers)
     }
