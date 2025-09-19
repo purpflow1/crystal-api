@@ -1,16 +1,13 @@
 # Crystal API
-**Crystal API**  is a unified lightweight wrapper for graphics API. Currently in WIP stage.
+**Crystal API**  is a unified lightweight wrapper for Vulkan. Currently in WIP stage.
 
 ## Features
 - Vulkan API support
+- Linux, MacOS, Windows support
 - Synchronized in-frame and out-of-frame compute operations
 - Direct buffer access (no staging in buffer operations)
 - Multithreaded access to resources
-- Unified app architecture
-
-## Goals
-- Adding **Metal API** support
-- Adding raytracing support
+- Render targets (unstable for now)
 
 ---
 
@@ -20,5 +17,3 @@ To run debug scene from included example in
 ```bash
 cargo run --example array-load
 ```
-_Khronos validation layers are required to run debug builds!_
-_Visit https://vulkan.lunarg.com._
