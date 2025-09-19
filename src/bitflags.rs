@@ -36,7 +36,7 @@ macro_rules! wrap_bit_ops {
 
         impl Debug for $bitstruct {
             fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                f.write_str(format!("0x{:08x}", self.0).as_str())
+                f.write_str(format!("{:b}", self.0).as_str())
             }
         }
 
