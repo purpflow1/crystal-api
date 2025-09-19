@@ -202,26 +202,23 @@ impl DeviceProxy for VulkanEntry {
             .flush_transfer(compute.queue.clone())
             .unwrap();
 
-        let color = 0.5f32;
-        let mut clear_color = vk::ClearColorValue::default();
         let clear_depth_stencil = vk::ClearDepthStencilValue::default().depth(1.).stencil(0);
-        unsafe {
-            clear_color.float32[0] = color;
-            clear_color.float32[1] = color;
-            clear_color.float32[2] = color;
-            clear_color.float32[3] = 1.0f32
-        };
-        let clear_value_color = vk::ClearValue { color: clear_color };
         let clear_value_stencil = vk::ClearValue {
             depth_stencil: clear_depth_stencil,
         };
-        let clear_values = &[clear_value_color, clear_value_stencil];
 
         for render_targets in render_targets_levels {
             for render_target in render_targets {
                 let graphics_future = render_target.command_entry.record_command_buffer(
                     render_target.sync.clone(),
                     |command_buffer, device, _n_pass| {
+                        let color = 0.3f32;
+                        let clear_color = vk::ClearColorValue {
+                            float32: [color, color, color, 1.],
+                        };
+                        let clear_value_color = vk::ClearValue { color: clear_color };
+                        let clear_values = &[clear_value_color, clear_value_stencil];
+
                         let render_pass_begin = vk::RenderPassBeginInfo::default()
                             .render_pass(render_target.render_pass)
                             .framebuffer(*render_target.framebuffers[0].read().unwrap())
@@ -305,6 +302,13 @@ impl DeviceProxy for VulkanEntry {
         let present_future = graphics_now.join(
             graphics
                 .record_command_buffer(sync.clone(), |command_buffer, device, n_pass| {
+                    let color = 0.5f32;
+                    let clear_color = vk::ClearColorValue {
+                        float32: [color, color, color, 1.],
+                    };
+                    let clear_value_color = vk::ClearValue { color: clear_color };
+                    let clear_values = &[clear_value_color, clear_value_stencil];
+
                     let render_pass_begin = vk::RenderPassBeginInfo::default()
                         .render_pass(render_target_root.render_pass)
                         .framebuffer(*render_target_root.framebuffers[n_pass].read().unwrap())
