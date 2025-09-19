@@ -300,7 +300,6 @@ impl ApplicationHandler for Context {
 
         let device = Device::graphics(&self.settings, &window).unwrap();
 
-        println!("compiling GLSL shader...");
         const FILENAME1: &str = "examples/shaders/desc.vert";
         const FILENAME2: &str = "examples/shaders/desc.frag";
         let mut source1 = String::new();

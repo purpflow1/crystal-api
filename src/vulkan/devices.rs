@@ -220,16 +220,13 @@ impl DeviceManager {
         };
 
         log!(
-            "| picked device: [ {} ] vulkan version: [ {}.{}.{}.{} ]",
+            "picked device: [ {} ] vulkan version: [ {}.{}.{}.{} ]",
             self.device_name,
             maj,
             min,
             pat,
             var
         );
-        for extension in &self.supported_extensions {
-            log!("|| {}", extension);
-        }
     }
 }
 

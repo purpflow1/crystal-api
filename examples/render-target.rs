@@ -316,7 +316,6 @@ impl ApplicationHandler for Context {
 
         let device = Device::graphics(&self.settings, &window).expect("cannot create entry");
 
-        println!("compiling GLSL shaders...");
         const FILENAME1: &str = "examples/shaders/render-target.vert";
         const FILENAME2: &str = "examples/shaders/render-target.frag";
         const FILENAME3: &str = "examples/shaders/textured.frag";
