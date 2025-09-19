@@ -17,7 +17,7 @@ fn buffer_uniform_sync_creation() -> GraphicsResult<()> {
 #[test]
 fn buffer_storage_creation() -> GraphicsResult<()> {
     let device = Device::compute()?;
-    device.create_buffer::<u8>(1024 * 1024, BufferFlags::default())?;
+    device.create_buffer::<u8>(1024 * 1024, BufferFlags::null())?;
     Ok(())
 }
 
@@ -45,7 +45,7 @@ fn buffer_transfer_sync_creation() -> GraphicsResult<()> {
 #[test]
 fn buffer_binding() -> GraphicsResult<()> {
     let device = Device::compute()?;
-    let buffer_storage = device.create_buffer::<u8>(1024, BufferFlags::default())?;
+    let buffer_storage = device.create_buffer::<u8>(1024, BufferFlags::null())?;
     let buffer_uniform = device.create_buffer::<u8>(1024, BufferFlags::UNIFORM)?;
     let layout = device.create_layout(false, 0, 0, 1, 2)?;
     layout.add_buffer(0, &buffer_storage)?;
@@ -57,7 +57,7 @@ fn buffer_binding() -> GraphicsResult<()> {
 #[test]
 fn buffer_rebinding() -> GraphicsResult<()> {
     let device = Device::compute()?;
-    let buffer_storage = device.create_buffer::<u8>(1024, BufferFlags::default())?;
+    let buffer_storage = device.create_buffer::<u8>(1024, BufferFlags::null())?;
     let layout = device.create_layout(false, 0, 0, 0, 1)?;
     layout.add_buffer(0, &buffer_storage)?;
     layout.add_buffer(0, &buffer_storage)?;

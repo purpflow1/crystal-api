@@ -45,13 +45,18 @@ macro_rules! wrap_bit_ops {
             pub fn is_none(&self) -> bool {
                 self.0 == 0
             }
+
+            /// Creates zeroed bitflag
+            pub fn null() -> Self {
+                Self(0)
+            }
         }
     };
 }
 
 /// Buffer flags used to specify buffer usage
 #[repr(transparent)]
-#[derive(Default, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub struct BufferFlags(u8);
 wrap_bit_ops!(BufferFlags);
 
