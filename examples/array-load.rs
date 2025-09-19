@@ -300,34 +300,25 @@ impl ApplicationHandler for Context {
 
         let device = Device::graphics(&self.settings, &window).unwrap();
 
-        const FILENAME1: &str = "examples/shaders/desc.vert";
-        const FILENAME2: &str = "examples/shaders/textured.frag";
-        let mut source1 = String::new();
-        let mut source2 = String::new();
-        let mut reader = BufReader::new(File::open(FILENAME1).unwrap());
-        reader.read_to_string(&mut source1).unwrap();
-        let mut reader = BufReader::new(File::open(FILENAME2).unwrap());
-        reader.read_to_string(&mut source2).unwrap();
-
         let compiler = shaderc::Compiler::new().unwrap();
-        let binary_result1 = compiler
-            .compile_into_spirv(
-                source1.as_str(),
-                shaderc::ShaderKind::Vertex,
-                FILENAME1,
-                "main",
-                None,
-            )
-            .unwrap();
-        let binary_result2 = compiler
-            .compile_into_spirv(
-                source2.as_str(),
-                shaderc::ShaderKind::Fragment,
-                FILENAME2,
-                "main",
-                None,
-            )
-            .unwrap();
+
+        macro_rules! glsl2spirv {
+            ($filename:expr, $shaderkind:expr) => {{
+                const FILENAME: &str = $filename;
+                let mut source = String::new();
+                let mut reader = BufReader::new(File::open(FILENAME).unwrap());
+                reader.read_to_string(&mut source).unwrap();
+                compiler
+                    .compile_into_spirv(source.as_str(), $shaderkind, FILENAME, "main", None)
+                    .unwrap()
+            }};
+        }
+
+        let binary_result1 = glsl2spirv!("examples/shaders/desc.vert", shaderc::ShaderKind::Vertex);
+        let binary_result2 = glsl2spirv!(
+            "examples/shaders/textured.frag",
+            shaderc::ShaderKind::Fragment
+        );
 
         let shaders_obj = [
             Shader::from_bytes(binary_result1.as_binary_u8(), ShaderStage::Vertex).unwrap(),
