@@ -79,9 +79,9 @@ impl Device {
         }
 
         if !(uniform_num > 0 || storage_num > 0) {
-            error!("cannot create layout without buffers");
+            error!("cannot create layout without buffers (WARN vulkan specific, todo fix)");
             return Err(GraphicsError::DataError);
-        } // TODO it is possible!
+        } // TODO it is possible! Vulkan specific
 
         log!("creating layout [ double_buffering: {} ]", double_buffering);
 
