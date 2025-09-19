@@ -5,7 +5,6 @@ use crystal_api::{
     errors::GraphicsResult,
     mesh::{Attribute, AttributeDescriptor},
     object::Object,
-    render_target::RenderTarget,
     *,
 };
 
@@ -184,7 +183,6 @@ struct Scene {
 struct Context {
     window: Option<Window>,
     device: Option<Device>,
-    render_target_cube: Option<RenderTarget>,
 
     settings: GraphicsApiInitSettings,
     scene: Scene,
@@ -202,7 +200,6 @@ impl Context {
         Ok(Self {
             window: None,
             device: None,
-            render_target_cube: None,
 
             settings,
             scene: Scene {
@@ -443,7 +440,6 @@ impl ApplicationHandler for Context {
 
         self.device = Some(device);
         self.window = Some(window);
-        self.render_target_cube = Some(render_target_cube);
 
         println!("[end init]");
 
