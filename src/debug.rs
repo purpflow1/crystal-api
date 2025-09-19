@@ -40,7 +40,22 @@ macro_rules! error {
     }};
 }
 
+macro_rules! fmt_size {
+    ($size:expr) => {
+        if $size >= 1024 * 1024 * 1024 {
+            format!("{:.2}GB", $size as f32 / 1024. / 1024.)
+        } else if $size >= 1024 * 1024 {
+            format!("{:.2}MB", $size as f32 / 1024. / 1024.)
+        } else if $size >= 1024 {
+            format!("{:.2}KB", $size as f32 / 1024.)
+        } else {
+            format!("{}B", $size as u16)
+        }
+    };
+}
+
 use std::sync::RwLock;
 
 pub(crate) use error;
+pub(crate) use fmt_size;
 pub(crate) use log;

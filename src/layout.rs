@@ -3,6 +3,7 @@ use std::sync::Arc;
 use crate::{
     GpuSamplerSet, Shader,
     buffer::Buffer,
+    debug::log,
     errors::GraphicsResult,
     mesh::AttributeDescriptor,
     pipeline::{ComputeDescriptor, Pipeline},
@@ -26,6 +27,8 @@ impl Layout {
         render_target: &RenderTarget,
         shaders: &[Shader],
     ) -> GraphicsResult<Pipeline<V>> {
+        log!("creating graphics pipeline");
+
         let attributes = V::get_attributes();
 
         Ok(Pipeline::new(self.inner.clone().create_graphics_pipeline(
@@ -40,6 +43,8 @@ impl Layout {
         &self,
         shader: &Shader,
     ) -> GraphicsResult<Pipeline<ComputeDescriptor>> {
+        log!("creating compute pipeline");
+
         Ok(Pipeline::new(
             self.inner.clone().create_compute_pipeline(shader)?,
         ))

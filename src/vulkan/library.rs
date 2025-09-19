@@ -502,21 +502,6 @@ impl DeviceProxy for VulkanEntry {
         uniform_num: usize,
         storage_num: usize,
     ) -> GraphicsResult<Arc<dyn LayoutProxy>> {
-        if (sampler_num == 0 && texture_num == 0) == (sampler_num > 0 && texture_num > 0) {
-            error!("textures cannot exist without samplers");
-            return Err(GraphicsError::DataError);
-        }
-
-        if !(uniform_num > 0 || storage_num > 0) {
-            error!("cannot create layout without buffers");
-            return Err(GraphicsError::DataError);
-        } // TODO it is possible!
-
-        log!(
-            "creating layout [ double_buffering = {} ]",
-            double_buffering
-        );
-
         Ok(layout::VulkanLayout::new(
             self.device_manager.clone(),
             texture_num,
@@ -534,20 +519,6 @@ impl DeviceProxy for VulkanEntry {
         transfer: bool,
         enable_sync: bool,
     ) -> GraphicsResult<Arc<dyn BufferProxy>> {
-        log!(
-            "creating buffer [ size = {}, uniform = {}, transfer = {}, synced = {} ]",
-            if size >= 1024 * 1024 {
-                format!("{:.1} MB", size as f32 / 1024. / 1024.)
-            } else if size >= 1024 {
-                format!("{:.1} KB", size as f32 / 1024.)
-            } else {
-                format!("{size} B")
-            },
-            uniform,
-            transfer,
-            enable_sync
-        );
-
         let mut usage = vk::BufferUsageFlags::STORAGE_BUFFER;
 
         if uniform {
@@ -595,18 +566,6 @@ impl DeviceProxy for VulkanEntry {
         let vertex_size = vertices.len() as u64;
         let indices_size = indices.len() as u64;
 
-        log!("creating mesh [ size = {} ] ", {
-            let size = vertex_size + indices_size;
-
-            if size >= 1024 * 1024 {
-                format!("{:.1} MB", size as f32 / 1024. / 1024.)
-            } else if size >= 1024 {
-                format!("{:.1} KB", size as f32 / 1024.)
-            } else {
-                format!("{size} B")
-            }
-        });
-
         let mut buffer_info = BufferInfo {
             size: vertex_size,
             usage: vk::BufferUsageFlags::VERTEX_BUFFER,
@@ -644,14 +603,6 @@ impl DeviceProxy for VulkanEntry {
         textures: &[(u32, Arc<dyn TextureProxy>)],
         layouts: &[Arc<dyn LayoutProxy>],
     ) -> GraphicsResult<Arc<GpuSamplerSet>> {
-        log!(
-            "creating sampler [ bindings = {:?} ]",
-            textures
-                .iter()
-                .map(|(binding, _)| *binding)
-                .collect::<Vec<_>>()
-        );
-
         let sampler = GpuSamplerSet::from_textures(textures);
 
         layouts.iter().for_each(|layout| {
@@ -669,12 +620,6 @@ impl DeviceProxy for VulkanEntry {
         extent: [u32; 2],
         anisotropy_texels: f32,
     ) -> GraphicsResult<Arc<dyn TextureProxy>> {
-        log!(
-            "creating texture [ width = {}, height = {} ]",
-            extent[0],
-            extent[1],
-        );
-
         Ok(VulkanTexture::new_staged(
             self.device_manager.clone(),
             self.command_manager.clone(),

@@ -6,7 +6,8 @@ use crate::{
     GpuSamplerSet, GraphicsApiInitSettings,
     bitflags::BufferFlags,
     buffer::Buffer,
-    errors::GraphicsResult,
+    debug::{error, fmt_size, log},
+    errors::{GraphicsError, GraphicsResult},
     layout::Layout,
     mesh::{AttributeDescriptor, Mesh},
     object::Object,
@@ -24,6 +25,7 @@ pub struct Device {
 impl Device {
     /// Initializes device with no presentation support
     pub fn compute() -> GraphicsResult<Self> {
+        log!("creating compute device");
         Ok(Self {
             inner: VulkanEntry::no_presentation()?,
         })
@@ -34,6 +36,7 @@ impl Device {
         settings: &GraphicsApiInitSettings,
         window: &T,
     ) -> GraphicsResult<Self> {
+        log!("creating graphics device");
         Ok(Self {
             inner: VulkanEntry::with_presentation(settings, window)?,
         })
@@ -70,6 +73,18 @@ impl Device {
         uniform_num: usize,
         storage_num: usize,
     ) -> GraphicsResult<Layout> {
+        if (sampler_num == 0 && texture_num == 0) == (sampler_num > 0 && texture_num > 0) {
+            error!("textures cannot exist without samplers");
+            return Err(GraphicsError::DataError);
+        }
+
+        if !(uniform_num > 0 || storage_num > 0) {
+            error!("cannot create layout without buffers");
+            return Err(GraphicsError::DataError);
+        } // TODO it is possible!
+
+        log!("creating layout [ double_buffering: {} ]", double_buffering);
+
         Ok(Layout::new(self.inner.create_layout(
             double_buffering,
             texture_num,
@@ -81,12 +96,20 @@ impl Device {
 
     /// Creates GPU buffer
     pub fn create_buffer<T>(&self, len: u64, flags: BufferFlags) -> GraphicsResult<Buffer<T>> {
+        let size = len * size_of::<T>() as u64;
+
+        log!(
+            "creating buffer [ size: {} bits: {:?} ]",
+            fmt_size!(size),
+            flags
+        );
+
         let uniform = !(flags & BufferFlags::UNIFORM).is_none();
         let transfer = !(flags & BufferFlags::TRANSFER).is_none();
         let enable_sync = !(flags & BufferFlags::SYNCED).is_none();
 
         Ok(Buffer::new(self.inner.create_buffer(
-            len * size_of::<T>() as u64,
+            size,
             uniform,
             transfer,
             enable_sync,
@@ -98,6 +121,11 @@ impl Device {
         &self,
         mesh: &Mesh<V, I>,
     ) -> GraphicsResult<crate::mesh::MeshBuffer<V, I>> {
+        log!("creating mesh [ size: {} ] ", {
+            let size = mesh.size();
+            fmt_size!(size)
+        });
+
         let vertices = unsafe {
             std::slice::from_raw_parts(
                 mesh.vertices.as_ptr() as *const u8,
@@ -123,6 +151,14 @@ impl Device {
         textures: &[(u32, &Texture)],
         layouts: &[&Layout],
     ) -> GraphicsResult<Arc<GpuSamplerSet>> {
+        log!(
+            "creating sampler [ bindings: {:?} ]",
+            textures
+                .iter()
+                .map(|(binding, _)| *binding)
+                .collect::<Vec<_>>()
+        );
+
         self.inner.create_sampler_set(
             &textures
                 .iter()
@@ -142,6 +178,13 @@ impl Device {
         extent: [u32; 2],
         anisotropy_texels: f32,
     ) -> GraphicsResult<Texture> {
+        let size = buffer.len();
+        log!(
+            "creating texture [ size: {} extent: {}x{} ]",
+            fmt_size!(size),
+            extent[0],
+            extent[1]
+        );
         Ok(Texture::new(self.inner.create_texture(
             buffer.inner.clone(),
             extent,

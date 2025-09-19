@@ -53,6 +53,13 @@ pub struct Mesh<V: AttributeDescriptor, I> {
     pub indices: Vec<I>,
 }
 
+impl<V: AttributeDescriptor, I> Mesh<V, I> {
+    pub(crate) fn size(&self) -> u64 {
+        self.vertices.len() as u64 * size_of::<V>() as u64
+            + self.indices.len() as u64 * size_of::<I>() as u64
+    }
+}
+
 /// `MeshBuffer` struct stores the mesh data in GPU memory
 pub struct MeshBuffer<V: AttributeDescriptor, I> {
     pub(crate) inner: Arc<crate::object::MeshBufferProxy>,

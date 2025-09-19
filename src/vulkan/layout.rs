@@ -735,8 +735,6 @@ impl VulkanPipeline {
         layout: Arc<VulkanLayout>,
         shader: &Shader,
     ) -> GraphicsResult<Arc<Self>> {
-        log!("creating compute pipeline");
-
         let stage = match shader.stage {
             ShaderStage::Compute => vk::ShaderStageFlags::COMPUTE,
             _ => {
@@ -802,8 +800,6 @@ impl VulkanPipeline {
         attributes: &[Attribute],
         render_target: Arc<VulkanRenderTarget>,
     ) -> GraphicsResult<Arc<Self>> {
-        log!("creating graphics pipeline");
-
         if shaders.is_empty() {
             error!("no shaders specified");
             return Err(GraphicsError::ShaderError);
