@@ -314,7 +314,10 @@ impl ApplicationHandler for Context {
             }};
         }
 
-        let binary_result1 = glsl2spirv!("examples/shaders/desc.vert", shaderc::ShaderKind::Vertex);
+        let binary_result1 = glsl2spirv!(
+            "examples/shaders/textured.vert",
+            shaderc::ShaderKind::Vertex
+        );
         let binary_result2 = glsl2spirv!(
             "examples/shaders/textured.frag",
             shaderc::ShaderKind::Fragment
