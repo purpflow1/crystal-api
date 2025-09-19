@@ -171,8 +171,11 @@ struct Uniform {
 
 struct Scene {
     camera: Camera,
+    camera_in: Camera,
 
     uniform: Option<Buffer<Uniform>>,
+    uniform_in: Option<Buffer<Uniform>>,
+
     transforms: Option<Buffer<glam::Mat4>>,
 
     objects: Vec<Arc<Object>>,
@@ -221,7 +224,21 @@ impl Context {
                     ),
                 },
 
+                camera_in: Camera {
+                    proj: glam::Mat4::perspective_lh(PI / 4., 1., 0.1, 100.),
+                    view: glam::Mat4::look_at_lh(
+                        glam::Vec3::new(
+                            DISTANCE_FROM_OBJECTS,
+                            DISTANCE_FROM_OBJECTS,
+                            DISTANCE_FROM_OBJECTS,
+                        ),
+                        glam::Vec3::ZERO,
+                        glam::Vec3::new(0., -1., 0.),
+                    ),
+                },
+
                 uniform: None,
+                uniform_in: None,
                 transforms: None,
 
                 objects: vec![],
@@ -244,6 +261,13 @@ impl Context {
         };
 
         self.scene.uniform.as_mut().unwrap()[0] = ubo;
+
+        let ubo = Uniform {
+            eye: self.scene.camera_in.calc_eye_matrix(),
+            time: self.state.startup.elapsed().as_secs_f32(),
+        };
+
+        self.scene.uniform_in.as_mut().unwrap()[0] = ubo;
 
         let now = self.state.startup.elapsed();
 
@@ -318,16 +342,20 @@ impl ApplicationHandler for Context {
 
         const FILENAME1: &str = "examples/shaders/render-target.vert";
         const FILENAME2: &str = "examples/shaders/render-target.frag";
-        const FILENAME3: &str = "examples/shaders/textured.frag";
+        const FILENAME3: &str = "examples/shaders/textured.vert";
+        const FILENAME4: &str = "examples/shaders/textured.frag";
         let mut source1 = String::new();
         let mut source2 = String::new();
         let mut source3 = String::new();
+        let mut source4 = String::new();
         let mut reader = BufReader::new(File::open(FILENAME1).unwrap());
         reader.read_to_string(&mut source1).unwrap();
         let mut reader = BufReader::new(File::open(FILENAME2).unwrap());
         reader.read_to_string(&mut source2).unwrap();
         let mut reader = BufReader::new(File::open(FILENAME3).unwrap());
         reader.read_to_string(&mut source3).unwrap();
+        let mut reader = BufReader::new(File::open(FILENAME4).unwrap());
+        reader.read_to_string(&mut source4).unwrap();
 
         let compiler = shaderc::Compiler::new().unwrap();
 
@@ -352,8 +380,17 @@ impl ApplicationHandler for Context {
         let binary_result3 = compiler
             .compile_into_spirv(
                 source3.as_str(),
-                shaderc::ShaderKind::Fragment,
+                shaderc::ShaderKind::Vertex,
                 FILENAME3,
+                "main",
+                None,
+            )
+            .unwrap();
+        let binary_result4 = compiler
+            .compile_into_spirv(
+                source4.as_str(),
+                shaderc::ShaderKind::Fragment,
+                FILENAME4,
                 "main",
                 None,
             )
@@ -365,8 +402,8 @@ impl ApplicationHandler for Context {
         ];
 
         let shaders_textured = [
-            Shader::from_bytes(binary_result1.as_binary_u8(), ShaderStage::Vertex).unwrap(),
-            Shader::from_bytes(binary_result3.as_binary_u8(), ShaderStage::Fragment).unwrap(),
+            Shader::from_bytes(binary_result3.as_binary_u8(), ShaderStage::Vertex).unwrap(),
+            Shader::from_bytes(binary_result4.as_binary_u8(), ShaderStage::Fragment).unwrap(),
         ];
 
         let render_target = device.get_presentation_render_target().unwrap();
@@ -374,17 +411,22 @@ impl ApplicationHandler for Context {
         let (render_target_cube, texture_render) =
             render_target.inherit([1024, 1024], 1., 2).unwrap();
 
-        let layout = device.create_layout(true, 1, 1, 1, 1).unwrap();
+        let layout = device.create_layout(true, 1, 1, 2, 1).unwrap();
 
         let uniform = device
+            .create_buffer(1, BufferFlags::UNIFORM | BufferFlags::SYNCED)
+            .unwrap();
+        let uniform_in = device
             .create_buffer(1, BufferFlags::UNIFORM | BufferFlags::SYNCED)
             .unwrap();
         let transform = device.create_buffer(2, BufferFlags::SYNCED).unwrap();
 
         layout.add_buffer(0, &uniform).unwrap();
+        layout.add_buffer(1, &uniform_in).unwrap();
         layout.add_buffer(0, &transform).unwrap();
 
         self.scene.uniform = Some(uniform);
+        self.scene.uniform_in = Some(uniform_in);
         self.scene.transforms = Some(transform);
 
         let pipeline_render = layout

@@ -1,6 +1,6 @@
 #version 450
 
-layout(set = 0, binding = 1) uniform UniformBufferObject {
+layout(set = 0, binding = 0) uniform UniformBufferObject {
     mat4 eye;
     float time;
 } ubo;

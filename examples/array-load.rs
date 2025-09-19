@@ -301,7 +301,7 @@ impl ApplicationHandler for Context {
         let device = Device::graphics(&self.settings, &window).unwrap();
 
         const FILENAME1: &str = "examples/shaders/desc.vert";
-        const FILENAME2: &str = "examples/shaders/desc.frag";
+        const FILENAME2: &str = "examples/shaders/textured.frag";
         let mut source1 = String::new();
         let mut source2 = String::new();
         let mut reader = BufReader::new(File::open(FILENAME1).unwrap());
