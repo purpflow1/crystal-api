@@ -115,11 +115,6 @@ impl DeviceProxy for VulkanEntry {
 
         sync.lock().unwrap().wait_render().unwrap();
 
-        let mut timer = self.time_state.lock().unwrap();
-        timer.delta_time = timer.timer.elapsed();
-        timer.timer = std::time::Instant::now();
-        drop(timer);
-
         match graphics_now.acquire_next_image(presentation) {
             Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
                 presentation.swapchain.recreate(None)?;
@@ -138,7 +133,11 @@ impl DeviceProxy for VulkanEntry {
                 error!("failed aquire next image: {:?}", e);
                 return Err(GraphicsError::RenderingError);
             }
-            _ => (),
+            _ => {
+                let mut timer = self.time_state.lock().unwrap();
+                timer.delta_time = timer.timer.elapsed();
+                timer.timer = std::time::Instant::now();
+            }
         };
 
         let compute_now = compute.now(sync.clone());
