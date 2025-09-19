@@ -263,6 +263,8 @@ impl Context {
 
         let device = self.device.as_ref().unwrap();
 
+        device.dispatch_and_present(&self.scene.objects).unwrap();
+
         let delta = device.get_delta_time();
         self.state.delta_time_sum += delta;
 
@@ -291,8 +293,6 @@ impl Context {
         }
 
         self.state.current_frame += 1;
-
-        device.dispatch_and_present(&self.scene.objects).unwrap();
     }
 }
 
