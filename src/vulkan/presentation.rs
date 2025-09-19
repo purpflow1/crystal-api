@@ -52,6 +52,7 @@ impl SwapchainInfo {
     fn new(
         device_manager: Arc<DeviceManager>,
         surface: Arc<PresentSurface>,
+        vsync: bool,
     ) -> GraphicsResult<Arc<Self>> {
         let queue_family_indices = [
             match device_manager
@@ -123,8 +124,13 @@ impl SwapchainInfo {
                 mode
             }
             None => {
-                log!("immediate present mode");
-                vk::PresentModeKHR::IMMEDIATE
+                if vsync {
+                    log!("VSYNC enabled");
+                    vk::PresentModeKHR::FIFO
+                } else {
+                    log!("VSYNC disabled");
+                    vk::PresentModeKHR::IMMEDIATE
+                }
             }
         };
 
@@ -362,8 +368,9 @@ impl Swapchain {
     fn new(
         device_manager: Arc<DeviceManager>,
         surface: Arc<PresentSurface>,
+        vsync: bool,
     ) -> GraphicsResult<Arc<Self>> {
-        let swapchain_create_info = SwapchainInfo::new(device_manager.clone(), surface)?;
+        let swapchain_create_info = SwapchainInfo::new(device_manager.clone(), surface, vsync)?;
         let (swapchain, swapchain_khr, swapchain_image_views) =
             Self::from_info(device_manager.clone(), swapchain_create_info.clone())?;
 
@@ -431,9 +438,10 @@ impl Presentation {
     pub(crate) fn new(
         device_manager: Arc<DeviceManager>,
         surface: Arc<PresentSurface>,
+        vsync: bool,
         msaa_samples: u8,
     ) -> GraphicsResult<Arc<Self>> {
-        let swapchain = Swapchain::new(device_manager.clone(), surface.clone())?;
+        let swapchain = Swapchain::new(device_manager.clone(), surface.clone(), vsync)?;
 
         let extent = swapchain.swapchain_info.extent.read().unwrap();
 

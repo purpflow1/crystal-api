@@ -484,6 +484,7 @@ fn main() -> GraphicsResult<()> {
 
     let settings = GraphicsApiInitSettings::default()
         .msaa_samples(4)
+        .vsync(false)
         .width(500)
         .height(300);
 

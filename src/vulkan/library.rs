@@ -18,7 +18,7 @@ use super::{
 
 use crate::{
     GpuSamplerSet, GraphicsApiInitSettings,
-    debug::{error, log},
+    debug::error,
     errors::{GraphicsError, GraphicsResult},
     object::{MeshBufferProxy, Object},
     proxies::*,
@@ -211,7 +211,7 @@ impl DeviceProxy for VulkanEntry {
             for render_target in render_targets {
                 let graphics_future = render_target.command_entry.record_command_buffer(
                     render_target.sync.clone(),
-                    |command_buffer, device, _n_pass| {
+                    |command_buffer, device, n_pass| {
                         let color = 0.3f32;
                         let clear_color = vk::ClearColorValue {
                             float32: [color, color, color, 1.],
@@ -221,7 +221,7 @@ impl DeviceProxy for VulkanEntry {
 
                         let render_pass_begin = vk::RenderPassBeginInfo::default()
                             .render_pass(render_target.render_pass)
-                            .framebuffer(*render_target.framebuffers[0].read().unwrap())
+                            .framebuffer(*render_target.framebuffers[n_pass].read().unwrap())
                             .render_area(vk::Rect2D {
                                 offset: vk::Offset2D::default().x(0).y(0),
                                 extent: vk::Extent2D {
@@ -699,8 +699,12 @@ impl VulkanEntry {
             return Err(GraphicsError::NotSupportedPresent);
         }
 
-        let presentation =
-            Presentation::new(device_manager.clone(), surface, settings.msaa_samples)?;
+        let presentation = Presentation::new(
+            device_manager.clone(),
+            surface,
+            settings.vsync,
+            settings.msaa_samples,
+        )?;
 
         let command_manager = CommandManager::new(
             device_manager.clone(),

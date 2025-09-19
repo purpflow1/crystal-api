@@ -5,6 +5,7 @@ pub struct GraphicsApiInitSettings {
     pub msaa_samples: u8,
     pub width: u32,
     pub height: u32,
+    pub vsync: bool,
 }
 
 #[allow(missing_docs)]
@@ -22,5 +23,9 @@ impl GraphicsApiInitSettings {
 
     pub fn height(&self, height: u32) -> Self {
         Self { height, ..*self }
+    }
+
+    pub fn vsync(&self, vsync: bool) -> Self {
+        Self { vsync, ..*self }
     }
 }

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::{errors::GraphicsResult, proxies::RenderTargetProxy, texture::Texture};
+use crate::{debug::log, errors::GraphicsResult, proxies::RenderTargetProxy, texture::Texture};
 
 /// Used to render into
 pub struct RenderTarget {
@@ -19,6 +19,12 @@ impl RenderTarget {
         anisotropy_texels: f32,
         msaa_samples: u8,
     ) -> GraphicsResult<(Self, Texture)> {
+        log!(
+            "creating render target [ extent: {}x{} ]",
+            extent[0],
+            extent[1]
+        );
+
         let (render_target, texture) =
             self.inner
                 .create_render_target(extent, anisotropy_texels, msaa_samples)?;
