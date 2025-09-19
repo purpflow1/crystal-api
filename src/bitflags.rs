@@ -59,7 +59,7 @@ impl BufferFlags {
     /// Uniform buffers are used to store small amount of data, non indexing
     pub const UNIFORM: Self = Self(0b001);
     /// Transfer buffers are used to read data from it.
-    /// For example, after computations.
+    /// For example, computation result.
     pub const TRANSFER: Self = Self(0b010);
     /// Indicates that the buffer would be synced along the frame
     pub const SYNCED: Self = Self(0b100);
