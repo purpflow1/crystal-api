@@ -114,7 +114,7 @@ where
                             } else {
                                 (uv + uvs.len() as i32) as usize
                             };
-                            vertices[idx as usize].uv = uvs[uv];
+                            vertices[idx as usize].uv = [uvs[uv][0], -uvs[uv][1]];
                         }
 
                         local_indices.push(idx);
@@ -211,11 +211,7 @@ impl Context {
                         100.,
                     ),
                     view: glam::Mat4::look_at_lh(
-                        glam::Vec3::new(
-                            DISTANCE_FROM_OBJECTS,
-                            DISTANCE_FROM_OBJECTS,
-                            DISTANCE_FROM_OBJECTS,
-                        ),
+                        glam::Vec3::new(1., 0., 1.) * DISTANCE_FROM_OBJECTS,
                         glam::Vec3::ZERO,
                         glam::Vec3::new(0., -1., 0.),
                     ),
@@ -271,7 +267,7 @@ impl Context {
         let transforms = self.scene.transforms.as_mut().unwrap();
 
         transforms[0] = glam::Mat4::from_scale_rotation_translation(
-            glam::Vec3::ONE,
+            glam::Vec3::new(0.03, 0.03, 0.03),
             glam::Quat::from_rotation_y(PI / 2. * now.as_secs_f32()),
             glam::Vec3::ZERO,
         );
@@ -380,7 +376,7 @@ impl ApplicationHandler for Context {
 
         let render_target = device.get_presentation_render_target().unwrap();
 
-        let (render_target_cube, texture_render) =
+        let (render_target_sphere, texture_render) =
             render_target.inherit([1024, 1024], 1., 2).unwrap();
 
         let layout = device.create_layout(true, 1, 1, 2, 1).unwrap();
@@ -402,7 +398,7 @@ impl ApplicationHandler for Context {
         self.scene.transforms = Some(transform);
 
         let pipeline_render = layout
-            .create_graphics_pipeline::<VertexTexture>(&render_target_cube, &shaders_obj)
+            .create_graphics_pipeline::<VertexTexture>(&render_target_sphere, &shaders_obj)
             .unwrap();
 
         let pipeline_textured = layout
@@ -414,13 +410,13 @@ impl ApplicationHandler for Context {
         ))
         .unwrap();
 
-        let cube_mesh = mesh_from_obj_buffer(BufReader::new(
-            File::open("examples/resources/objects/cube.obj").unwrap(),
+        let sphere_mesh = mesh_from_obj_buffer(BufReader::new(
+            File::open("examples/resources/objects/uv-map-sphere.obj").unwrap(),
         ))
         .unwrap();
 
         let mishka_mesh_buffer = device.create_buffer_mesh(&mishka_mesh).unwrap();
-        let cube_mesh_buffer = device.create_buffer_mesh(&cube_mesh).unwrap();
+        let sphere_mesh_buffer = device.create_buffer_mesh(&sphere_mesh).unwrap();
 
         let mishka_object =
             Arc::new(pipeline_render.create_object_with_mesh(1, &mishka_mesh_buffer));
@@ -429,13 +425,13 @@ impl ApplicationHandler for Context {
             .create_sampler_set(&[(0, &texture_render)], &[&layout])
             .unwrap();
 
-        let cube_object = Arc::new(pipeline_textured.create_object_with_mesh_sampled(
+        let sphere_object = Arc::new(pipeline_textured.create_object_with_mesh_sampled(
             0,
-            &cube_mesh_buffer,
+            &sphere_mesh_buffer,
             texture_sampler,
         ));
 
-        self.scene.objects.push(cube_object.clone());
+        self.scene.objects.push(sphere_object.clone());
         self.scene.objects.push(mishka_object.clone());
 
         self.device = Some(device);

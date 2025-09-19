@@ -115,7 +115,7 @@ where
                             } else {
                                 (uv + uvs.len() as i32) as usize
                             };
-                            vertices[idx as usize].uv = uvs[uv];
+                            vertices[idx as usize].uv = [uvs[uv][0], -uvs[uv][1]];
                         }
 
                         local_indices.push(idx);
