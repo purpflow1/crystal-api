@@ -406,7 +406,7 @@ impl DeviceProxy for VulkanEntry {
     }
 
     fn dispatch_compute(&self, objects: &[Arc<Object>]) -> GraphicsResult<()> {
-        let compute = self
+        let compute_entry = self
             .command_manager
             .command_entries
             .get(&CommandType::Compute)
@@ -415,10 +415,10 @@ impl DeviceProxy for VulkanEntry {
 
         let sync = GpuSync::no_sync(self.device_manager.clone());
 
-        let now = compute.now(sync.clone());
+        let now = compute_entry.now(sync.clone());
 
         let future = now.join(
-            &compute
+            &compute_entry
                 .record_single_time_buffer(|command_buffer, device| unsafe {
                     for object in objects {
                         let pipeline = object.pipeline.clone().as_vulkan().unwrap();
@@ -444,8 +444,8 @@ impl DeviceProxy for VulkanEntry {
                 .unwrap(),
         );
 
-        future.flush_transfer(compute.queue.clone()).unwrap();
-        compute.queue.wait_idle().unwrap();
+        future.flush_transfer(compute_entry.queue.clone()).unwrap();
+        compute_entry.queue.wait_idle().unwrap();
 
         Ok(())
     }
