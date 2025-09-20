@@ -193,9 +193,4 @@ impl Device {
             anisotropy_texels,
         )?))
     }
-
-    /// Returns the duration of previous frame
-    pub fn get_delta_time(&self) -> std::time::Duration {
-        self.inner.get_delta_time()
-    }
 }

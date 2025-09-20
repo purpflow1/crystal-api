@@ -142,6 +142,7 @@ struct State {
     delta_time_sum: Duration,
     current_frame: usize,
     startup: Instant,
+    now: Instant,
 }
 
 #[derive(Clone, Copy)]
@@ -223,6 +224,7 @@ impl Context {
                 delta_time_sum: Duration::ZERO,
                 current_frame: 0,
                 startup: std::time::Instant::now(),
+                now: std::time::Instant::now(),
             },
         })
     }
@@ -262,7 +264,9 @@ impl Context {
 
         let device = self.device.as_ref().unwrap();
 
-        let delta = device.get_delta_time();
+        let now = Instant::now();
+        let delta = now - self.state.now;
+        self.state.now = now;
 
         self.state.delta_time_sum += delta;
         self.state.current_frame += 1;

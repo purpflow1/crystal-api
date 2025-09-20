@@ -25,11 +25,6 @@ use crate::{
     vulkan::{VulkanLayout, instance::create_instance},
 };
 
-pub(crate) struct TimeState {
-    timer: std::time::Instant,
-    delta_time: std::time::Duration,
-}
-
 pub(crate) struct VulkanEntry {
     command_manager: Arc<CommandManager>,
     #[cfg(debug_assertions)]
@@ -39,7 +34,6 @@ pub(crate) struct VulkanEntry {
     presentation: Option<Arc<Presentation>>,
 
     present_result: Mutex<PresentResult>,
-    time_state: Mutex<TimeState>,
 }
 
 impl Drop for VulkanEntry {
@@ -132,11 +126,7 @@ impl DeviceProxy for VulkanEntry {
                 error!("failed aquire next image: {:?}", e);
                 return Err(GraphicsError::RenderingError);
             }
-            _ => {
-                let mut timer = self.time_state.lock().unwrap();
-                timer.delta_time = timer.timer.elapsed();
-                timer.timer = std::time::Instant::now();
-            }
+            _ => {}
         };
 
         let compute_now = compute_entry.now(sync_root.clone());
@@ -619,10 +609,6 @@ impl DeviceProxy for VulkanEntry {
             anisotropy_texels,
         )?)
     }
-
-    fn get_delta_time(&self) -> std::time::Duration {
-        self.time_state.lock().unwrap().delta_time
-    }
 }
 
 impl VulkanEntry {
@@ -645,10 +631,6 @@ impl VulkanEntry {
             presentation: None,
 
             present_result: Mutex::new(PresentResult::default()),
-            time_state: Mutex::new(TimeState {
-                timer: std::time::Instant::now(),
-                delta_time: std::time::Duration::ZERO,
-            }),
         }))
     }
 
@@ -714,10 +696,6 @@ impl VulkanEntry {
             presentation: Some(presentation),
 
             present_result: Mutex::new(PresentResult::default()),
-            time_state: Mutex::new(TimeState {
-                timer: std::time::Instant::now(),
-                delta_time: std::time::Duration::ZERO,
-            }),
         }))
     }
 

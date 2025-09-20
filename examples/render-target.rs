@@ -142,6 +142,7 @@ struct State {
     min_delta_time: Duration,
     max_delta_time: Duration,
     current_frame: usize,
+    now: Instant,
     startup: Instant,
 }
 
@@ -239,6 +240,7 @@ impl Context {
                 max_delta_time: Duration::ZERO,
                 current_frame: 0,
                 startup: std::time::Instant::now(),
+                now: std::time::Instant::now(),
             },
         })
     }
@@ -278,7 +280,10 @@ impl Context {
 
         device.dispatch_and_present(&self.scene.objects).unwrap();
 
-        let delta = device.get_delta_time();
+        let now = Instant::now();
+        let delta = now - self.state.now;
+        self.state.now = now;
+
         self.state.delta_time_sum += delta;
 
         if self.state.min_delta_time > delta {

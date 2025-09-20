@@ -46,7 +46,6 @@ pub(crate) trait DeviceProxy: Sync + Send {
         extent: [u32; 2],
         anisotropy_texels: f32,
     ) -> GraphicsResult<Arc<dyn TextureProxy>>;
-    fn get_delta_time(&self) -> std::time::Duration;
 }
 
 pub(crate) trait RenderTargetProxy: Sync + Send {
