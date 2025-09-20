@@ -16,7 +16,7 @@ categories = [
 
 repository = "https://github.com/purpflow1/crystal-api"
 readme = "README.md"
-license-file = "LICENSE.txt"
+license = "GPL-3.0-or-later OR MIT"
 
 exclude = ["examples/", "src/tests"]
 
