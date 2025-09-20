@@ -135,7 +135,6 @@ impl proxies::BufferProxy for BufferManager {
         self.info.size
     }
 
-    // TODO make range actually u64, not usize
     #[inline]
     fn get_memory<'a>(&self, range: Range<u64>) -> &'a mut [u8] {
         let lock = self.sync.lock().unwrap();
