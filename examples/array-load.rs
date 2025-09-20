@@ -355,27 +355,6 @@ impl ApplicationHandler for Context {
                 .unwrap()
         };
 
-        let test_sampler = {
-            let file = File::open("examples/resources/textures/test.png").unwrap();
-            let buf_reader = BufReader::new(file);
-            let decoder = png::Decoder::new(buf_reader);
-            let mut reader = decoder.read_info().unwrap();
-
-            let size = reader.output_buffer_size().unwrap();
-            let mut buffer = device
-                .create_buffer(size as u64 * 2, BufferFlags::TRANSFER)
-                .unwrap();
-
-            let info = reader.next_frame(&mut buffer[..size as u64]).unwrap();
-
-            let texture = device
-                .create_texture(&buffer, [info.width, info.height], 1.0)
-                .unwrap();
-            device
-                .create_sampler_set(&[(0, &texture)], &[&layout_obj])
-                .unwrap()
-        };
-
         let uniform = device
             .create_buffer(1, BufferFlags::UNIFORM | BufferFlags::SYNCED)
             .unwrap();
@@ -408,9 +387,7 @@ impl ApplicationHandler for Context {
         ));
 
         self.scene.objects.push(object);
-        layout_obj
-            .register_samplers(&[default_sampler, test_sampler])
-            .unwrap();
+        layout_obj.register_samplers(&[default_sampler]).unwrap();
 
         self.device = Some(device);
         self.window = Some(window);
