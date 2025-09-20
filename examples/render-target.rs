@@ -32,7 +32,7 @@ type Vec3 = [f32; 3];
 type Vec2 = [f32; 2];
 
 /// Index type
-pub type Index = u32;
+pub type Index = u16;
 
 /// Textured vertex struct
 #[repr(C)]

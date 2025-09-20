@@ -628,7 +628,7 @@ impl VulkanLayout {
                 4 => vk::IndexType::UINT32,
                 size => {
                     error!("unknown index size: {}", size);
-                    vk::IndexType::NONE_KHR
+                    return Err(GraphicsError::DataError);
                 }
             };
 
