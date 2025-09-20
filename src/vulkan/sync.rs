@@ -155,11 +155,6 @@ impl GpuSync {
         })))
     }
 
-    pub(crate) fn unflip(&mut self) {
-        self.n_pass = self.barriers.semaphore_image.len() - 1;
-        self.odd_pass = 0;
-    }
-
     pub(crate) fn flip(&mut self) {
         self.n_pass = (self.n_pass + 1) % self.barriers.semaphore_image.len();
         self.odd_pass = (self.odd_pass + 1) % 2;

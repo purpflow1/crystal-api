@@ -18,7 +18,7 @@ use super::{
 
 use crate::{
     GpuSamplerSet, GraphicsApiInitSettings,
-    debug::error,
+    debug::{error, log},
     errors::{GraphicsError, GraphicsResult},
     object::{MeshBufferProxy, Object},
     proxies::*,
@@ -65,6 +65,7 @@ impl Drop for VulkanEntry {
                 Ok(()) => (),
                 // Surface can be destroyed before vulkan resource drop
                 Err(vk::Result::ERROR_SURFACE_LOST_KHR) => error!("surface lost on entry drop"),
+                Err(vk::Result::ERROR_OUT_OF_DATE_KHR | vk::Result::SUBOPTIMAL_KHR) => (),
                 Err(e) => error!("cannot acquire next (last) image on entry drop: {}", e),
             };
         }
@@ -73,14 +74,14 @@ impl Drop for VulkanEntry {
 
 impl DeviceProxy for VulkanEntry {
     fn dispatch_and_present(&self, objects: &[Arc<Object>]) -> GraphicsResult<()> {
-        let graphics = self
+        let graphics_entry = self
             .command_manager
             .command_entries
             .get(&CommandType::Graphics)
             .unwrap()
             .clone();
 
-        let compute = self
+        let compute_entry = self
             .command_manager
             .command_entries
             .get(&CommandType::Compute)
@@ -89,19 +90,14 @@ impl DeviceProxy for VulkanEntry {
 
         let render_target_dyn = self.get_presentation_render_target();
         let render_target_root = render_target_dyn.unwrap().as_vulkan().unwrap();
-
-        let sync = render_target_root.sync.clone();
-        let mut graphics_now = graphics.now(sync.clone());
-
+        let sync_root = render_target_root.sync.clone();
+        let mut graphics_now = graphics_entry.now(sync_root.clone());
         let present_result = *self.present_result.lock().unwrap();
-
         let presentation = self.presentation.as_ref().unwrap();
 
-        if present_result.out_of_date {
+        if present_result.out_of_date || present_result.suboptimal {
+            graphics_entry.wait()?;
             presentation.swapchain.recreate(None)?;
-        }
-
-        if present_result.suboptimal {
             render_target_root.update_resources(
                 presentation.swapchain.extent(),
                 presentation
@@ -113,10 +109,12 @@ impl DeviceProxy for VulkanEntry {
             )?;
         }
 
-        sync.lock().unwrap().wait_render().unwrap();
+        sync_root.lock().unwrap().wait_render().unwrap();
 
         match graphics_now.acquire_next_image(presentation) {
             Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
+                log!("image out of date, skipping");
+
                 presentation.swapchain.recreate(None)?;
                 render_target_root.update_resources(
                     presentation.swapchain.extent(),
@@ -127,8 +125,9 @@ impl DeviceProxy for VulkanEntry {
                         .unwrap()
                         .clone(),
                 )?;
-                // return Ok(());
+                return Ok(());
             }
+            Err(vk::Result::SUBOPTIMAL_KHR) => {}
             Err(e) => {
                 error!("failed aquire next image: {:?}", e);
                 return Err(GraphicsError::RenderingError);
@@ -140,35 +139,38 @@ impl DeviceProxy for VulkanEntry {
             }
         };
 
-        let compute_now = compute.now(sync.clone());
+        let compute_now = compute_entry.now(sync_root.clone());
 
         let compute_future = compute_now.join(
-            &compute
-                .record_command_buffer(sync.clone(), |command_buffer, device, _n_pass| unsafe {
-                    for object in objects {
-                        if object.groups.is_none() {
-                            continue;
+            &compute_entry
+                .record_command_buffer(
+                    sync_root.clone(),
+                    |command_buffer, device, _n_pass| unsafe {
+                        for object in objects {
+                            if object.groups.is_none() {
+                                continue;
+                            }
+
+                            let pipeline = object.pipeline.clone().as_vulkan().unwrap();
+                            let groups = object.groups.unwrap();
+
+                            device.cmd_bind_pipeline(
+                                *command_buffer,
+                                vk::PipelineBindPoint::COMPUTE,
+                                pipeline.handle,
+                            );
+                            device.cmd_bind_descriptor_sets(
+                                *command_buffer,
+                                vk::PipelineBindPoint::COMPUTE,
+                                pipeline.layout.pipeline_layout,
+                                0,
+                                &pipeline.layout.get_descriptor_sets(),
+                                &[],
+                            );
+                            device.cmd_dispatch(*command_buffer, groups[0], groups[1], groups[2]);
                         }
-
-                        let pipeline = object.pipeline.clone().as_vulkan().unwrap();
-                        let groups = object.groups.unwrap();
-
-                        device.cmd_bind_pipeline(
-                            *command_buffer,
-                            vk::PipelineBindPoint::COMPUTE,
-                            pipeline.handle,
-                        );
-                        device.cmd_bind_descriptor_sets(
-                            *command_buffer,
-                            vk::PipelineBindPoint::COMPUTE,
-                            pipeline.layout.pipeline_layout,
-                            0,
-                            &pipeline.layout.get_descriptor_sets(),
-                            &[],
-                        );
-                        device.cmd_dispatch(*command_buffer, groups[0], groups[1], groups[2]);
-                    }
-                })
+                    },
+                )
                 .unwrap(),
         );
 
@@ -194,9 +196,9 @@ impl DeviceProxy for VulkanEntry {
             currents = next_level;
         }
 
-        compute.queue.wait_idle().unwrap();
+        compute_entry.queue.wait_idle().unwrap();
         compute_future
-            .flush_transfer(compute.queue.clone())
+            .flush_transfer(compute_entry.queue.clone())
             .unwrap();
 
         let clear_depth_stencil = vk::ClearDepthStencilValue::default().depth(1.).stencil(0);
@@ -291,8 +293,8 @@ impl DeviceProxy for VulkanEntry {
         }
 
         let present_future = graphics_now.join(
-            graphics
-                .record_command_buffer(sync.clone(), |command_buffer, device, n_pass| {
+            graphics_entry
+                .record_command_buffer(sync_root.clone(), |command_buffer, device, n_pass| {
                     let color = 0.5f32;
                     let clear_color = vk::ClearColorValue {
                         float32: [color, color, color, 1.],
@@ -395,7 +397,7 @@ impl DeviceProxy for VulkanEntry {
         });
 
         let result = present_future
-            .swapchain_present_and_flush(graphics.queue.clone(), presentation.clone());
+            .swapchain_present_and_flush(graphics_entry.queue.clone(), presentation.clone());
 
         let mut result_lock = self.present_result.lock().unwrap();
         *result_lock = result;

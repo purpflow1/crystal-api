@@ -73,7 +73,6 @@ impl GpuFuture {
         sync.image_index = image_index;
 
         if suboptimal {
-            sync.unflip();
             return Err(vk::Result::SUBOPTIMAL_KHR);
         }
 

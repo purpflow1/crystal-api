@@ -443,12 +443,6 @@ impl ApplicationHandler for Context {
                     0.1,
                     100.,
                 );
-
-                self.device
-                    .as_ref()
-                    .unwrap()
-                    .resize_resources(size.width, size.height)
-                    .unwrap();
             }
             WindowEvent::RedrawRequested => {
                 self.call_render();
