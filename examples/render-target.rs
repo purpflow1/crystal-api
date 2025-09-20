@@ -1,10 +1,7 @@
 use crystal_api::{
     bitflags::BufferFlags,
-    buffer::Buffer,
     debug::{LoggingLevel, set_internal_logging_level},
     errors::GraphicsResult,
-    mesh::{Attribute, AttributeDescriptor},
-    object::Object,
     *,
 };
 
@@ -17,7 +14,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-use mesh::Mesh;
 use winit::{
     application::ApplicationHandler,
     dpi::LogicalSize,
@@ -43,7 +39,7 @@ pub struct VertexTexture {
 }
 
 impl AttributeDescriptor for VertexTexture {
-    fn get_attributes() -> &'static [mesh::Attribute] {
+    fn get_attributes() -> &'static [Attribute] {
         &[
             Attribute {
                 size: size_of::<Vec3>(),

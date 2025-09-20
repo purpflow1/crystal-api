@@ -8,38 +8,34 @@
 //! Crystal API is a unified wrapper for GPU APIs designed for the best capability
 //! with any solutions in apps development
 
-/// Bitflags module
+#[allow(missing_docs)]
 pub mod bitflags;
-/// Buffer module
-pub mod buffer;
-/// Debug module
+mod buffer;
+#[allow(missing_docs)]
 pub mod debug;
-/// Device module
-pub mod device;
-/// Errors module
+mod device;
+#[allow(missing_docs)]
 pub mod errors;
 mod gpu_sampler_set;
-/// Layout module
-pub mod layout;
-/// Mesh module
-pub mod mesh;
-/// Object module
-pub mod object;
-/// Pipeline module
-pub mod pipeline;
+mod layout;
+mod mesh;
+mod object;
+mod pipeline;
 mod proxies;
-/// Render target module
-pub mod render_target;
-/// Settings module
-pub mod settings;
+mod render_target;
+mod settings;
 mod shader;
 #[cfg(all(test, debug_assertions))]
 mod tests;
-/// Texture module
-pub mod texture;
+mod texture;
 mod vulkan;
 
+pub use buffer::Buffer;
 pub use device::Device;
+pub use mesh::*;
+pub use object::Object;
+pub use render_target::RenderTarget;
+pub use texture::Texture;
 
 pub use gpu_sampler_set::*;
 pub use settings::GraphicsApiInitSettings;
