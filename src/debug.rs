@@ -11,18 +11,22 @@ pub(crate) static LOGGING_LEVEL: RwLock<LoggingLevel> = RwLock::new(LoggingLevel
 static STARTUP_TIME: RwLock<MaybeUninit<Instant>> = RwLock::new(MaybeUninit::uninit());
 
 /// Sets logging level
+#[inline]
 pub fn set_internal_logging_level(logging_level: LoggingLevel) {
     *LOGGING_LEVEL.write().unwrap() = logging_level
 }
 
+#[inline]
 pub(crate) fn get_logging_level() -> LoggingLevel {
     *LOGGING_LEVEL.read().unwrap()
 }
 
+#[inline]
 pub(crate) fn get_startup_time() -> Instant {
     unsafe { (*STARTUP_TIME.read().unwrap()).assume_init_read() }
 }
 
+#[inline]
 pub(crate) fn setup_startup_time() {
     *STARTUP_TIME.write().unwrap() = MaybeUninit::new(Instant::now())
 }
