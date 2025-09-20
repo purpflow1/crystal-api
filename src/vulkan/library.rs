@@ -127,7 +127,7 @@ impl DeviceProxy for VulkanEntry {
                 )?;
                 return Ok(());
             }
-            Err(vk::Result::SUBOPTIMAL_KHR) => {}
+            Err(vk::Result::SUBOPTIMAL_KHR) => { /* resize later */ }
             Err(e) => {
                 error!("failed aquire next image: {:?}", e);
                 return Err(GraphicsError::RenderingError);
