@@ -22,11 +22,13 @@ impl<T> Buffer<T> {
     }
 
     /// Returns true if buffer is empty
+    #[inline]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
     /// Returns length of buffer
+    #[inline]
     pub fn len(&self) -> u64 {
         self.inner.get_size() / size_of::<T>() as u64
     }
@@ -34,6 +36,7 @@ impl<T> Buffer<T> {
 
 impl<T> Index<u64> for Buffer<T> {
     type Output = T;
+    #[inline]
     fn index(&self, index: u64) -> &Self::Output {
         let size = size_of::<T>() as u64;
         let offset = index * size;
@@ -43,6 +46,7 @@ impl<T> Index<u64> for Buffer<T> {
 }
 
 impl<T> IndexMut<u64> for Buffer<T> {
+    #[inline]
     fn index_mut(&mut self, index: u64) -> &mut Self::Output {
         let size = size_of::<T>() as u64;
         let offset = index * size;
@@ -53,6 +57,7 @@ impl<T> IndexMut<u64> for Buffer<T> {
 
 impl<T> Index<Range<u64>> for Buffer<T> {
     type Output = [T];
+    #[inline]
     fn index(&self, range: Range<u64>) -> &Self::Output {
         let bytes = self
             .inner
@@ -63,6 +68,7 @@ impl<T> Index<Range<u64>> for Buffer<T> {
 }
 
 impl<T> IndexMut<Range<u64>> for Buffer<T> {
+    #[inline]
     fn index_mut(&mut self, range: Range<u64>) -> &mut Self::Output {
         let bytes = self
             .inner
@@ -74,12 +80,14 @@ impl<T> IndexMut<Range<u64>> for Buffer<T> {
 
 impl<T> Index<RangeFull> for Buffer<T> {
     type Output = [T];
+    #[inline]
     fn index(&self, _index: RangeFull) -> &Self::Output {
         &self[0..self.len()]
     }
 }
 
 impl<T> IndexMut<RangeFull> for Buffer<T> {
+    #[inline]
     fn index_mut(&mut self, _index: RangeFull) -> &mut Self::Output {
         let size = self.len();
         &mut self[0..size]
@@ -88,12 +96,14 @@ impl<T> IndexMut<RangeFull> for Buffer<T> {
 
 impl<T> Index<RangeTo<u64>> for Buffer<T> {
     type Output = [T];
+    #[inline]
     fn index(&self, range: RangeTo<u64>) -> &Self::Output {
         &self[0..range.end]
     }
 }
 
 impl<T> IndexMut<RangeTo<u64>> for Buffer<T> {
+    #[inline]
     fn index_mut(&mut self, range: RangeTo<u64>) -> &mut Self::Output {
         &mut self[0..range.end]
     }
@@ -101,12 +111,14 @@ impl<T> IndexMut<RangeTo<u64>> for Buffer<T> {
 
 impl<T> Index<RangeFrom<u64>> for Buffer<T> {
     type Output = [T];
+    #[inline]
     fn index(&self, range: RangeFrom<u64>) -> &Self::Output {
         &self[range.start..self.len()]
     }
 }
 
 impl<T> IndexMut<RangeFrom<u64>> for Buffer<T> {
+    #[inline]
     fn index_mut(&mut self, range: RangeFrom<u64>) -> &mut Self::Output {
         let size = self.len();
         &mut self[range.start..size]

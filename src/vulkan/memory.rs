@@ -125,15 +125,18 @@ impl Drop for BufferManager {
 }
 
 impl proxies::BufferProxy for BufferManager {
+    #[inline]
     fn as_vulkan(self: Arc<Self>) -> Option<Arc<super::BufferManager>> {
         Some(self.clone())
     }
 
+    #[inline]
     fn get_size(&self) -> u64 {
         self.info.size
     }
 
     // TODO make range actually u64, not usize
+    #[inline]
     fn get_memory<'a>(&self, range: Range<u64>) -> &'a mut [u8] {
         let lock = self.sync.lock().unwrap();
         let idx = if self.info.count > 1 {
