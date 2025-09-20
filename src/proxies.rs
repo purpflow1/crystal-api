@@ -50,7 +50,6 @@ pub(crate) trait DeviceProxy: Sync + Send {
 }
 
 pub(crate) trait RenderTargetProxy: Sync + Send {
-    #[allow(missing_docs)]
     fn as_vulkan(self: Arc<Self>) -> Option<Arc<vulkan::VulkanRenderTarget>> {
         None
     }
@@ -78,21 +77,18 @@ pub(crate) trait LayoutProxy: Sync + Send {
 }
 
 pub(crate) trait TextureProxy: Sync + Send {
-    #[allow(missing_docs)]
     fn as_vulkan(self: Arc<Self>) -> Option<Arc<vulkan::VulkanTexture>> {
         None
     }
 }
 
 pub(crate) trait PipelineProxy: Sync + Send {
-    #[allow(missing_docs)]
     fn as_vulkan(self: Arc<Self>) -> Option<Arc<vulkan::VulkanPipeline>> {
         None
     }
 }
 
 pub(crate) trait BufferProxy: Sync + Send {
-    #[allow(missing_docs)]
     fn as_vulkan(self: Arc<Self>) -> Option<Arc<vulkan::BufferManager>> {
         None
     }
