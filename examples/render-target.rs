@@ -472,6 +472,7 @@ impl ApplicationHandler for ContextWindow {
     }
 
     fn exiting(&mut self, _event_loop: &winit::event_loop::ActiveEventLoop) {
+        // Wayland surface can be destroyed before vulkan resources removal
         self.context = None;
     }
 }
