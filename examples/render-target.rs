@@ -19,6 +19,7 @@ use winit::{
     dpi::LogicalSize,
     event::WindowEvent,
     event_loop::{ControlFlow, EventLoop},
+    keyboard::{KeyCode, PhysicalKey},
     window::Window,
 };
 
@@ -165,120 +166,53 @@ struct Uniform {
     time: f32,
 }
 
-struct Scene {
+struct ContextGraphics {
     camera: Camera,
     camera_in: Camera,
 
-    uniform: Option<Buffer<Uniform>>,
-    uniform_in: Option<Buffer<Uniform>>,
+    uniform: Buffer<Uniform>,
+    uniform_in: Buffer<Uniform>,
 
-    transforms: Option<Buffer<glam::Mat4>>,
+    transform: Buffer<glam::Mat4>,
 
     objects: Vec<Arc<Object>>,
-}
 
-struct Context {
-    window: Option<Window>,
-    device: Option<Device>,
-
-    settings: GraphicsApiInitSettings,
-    scene: Scene,
+    device: Device,
 
     state: State,
 }
 
-impl Context {
-    pub fn new(settings: GraphicsApiInitSettings) -> GraphicsResult<Self> {
-        let width = settings.width;
-        let height = settings.height;
-
-        const DISTANCE_FROM_OBJECTS: f32 = DISTANCE + 1.;
-
-        Ok(Self {
-            window: None,
-            device: None,
-
-            settings,
-            scene: Scene {
-                camera: Camera {
-                    proj: glam::Mat4::perspective_lh(
-                        PI / 4.,
-                        width as f32 / height as f32,
-                        0.1,
-                        100.,
-                    ),
-                    view: glam::Mat4::look_at_lh(
-                        glam::Vec3::new(1., 0., 1.) * DISTANCE_FROM_OBJECTS,
-                        glam::Vec3::ZERO,
-                        glam::Vec3::new(0., -1., 0.),
-                    ),
-                },
-
-                camera_in: Camera {
-                    proj: glam::Mat4::perspective_lh(PI / 4., 1., 0.1, 100.),
-                    view: glam::Mat4::look_at_lh(
-                        glam::Vec3::new(
-                            DISTANCE_FROM_OBJECTS,
-                            DISTANCE_FROM_OBJECTS,
-                            DISTANCE_FROM_OBJECTS,
-                        ),
-                        glam::Vec3::ZERO,
-                        glam::Vec3::new(0., -1., 0.),
-                    ),
-                },
-
-                uniform: None,
-                uniform_in: None,
-                transforms: None,
-
-                objects: vec![],
-            },
-
-            state: State {
-                delta_time_sum: Duration::ZERO,
-                min_delta_time: Duration::MAX,
-                max_delta_time: Duration::ZERO,
-                current_frame: 0,
-                startup: std::time::Instant::now(),
-                now: std::time::Instant::now(),
-            },
-        })
-    }
-
-    fn call_render(&mut self) {
+impl ContextGraphics {
+    fn call_render(&mut self, window: &Window) {
         let now = self.state.startup.elapsed().as_secs_f32();
 
         let ubo = Uniform {
-            eye: self.scene.camera.calc_eye_matrix(),
+            eye: self.camera.calc_eye_matrix(),
             time: now,
         };
 
-        self.scene.uniform.as_mut().unwrap()[0] = ubo;
+        self.uniform[0] = ubo;
 
         let ubo = Uniform {
-            eye: self.scene.camera_in.calc_eye_matrix(),
+            eye: self.camera_in.calc_eye_matrix(),
             time: now,
         };
 
-        self.scene.uniform_in.as_mut().unwrap()[0] = ubo;
+        self.uniform_in[0] = ubo;
 
-        let transforms = self.scene.transforms.as_mut().unwrap();
-
-        transforms[0] = glam::Mat4::from_scale_rotation_translation(
+        self.transform[0] = glam::Mat4::from_scale_rotation_translation(
             glam::Vec3::new(0.03, 0.03, 0.03),
             glam::Quat::from_rotation_y(PI / 2. * now),
             glam::Vec3::ZERO,
         );
 
-        transforms[1] = glam::Mat4::from_scale_rotation_translation(
+        self.transform[1] = glam::Mat4::from_scale_rotation_translation(
             glam::Vec3::from_array([0.5; 3]),
             glam::Quat::from_rotation_y(PI * 2. * now),
             glam::Vec3::ZERO,
         );
 
-        let device = self.device.as_ref().unwrap();
-
-        device.dispatch_and_present(&self.scene.objects).unwrap();
+        self.device.dispatch_and_present(&self.objects).unwrap();
 
         let now = Instant::now();
         let delta = now - self.state.now;
@@ -294,7 +228,7 @@ impl Context {
         };
 
         if self.state.delta_time_sum > Duration::from_secs(1) {
-            self.window.as_ref().unwrap().set_title(
+            window.set_title(
                 format!(
                     "FPS: [ avg: {} min: {} max: {} ]",
                     self.state.current_frame,
@@ -314,7 +248,23 @@ impl Context {
     }
 }
 
-impl ApplicationHandler for Context {
+struct ContextWindow {
+    settings: GraphicsApiInitSettings,
+    context: Option<ContextGraphics>,
+    window: Option<Window>,
+}
+
+impl ContextWindow {
+    pub fn new(settings: GraphicsApiInitSettings) -> GraphicsResult<Self> {
+        Ok(Self {
+            settings,
+            context: None,
+            window: None,
+        })
+    }
+}
+
+impl ApplicationHandler for ContextWindow {
     fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
         let window = {
             event_loop
@@ -394,10 +344,6 @@ impl ApplicationHandler for Context {
         layout.add_buffer(1, &uniform_in).unwrap();
         layout.add_buffer(0, &transform).unwrap();
 
-        self.scene.uniform = Some(uniform);
-        self.scene.uniform_in = Some(uniform_in);
-        self.scene.transforms = Some(transform);
-
         let pipeline_render = layout
             .create_graphics_pipeline::<VertexTexture>(&render_target_sphere, &shaders_obj)
             .unwrap();
@@ -432,16 +378,57 @@ impl ApplicationHandler for Context {
             texture_sampler,
         ));
 
-        self.scene.objects.push(sphere_object.clone());
-        self.scene.objects.push(mishka_object.clone());
+        const DISTANCE_FROM_OBJECTS: f32 = DISTANCE + 1.;
 
-        self.device = Some(device);
-        self.window = Some(window);
+        let camera = Camera {
+            proj: glam::Mat4::perspective_lh(
+                PI / 4.,
+                self.settings.width as f32 / self.settings.height as f32,
+                0.1,
+                100.,
+            ),
+            view: glam::Mat4::look_at_lh(
+                glam::Vec3::new(1., 0., 1.) * DISTANCE_FROM_OBJECTS,
+                glam::Vec3::ZERO,
+                glam::Vec3::new(0., -1., 0.),
+            ),
+        };
 
+        let camera_in = Camera {
+            proj: glam::Mat4::perspective_lh(PI / 4., 1., 0.1, 100.),
+            view: glam::Mat4::look_at_lh(
+                glam::Vec3::new(
+                    DISTANCE_FROM_OBJECTS,
+                    DISTANCE_FROM_OBJECTS,
+                    DISTANCE_FROM_OBJECTS,
+                ),
+                glam::Vec3::ZERO,
+                glam::Vec3::new(0., -1., 0.),
+            ),
+        };
+
+        window.request_redraw();
         println!("[end init]");
 
-        let window = self.window.as_ref().unwrap();
-        window.request_redraw();
+        self.window = Some(window);
+
+        self.context = Some(ContextGraphics {
+            camera,
+            camera_in,
+            uniform,
+            uniform_in,
+            transform,
+            objects: vec![sphere_object, mishka_object],
+            device,
+            state: State {
+                delta_time_sum: Duration::ZERO,
+                min_delta_time: Duration::MAX,
+                max_delta_time: Duration::ZERO,
+                current_frame: 0,
+                startup: std::time::Instant::now(),
+                now: std::time::Instant::now(),
+            },
+        });
     }
 
     fn window_event(
@@ -450,6 +437,8 @@ impl ApplicationHandler for Context {
         _window_id: winit::window::WindowId,
         event: winit::event::WindowEvent,
     ) {
+        let context = self.context.as_mut().unwrap();
+
         match event {
             WindowEvent::CloseRequested => {
                 println!("Stopping window context with close request");
@@ -460,9 +449,13 @@ impl ApplicationHandler for Context {
                 device_id,
                 event,
                 is_synthetic,
-            } => {}
+            } => {
+                if event.physical_key == PhysicalKey::Code(KeyCode::Space) {
+                    println!("hello")
+                }
+            }
             WindowEvent::Resized(size) => {
-                self.scene.camera.proj = glam::Mat4::perspective_lh(
+                context.camera.proj = glam::Mat4::perspective_lh(
                     PI / 4.,
                     size.width as f32 / size.height as f32,
                     0.1,
@@ -470,8 +463,8 @@ impl ApplicationHandler for Context {
                 );
             }
             WindowEvent::RedrawRequested => {
-                self.call_render();
                 let window = self.window.as_ref().unwrap();
+                context.call_render(window);
                 window.request_redraw();
             }
             _ => {}
@@ -479,7 +472,7 @@ impl ApplicationHandler for Context {
     }
 
     fn exiting(&mut self, _event_loop: &winit::event_loop::ActiveEventLoop) {
-        self.device = None;
+        self.context = None;
     }
 }
 
@@ -495,7 +488,7 @@ fn main() -> GraphicsResult<()> {
     let event_loop = EventLoop::new().unwrap();
     event_loop.set_control_flow(ControlFlow::Poll);
 
-    let mut context = Context::new(settings)?;
+    let mut context = ContextWindow::new(settings)?;
     event_loop
         .run_app(&mut context)
         .expect("cannot run event loop");

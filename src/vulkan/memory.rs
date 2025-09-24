@@ -111,6 +111,15 @@ unsafe impl Send for BufferManager {}
 
 impl Drop for BufferManager {
     fn drop(&mut self) {
+        // TODO temporary added wait_idle due to
+        // buffer destroying which are used by command buffers
+        self.sync
+            .lock()
+            .unwrap()
+            .device_manager
+            .wait_idle()
+            .unwrap();
+
         for buffer_data in &self.buffer_data {
             unsafe {
                 self.device_manager
