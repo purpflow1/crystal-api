@@ -56,17 +56,19 @@ macro_rules! error {
 }
 
 macro_rules! fmt_size {
-    ($size:expr) => {
-        if $size >= 1024 * 1024 * 1024 {
-            format!("{:.2}GB", $size as f32 / 1024. / 1024.)
-        } else if $size >= 1024 * 1024 {
-            format!("{:.2}MB", $size as f32 / 1024. / 1024.)
-        } else if $size >= 1024 {
-            format!("{:.2}KB", $size as f32 / 1024.)
+    ($size:expr) => {{
+        let size = $size;
+
+        if size >= 1024 * 1024 * 1024 {
+            format!("{:.2}GB", size as f32 / 1024. / 1024.)
+        } else if size >= 1024 * 1024 {
+            format!("{:.2}MB", size as f32 / 1024. / 1024.)
+        } else if size >= 1024 {
+            format!("{:.2}KB", size as f32 / 1024.)
         } else {
-            format!("{}B", $size as u16)
+            format!("{}B", size as u16)
         }
-    };
+    }};
 }
 
 use std::{mem::MaybeUninit, sync::RwLock, time::Instant};
