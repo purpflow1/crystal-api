@@ -46,6 +46,7 @@ pub(crate) trait DeviceProxy: Sync + Send {
         extent: [u32; 2],
         anisotropy_texels: f32,
     ) -> GraphicsResult<Arc<dyn TextureProxy>>;
+    fn get_memory_usage(&self) -> u64;
 }
 
 pub(crate) trait RenderTargetProxy: Sync + Send {

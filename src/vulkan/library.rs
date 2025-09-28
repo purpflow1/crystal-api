@@ -67,6 +67,20 @@ impl Drop for VulkanEntry {
 }
 
 impl DeviceProxy for VulkanEntry {
+    fn get_memory_usage(&self) -> u64 {
+        let mut budg = vk::PhysicalDeviceMemoryBudgetPropertiesEXT::default();
+        let mut prop = vk::PhysicalDeviceMemoryProperties2::default().push_next(&mut budg);
+        unsafe {
+            self.device_manager
+                .instance
+                .get_physical_device_memory_properties2(
+                    self.device_manager.physical_device,
+                    &mut prop,
+                );
+        }
+        budg.heap_usage[0]
+    }
+
     fn dispatch_and_present(&self, objects: &[Arc<Object>]) -> GraphicsResult<()> {
         let graphics_entry = self
             .command_manager

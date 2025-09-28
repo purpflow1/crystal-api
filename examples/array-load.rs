@@ -19,6 +19,7 @@ use winit::{
     dpi::LogicalSize,
     event::WindowEvent,
     event_loop::{ControlFlow, EventLoop},
+    keyboard::{KeyCode, PhysicalKey},
     window::Window,
 };
 
@@ -399,7 +400,16 @@ impl ApplicationHandler for ContextWindow {
                 device_id,
                 event,
                 is_synthetic,
-            } => {}
+            } => {
+                if !event.repeat && event.state.is_pressed() {
+                    match event.physical_key {
+                        PhysicalKey::Code(KeyCode::Space) => {
+                            println!("usage: {}", context.device.get_memory_usage_fmt())
+                        }
+                        _ => (),
+                    }
+                }
+            }
             WindowEvent::Resized(size) => {
                 context.camera.proj = glam::Mat4::perspective_lh(
                     PI / 4.,

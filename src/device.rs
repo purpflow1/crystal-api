@@ -193,4 +193,14 @@ impl Device {
             anisotropy_texels,
         )?))
     }
+
+    /// debug use only
+    pub fn get_memory_usage(&self) -> u64 {
+        self.inner.get_memory_usage()
+    }
+
+    /// debug use only
+    pub fn get_memory_usage_fmt(&self) -> String {
+        fmt_size!(self.get_memory_usage())
+    }
 }

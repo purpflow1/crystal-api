@@ -450,8 +450,13 @@ impl ApplicationHandler for ContextWindow {
                 event,
                 is_synthetic,
             } => {
-                if event.physical_key == PhysicalKey::Code(KeyCode::Space) {
-                    println!("hello")
+                if !event.repeat && event.state.is_pressed() {
+                    match event.physical_key {
+                        PhysicalKey::Code(KeyCode::Space) => {
+                            println!("usage: {}", context.device.get_memory_usage_fmt())
+                        }
+                        _ => (),
+                    }
                 }
             }
             WindowEvent::Resized(size) => {
