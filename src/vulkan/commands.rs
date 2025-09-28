@@ -3,10 +3,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use ash::{
-    prelude::VkResult,
-    vk::{self, Handle},
-};
+use ash::vk::{self, Handle};
 
 use crate::{
     debug::error,
@@ -22,16 +19,16 @@ pub(crate) struct PresentResult {
     pub out_of_date: bool,
 }
 
-pub(crate) struct GpuFuture {
+pub(crate) struct CommandBufferSequence {
     sync: Arc<Mutex<GpuSync>>,
     command_buffers: Mutex<Vec<Arc<CommandBuffer>>>,
 }
 
-unsafe impl Send for GpuFuture {}
-unsafe impl Sync for GpuFuture {}
+unsafe impl Send for CommandBufferSequence {}
+unsafe impl Sync for CommandBufferSequence {}
 
-impl GpuFuture {
-    fn buffers(sync: Arc<Mutex<GpuSync>>, buffers: Vec<Arc<CommandBuffer>>) -> Box<Self> {
+impl CommandBufferSequence {
+    fn new(sync: Arc<Mutex<GpuSync>>, buffers: Vec<Arc<CommandBuffer>>) -> Box<Self> {
         Box::new(Self {
             sync,
             command_buffers: Mutex::new(buffers),
@@ -49,34 +46,6 @@ impl GpuFuture {
         drop(other_lock);
 
         self
-    }
-
-    pub(crate) fn acquire_next_image(&self, presentation: &Presentation) -> VkResult<()> {
-        let mut sync = self.sync.lock().unwrap();
-
-        sync.flip();
-
-        let (image_index, suboptimal) = unsafe {
-            presentation
-                .swapchain
-                .swapchain
-                .write()
-                .unwrap()
-                .acquire_next_image(
-                    *presentation.swapchain.swapchain_khr.read().unwrap(),
-                    u64::MAX,
-                    sync.semaphore_image(),
-                    vk::Fence::null(),
-                )?
-        };
-
-        sync.image_index = image_index;
-
-        if suboptimal {
-            return Err(vk::Result::SUBOPTIMAL_KHR);
-        }
-
-        Ok(())
     }
 
     pub(crate) fn flush_transfer(self: Box<Self>, queue: Arc<Queue>) -> GraphicsResult<Box<Self>> {
@@ -324,8 +293,8 @@ pub(crate) struct CommandEntry {
 }
 
 impl CommandEntry {
-    pub(crate) fn now(&self, sync: Arc<Mutex<GpuSync>>) -> Box<GpuFuture> {
-        GpuFuture::buffers(sync, vec![])
+    pub(crate) fn sequence(&self, sync: Arc<Mutex<GpuSync>>) -> Box<CommandBufferSequence> {
+        CommandBufferSequence::new(sync, vec![])
     }
 
     pub(crate) fn new(
@@ -360,7 +329,7 @@ impl CommandEntry {
     pub(crate) fn record_single_time_buffer<P>(
         &self,
         predicate: P,
-    ) -> GraphicsResult<Box<GpuFuture>>
+    ) -> GraphicsResult<Box<CommandBufferSequence>>
     where
         P: Fn(&vk::CommandBuffer, Arc<ash::Device>),
     {
@@ -415,7 +384,7 @@ impl CommandEntry {
         let command_buffer_managers =
             CommandBuffer::from_handlers(self.command_pool.clone(), commands_buffers)?;
 
-        Ok(GpuFuture::buffers(
+        Ok(CommandBufferSequence::new(
             GpuSync::no_sync(self.device_manager.clone()),
             command_buffer_managers,
         ))
@@ -425,7 +394,7 @@ impl CommandEntry {
         &self,
         sync: Arc<Mutex<GpuSync>>,
         predicate: P,
-    ) -> GraphicsResult<Box<GpuFuture>>
+    ) -> GraphicsResult<Box<CommandBufferSequence>>
     where
         P: Fn(&vk::CommandBuffer, Arc<ash::Device>, usize),
     {
@@ -479,7 +448,7 @@ impl CommandEntry {
 
         drop(lock);
 
-        Ok(GpuFuture::buffers(
+        Ok(CommandBufferSequence::new(
             sync.clone(),
             vec![self.command_buffers[n_pass].clone()],
         ))

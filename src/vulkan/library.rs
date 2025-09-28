@@ -47,19 +47,28 @@ impl Drop for VulkanEntry {
         graphics.wait().unwrap();
 
         if self.presentation.is_some() && !self.present_result.lock().unwrap().out_of_date {
-            let now = graphics.now(
-                self.get_presentation_render_target()
+            let presentation = self.presentation.as_ref().unwrap();
+            let render_target = self.get_presentation_render_target().clone().unwrap();
+            let render_target = render_target.as_vulkan().clone().unwrap();
+            let sync = render_target.sync.lock().unwrap();
+
+            match unsafe {
+                presentation
+                    .swapchain
+                    .swapchain
+                    .write()
                     .unwrap()
-                    .as_vulkan()
-                    .unwrap()
-                    .sync
-                    .clone(),
-            );
-            match now.acquire_next_image(self.presentation.as_ref().unwrap()) {
-                Ok(()) => (),
+                    .acquire_next_image(
+                        *presentation.swapchain.swapchain_khr.read().unwrap(),
+                        u64::MAX,
+                        sync.semaphore_image(),
+                        vk::Fence::null(),
+                    )
+            } {
+                Ok((_, _)) => (),
                 // Surface can be destroyed before vulkan resource drop
                 Err(vk::Result::ERROR_SURFACE_LOST_KHR) => error!("surface lost on entry drop"),
-                Err(vk::Result::ERROR_OUT_OF_DATE_KHR | vk::Result::SUBOPTIMAL_KHR) => (),
+                Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => (),
                 Err(e) => error!("cannot acquire next (last) image on entry drop: {}", e),
             };
         }
@@ -99,7 +108,7 @@ impl DeviceProxy for VulkanEntry {
         let render_target_dyn = self.get_presentation_render_target();
         let render_target_root = render_target_dyn.unwrap().as_vulkan().unwrap();
         let sync_root = render_target_root.sync.clone();
-        let mut future_graphics = graphics_entry.now(sync_root.clone());
+        let mut sequence = graphics_entry.sequence(sync_root.clone());
         let present_result = *self.present_result.lock().unwrap();
         let presentation = self.presentation.as_ref().unwrap();
 
@@ -117,35 +126,53 @@ impl DeviceProxy for VulkanEntry {
             )?;
         }
 
-        sync_root.lock().unwrap().wait_render().unwrap();
+        {
+            let mut sync = sync_root.lock().unwrap();
+            sync.wait_render().unwrap();
+            sync.flip();
 
-        match future_graphics.acquire_next_image(presentation) {
-            Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
-                log!("image out of date, skipping");
+            match unsafe {
+                presentation
+                    .swapchain
+                    .swapchain
+                    .write()
+                    .unwrap()
+                    .acquire_next_image(
+                        *presentation.swapchain.swapchain_khr.read().unwrap(),
+                        u64::MAX,
+                        sync.semaphore_image(),
+                        vk::Fence::null(),
+                    )
+            } {
+                Ok((image_index, suboptimal)) => {
+                    sync.image_index = image_index;
+                    if suboptimal {
+                        // swapchain is dirty
+                    }
+                }
+                Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
+                    log!("image out of date, skipping");
 
-                presentation.swapchain.recreate(None)?;
-                render_target_root.update_resources(
-                    presentation.swapchain.extent(),
-                    presentation
-                        .swapchain
-                        .swapchain_image_views
-                        .read()
-                        .unwrap()
-                        .clone(),
-                )?;
-                return Ok(());
-            }
-            Err(vk::Result::SUBOPTIMAL_KHR) => { /* resize later */ }
-            Err(e) => {
-                error!("failed aquire next image: {:?}", e);
-                return Err(GraphicsError::RenderingError);
-            }
-            _ => {}
-        };
+                    presentation.swapchain.recreate(None)?;
+                    render_target_root.update_resources(
+                        presentation.swapchain.extent(),
+                        presentation
+                            .swapchain
+                            .swapchain_image_views
+                            .read()
+                            .unwrap()
+                            .clone(),
+                    )?;
+                    return Ok(());
+                }
+                Err(e) => {
+                    error!("failed aquire next image: {:?}", e);
+                    return Err(GraphicsError::RenderingError);
+                }
+            };
+        }
 
-        let compute_now = compute_entry.now(sync_root.clone());
-
-        let compute_future = compute_now.join(
+        let sequence_compute = compute_entry.sequence(sync_root.clone()).join(
             &compute_entry
                 .record_command_buffer(
                     sync_root.clone(),
@@ -199,10 +226,6 @@ impl DeviceProxy for VulkanEntry {
             render_targets_levels.push_front(render_targets);
             currents = next_level;
         }
-
-        compute_future
-            .flush_transfer(compute_entry.queue.clone())
-            .unwrap();
 
         let color = 0.3f32;
         let clear_value_color = vk::ClearValue {
@@ -292,7 +315,7 @@ impl DeviceProxy for VulkanEntry {
                     },
                 )?;
 
-                future_graphics = future_graphics.join(&future_render_target);
+                sequence = sequence.join(&future_render_target);
             }
         }
 
@@ -307,7 +330,8 @@ impl DeviceProxy for VulkanEntry {
             layout.update_dynamic_data().unwrap();
         });
 
-        let result = future_graphics
+        sequence_compute.flush_transfer(compute_entry.queue.clone())?;
+        let result = sequence
             .swapchain_present_and_flush(graphics_entry.queue.clone(), presentation.clone());
 
         let mut result_lock = self.present_result.lock().unwrap();
@@ -326,7 +350,7 @@ impl DeviceProxy for VulkanEntry {
 
         let sync = GpuSync::no_sync(self.device_manager.clone());
 
-        let now = compute_entry.now(sync.clone());
+        let now = compute_entry.sequence(sync.clone());
 
         let future = now.join(
             &compute_entry

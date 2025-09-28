@@ -9,7 +9,7 @@ use crate::{
 };
 
 use super::{
-    commands::{CommandEntry, CommandManager, CommandType, GpuFuture},
+    commands::{CommandBufferSequence, CommandEntry, CommandManager, CommandType},
     devices::DeviceManager,
     memory::BufferManager,
 };
@@ -317,14 +317,14 @@ impl VulkanTexture {
             .get(&CommandType::Transfer)
             .unwrap();
 
-        let future = self.transition_image_layout(
+        let sequence = self.transition_image_layout(
             command_entry.clone(),
             vk::ImageLayout::TRANSFER_DST_OPTIMAL,
         )?;
-        let future = future.join(self.stage_image(buffer, command_entry.clone())?.as_ref());
-        let future = future.join(self.generate_mipmaps(command_entry.clone())?.as_ref());
+        let sequence = sequence.join(self.stage_image(buffer, command_entry.clone())?.as_ref());
+        let sequence = sequence.join(self.generate_mipmaps(command_entry.clone())?.as_ref());
 
-        future.flush_transfer(command_entry.queue.clone())?;
+        sequence.flush_transfer(command_entry.queue.clone())?;
 
         Ok(())
     }
@@ -332,7 +332,7 @@ impl VulkanTexture {
     pub(crate) fn generate_mipmaps(
         &self,
         command_entry: Arc<CommandEntry>,
-    ) -> GraphicsResult<Box<GpuFuture>> {
+    ) -> GraphicsResult<Box<CommandBufferSequence>> {
         command_entry.record_single_time_buffer(|command_buffer, device| {
             let mut barrier = vk::ImageMemoryBarrier::default()
                 .image(self.image.image)
@@ -470,7 +470,7 @@ impl VulkanTexture {
         &self,
         buffer: Arc<BufferManager>,
         command_entry: Arc<CommandEntry>,
-    ) -> GraphicsResult<Box<GpuFuture>> {
+    ) -> GraphicsResult<Box<CommandBufferSequence>> {
         command_entry.record_single_time_buffer(|command_buffer, device| {
             let region = vk::BufferImageCopy::default()
                 .buffer_offset(0)
@@ -502,7 +502,7 @@ impl VulkanTexture {
         &self,
         command_entry: Arc<CommandEntry>,
         new_layout: vk::ImageLayout,
-    ) -> GraphicsResult<Box<GpuFuture>> {
+    ) -> GraphicsResult<Box<CommandBufferSequence>> {
         let layout = *self.image.layout.read().unwrap();
 
         let mut barrier = vk::ImageMemoryBarrier::default()
