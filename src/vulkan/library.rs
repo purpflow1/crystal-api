@@ -200,7 +200,6 @@ impl DeviceProxy for VulkanEntry {
             currents = next_level;
         }
 
-        compute_entry.queue.wait_idle().unwrap();
         compute_future
             .flush_transfer(compute_entry.queue.clone())
             .unwrap();
