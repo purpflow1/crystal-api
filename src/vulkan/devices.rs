@@ -181,6 +181,7 @@ impl DeviceManager {
         let queue_families = find_queue_families(instance.clone(), surface, physical_device);
 
         if queue_families.is_empty() {
+            error!("no queue families found");
             return Err(GraphicsError::NotSupportedDevice);
         }
 
