@@ -23,7 +23,7 @@ use winit::{
     window::Window,
 };
 
-const OBJECT_DIMENTION: usize = 5;
+const OBJECT_DIMENTION: usize = 7;
 const DISTANCE: f32 = 2.;
 
 type Vec3 = [f32; 3];
