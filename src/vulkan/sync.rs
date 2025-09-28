@@ -186,6 +186,7 @@ impl GpuSync {
     }
 
     pub(crate) fn wait_render(&self) -> GraphicsResult<()> {
+        // TODO something wrong with vsync disabled
         self.wait_fences(&[self.barriers.fence_render[self.odd_pass]])
     }
 
