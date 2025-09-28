@@ -437,6 +437,7 @@ impl ApplicationHandler for ContextWindow {
         _window_id: winit::window::WindowId,
         event: winit::event::WindowEvent,
     ) {
+        let window = self.window.as_ref().unwrap();
         let context = self.context.as_mut().unwrap();
 
         match event {
@@ -466,9 +467,10 @@ impl ApplicationHandler for ContextWindow {
                     0.1,
                     100.,
                 );
+                context.call_render(window);
+                window.request_redraw();
             }
             WindowEvent::RedrawRequested => {
-                let window = self.window.as_ref().unwrap();
                 context.call_render(window);
                 window.request_redraw();
             }
