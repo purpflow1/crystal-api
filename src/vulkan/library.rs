@@ -204,23 +204,24 @@ impl DeviceProxy for VulkanEntry {
             .flush_transfer(compute_entry.queue.clone())
             .unwrap();
 
-        let clear_depth_stencil = vk::ClearDepthStencilValue::default().depth(1.).stencil(0);
-        let clear_value_stencil = vk::ClearValue {
-            depth_stencil: clear_depth_stencil,
+        let color = 0.3f32;
+        let clear_value_color = vk::ClearValue {
+            color: vk::ClearColorValue {
+                float32: [color, color, color, 1.],
+            },
         };
+
+        let clear_value_stencil = vk::ClearValue {
+            depth_stencil: vk::ClearDepthStencilValue::default().depth(1.).stencil(0),
+        };
+
+        let clear_values = &[clear_value_color, clear_value_stencil];
 
         for render_targets in render_targets_levels {
             for render_target in render_targets {
                 let future_render_target = render_target.command_entry.record_command_buffer(
                     render_target.sync.clone(),
                     |command_buffer, device, n_pass| {
-                        let color = 0.3f32;
-                        let clear_color = vk::ClearColorValue {
-                            float32: [color, color, color, 1.],
-                        };
-                        let clear_value_color = vk::ClearValue { color: clear_color };
-                        let clear_values = &[clear_value_color, clear_value_stencil];
-
                         let render_pass_begin = vk::RenderPassBeginInfo::default()
                             .render_pass(render_target.render_pass)
                             .framebuffer(*render_target.framebuffers[n_pass].read().unwrap())
