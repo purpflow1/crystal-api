@@ -15,5 +15,6 @@ layout(set = 2, binding = 0) uniform sampler2D color_sampler;
 void main() {
     vec4 texture_color = texture(color_sampler, UV);
     texture_color.w = 1;
+    texture_color.xyz += 0.1;
     outColor = texture_color;
 }

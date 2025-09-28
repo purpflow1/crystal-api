@@ -99,7 +99,7 @@ impl DeviceProxy for VulkanEntry {
         let render_target_dyn = self.get_presentation_render_target();
         let render_target_root = render_target_dyn.unwrap().as_vulkan().unwrap();
         let sync_root = render_target_root.sync.clone();
-        let mut graphics_now = graphics_entry.now(sync_root.clone());
+        let mut future_graphics = graphics_entry.now(sync_root.clone());
         let present_result = *self.present_result.lock().unwrap();
         let presentation = self.presentation.as_ref().unwrap();
 
@@ -119,7 +119,7 @@ impl DeviceProxy for VulkanEntry {
 
         sync_root.lock().unwrap().wait_render().unwrap();
 
-        match graphics_now.acquire_next_image(presentation) {
+        match future_graphics.acquire_next_image(presentation) {
             Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
                 log!("image out of date, skipping");
 
@@ -212,7 +212,7 @@ impl DeviceProxy for VulkanEntry {
 
         for render_targets in render_targets_levels {
             for render_target in render_targets {
-                let graphics_future = render_target.command_entry.record_command_buffer(
+                let future_render_target = render_target.command_entry.record_command_buffer(
                     render_target.sync.clone(),
                     |command_buffer, device, n_pass| {
                         let color = 0.3f32;
@@ -292,102 +292,9 @@ impl DeviceProxy for VulkanEntry {
                     },
                 )?;
 
-                graphics_now = graphics_now.join(&graphics_future);
+                future_graphics = future_graphics.join(&future_render_target);
             }
         }
-
-        let present_future = graphics_now.join(
-            graphics_entry
-                .record_command_buffer(sync_root.clone(), |command_buffer, device, n_pass| {
-                    let color = 0.5f32;
-                    let clear_color = vk::ClearColorValue {
-                        float32: [color, color, color, 1.],
-                    };
-                    let clear_value_color = vk::ClearValue { color: clear_color };
-                    let clear_values = &[clear_value_color, clear_value_stencil];
-
-                    let render_pass_begin = vk::RenderPassBeginInfo::default()
-                        .render_pass(render_target_root.render_pass)
-                        .framebuffer(*render_target_root.framebuffers[n_pass].read().unwrap())
-                        .render_area(vk::Rect2D {
-                            offset: vk::Offset2D::default().x(0).y(0),
-                            extent: vk::Extent2D {
-                                width: render_target_root
-                                    .extent()
-                                    .width
-                                    .min(presentation.swapchain.extent().width),
-                                height: render_target_root
-                                    .extent()
-                                    .height
-                                    .min(presentation.swapchain.extent().height),
-                            },
-                        })
-                        .clear_values(clear_values);
-
-                    unsafe {
-                        device.cmd_begin_render_pass(
-                            *command_buffer,
-                            &render_pass_begin,
-                            vk::SubpassContents::INLINE,
-                        )
-                    }
-
-                    let viewport = vk::Viewport::default()
-                        .width(render_target_root.extent().width as f32)
-                        .height(render_target_root.extent().height as f32)
-                        .max_depth(1.);
-                    let viewports = &[viewport];
-                    unsafe { device.cmd_set_viewport(*command_buffer, 0, viewports) }
-                    let scissor = vk::Rect2D::default().extent(render_target_root.extent());
-                    let scissors = &[scissor];
-                    unsafe { device.cmd_set_scissor(*command_buffer, 0, scissors) }
-
-                    let mut layout_objects =
-                        BTreeMap::<u64, (Arc<VulkanLayout>, Vec<Arc<Object>>)>::new();
-
-                    objects.iter().for_each(|object| {
-                        if object.groups.is_none()
-                            && let Some(obj_render_target) = object
-                                .pipeline
-                                .clone()
-                                .as_vulkan()
-                                .unwrap()
-                                .render_target
-                                .clone()
-                            && obj_render_target.render_pass.as_raw()
-                                == render_target_root.render_pass.as_raw()
-                        {
-                            let layout =
-                                object.pipeline.clone().as_vulkan().unwrap().layout.clone();
-
-                            let raw = object
-                                .pipeline
-                                .clone()
-                                .as_vulkan()
-                                .unwrap()
-                                .layout
-                                .pipeline_layout
-                                .as_raw();
-
-                            match layout_objects.get_mut(&raw) {
-                                Some((_, objects)) => {
-                                    objects.push(object.clone());
-                                }
-                                None => {
-                                    layout_objects.insert(raw, (layout, vec![object.clone()]));
-                                }
-                            }
-                        }
-                    });
-
-                    layout_objects.iter().for_each(|(_, (layout, objects))| {
-                        layout.render(objects, command_buffer).unwrap()
-                    });
-
-                    unsafe { device.cmd_end_render_pass(*command_buffer) }
-                })?
-                .as_ref(),
-        );
 
         let mut layouts = BTreeMap::<u64, Arc<VulkanLayout>>::new();
 
@@ -400,7 +307,7 @@ impl DeviceProxy for VulkanEntry {
             layout.update_dynamic_data().unwrap();
         });
 
-        let result = present_future
+        let result = future_graphics
             .swapchain_present_and_flush(graphics_entry.queue.clone(), presentation.clone());
 
         let mut result_lock = self.present_result.lock().unwrap();
