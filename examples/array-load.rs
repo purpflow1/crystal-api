@@ -407,6 +407,7 @@ impl ApplicationHandler for ContextWindow {
                         PhysicalKey::Code(KeyCode::Space) => {
                             println!("usage: {}", context.device.get_memory_usage_fmt())
                         }
+                        PhysicalKey::Code(KeyCode::ArrowUp) => {}
                         _ => (),
                     }
                 }
