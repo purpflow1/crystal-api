@@ -5,8 +5,6 @@
 - Vulkan API support
 - Linux, MacOS, Windows support
 - Synchronized in-frame and out-of-frame compute operations
-- Direct buffer access (no staging in buffer operations)
-- Multithreaded access to resources
 - Render targets
 
 ---
