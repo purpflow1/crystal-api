@@ -202,7 +202,7 @@ impl ContextGraphics {
 
         self.transform[0] = glam::Mat4::from_scale_rotation_translation(
             glam::Vec3::new(0.03, 0.03, 0.03),
-            glam::Quat::from_rotation_y(PI / 2. * now),
+            glam::Quat::from_rotation_y(f32::sin(now) * (PI / 4.) + PI * 1.25),
             glam::Vec3::ZERO,
         );
 
