@@ -148,7 +148,7 @@ impl proxies::BufferProxy for BufferManager {
     fn get_memory<'a>(&self, range: Range<u64>) -> &'a mut [u8] {
         let lock = self.sync.lock().unwrap();
         let idx = if self.info.count > 1 {
-            lock.odd_pass
+            if lock.is_odd_frame { 0 } else { 1 }
         } else {
             0
         };
