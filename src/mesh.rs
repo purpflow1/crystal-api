@@ -14,7 +14,7 @@ pub struct Attribute {
 /// # Examples
 /// ```rust
 /// use std::mem::offset_of;
-/// use crystal_api::mesh::{AttributeDescriptor, Attribute};
+/// use crystal_api::{AttributeDescriptor, Attribute};
 ///
 /// type Vec3 = [f32; 3];
 /// type Vec2 = [f32; 2];

@@ -21,6 +21,7 @@ use super::{VulkanRenderTarget, devices::DeviceManager};
 struct LayoutDynamicData {
     device_manager: Arc<DeviceManager>,
 
+    // TODO to make unique
     uniform_descriptor_sets: Vec<vk::DescriptorSet>,
     storage_descriptor_sets: Vec<vk::DescriptorSet>,
     sampler_descriptor_sets: Vec<vk::DescriptorSet>,
@@ -551,10 +552,18 @@ impl VulkanLayout {
 
     pub(crate) fn get_descriptor_sets(&self) -> Vec<vk::DescriptorSet> {
         let dynamic_data = self.dynamic_data.lock().unwrap();
-        vec![
-            dynamic_data.uniform_descriptor_sets[dynamic_data.n_pass],
-            dynamic_data.storage_descriptor_sets[dynamic_data.n_pass],
-        ]
+
+        let mut descriptor_sets = Vec::with_capacity(2);
+
+        if !dynamic_data.uniform_descriptor_sets.is_empty() {
+            descriptor_sets.push(dynamic_data.uniform_descriptor_sets[dynamic_data.n_pass]);
+        }
+
+        if !dynamic_data.storage_descriptor_sets.is_empty() {
+            descriptor_sets.push(dynamic_data.storage_descriptor_sets[dynamic_data.n_pass]);
+        }
+
+        descriptor_sets
     }
 
     pub(crate) fn render(
@@ -562,6 +571,8 @@ impl VulkanLayout {
         objects: &[Arc<Object>],
         command_buffer: &vk::CommandBuffer,
     ) -> GraphicsResult<()> {
+        let descriptor_sets = self.get_descriptor_sets();
+
         let dynamic_data = self.dynamic_data.lock().unwrap();
         let device_manager = dynamic_data.device_manager.clone();
 
@@ -571,10 +582,7 @@ impl VulkanLayout {
                 vk::PipelineBindPoint::GRAPHICS,
                 self.pipeline_layout,
                 0,
-                &[
-                    dynamic_data.uniform_descriptor_sets[dynamic_data.n_pass],
-                    dynamic_data.storage_descriptor_sets[dynamic_data.n_pass],
-                ],
+                &descriptor_sets,
                 &[],
             )
         }
