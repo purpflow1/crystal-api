@@ -1,3 +1,4 @@
+# Agbadoned! Use [crystal-vk](https://github.com/purpflow1/crystal-vk) instead
 # Crystal API
 **Crystal API**  is a unified lightweight wrapper for Vulkan. Currently in WIP stage.
 
